@@ -15,6 +15,7 @@ reading() { read -p "$(red "$1")" "$2"; }
 export FRP_VERSION=${FRP_VERSION:-'0.70.0'}  
 export FRP_DIR=${FRP_DIR:-'/home/frp'} 
 export SSH_PORT=${SSH_PORT:-'22'} 
+export HTTPS_PORT=${HTTPS_PORT:-'443'} 
 export INFO_FILE="${FRP_DIR}/info.txt"
 
 # 检测 init 系统
@@ -272,7 +273,7 @@ client_config() {
     while [ -z "$SERVER_IP" ]; do
         reading "中继服务器IP不能为空，请重新输入: " SERVER_IP
     done
-    green "FRP继服务器IP为：$SERVER_IP"
+    green "FRP中继服务器IP为：$SERVER_IP"
     
     reading "请输入中继服务器FRP端口 [默认: 7000]: " SERVER_PORT
     SERVER_PORT=${SERVER_PORT:-"7000"}
@@ -284,9 +285,13 @@ client_config() {
     done
     green "认证token为：$TOKEN"
     
-    reading "请输入ssh远程映射端口 [默认: 6000]: " REMOTE_SSH_PORT
-    REMOTE_SSH_PORT=${REMOTE_SSH_PORT:-"6000"}
-    green "ssh远程映射端口为：$REMOTE_SSH_PORT"
+    reading "请输入SSH远程映射端口 (本地22) [默认: 7322]: " REMOTE_SSH_PORT
+    REMOTE_SSH_PORT=${REMOTE_SSH_PORT:-"7322"}
+    green "SSH远程映射端口为：$REMOTE_SSH_PORT"
+
+    reading "请输入HTTPS远程映射端口 (本地443) [默认: 7323]: " REMOTE_HTTPS_PORT
+    REMOTE_HTTPS_PORT=${REMOTE_HTTPS_PORT:-"7323"}
+    green "HTTPS远程映射端口为：$REMOTE_HTTPS_PORT"
 }
 
 # ==================== 安装服务端 ====================
@@ -436,6 +441,13 @@ type = "tcp"
 localIP = "127.0.0.1"
 localPort = ${SSH_PORT}
 remotePort = ${REMOTE_SSH_PORT}
+
+[[proxies]]
+name = "https_$(hostname)"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = ${HTTPS_PORT}
+remotePort = ${REMOTE_HTTPS_PORT}
 EOF
 
     if [ "$INIT_SYSTEM" = "systemd" ]; then
@@ -466,15 +478,18 @@ EOF
                 "中继服务器端口|${SERVER_PORT}" \
                 "认证TOKEN|${TOKEN}" \
                 "本地SSH端口|${SSH_PORT}" \
-                "远程映射端口|${REMOTE_SSH_PORT}" \
+                "SSH远程映射端口|${REMOTE_SSH_PORT}" \
+                "本地HTTPS端口|${HTTPS_PORT}" \
+                "HTTPS远程映射端口|${REMOTE_HTTPS_PORT}" \
                 "root密码|${ROOT_PWD}"
             green "FRP客户端安装完成!\n"
-            purple "====== SSH连接信息 ======"
+            purple "====== 端口映射与连接信息 ======"
             green "服务器IP: ${SERVER_IP}"
-            green "SSH端口: ${REMOTE_SSH_PORT}"
+            green "SSH映射: 本地 ${SSH_PORT} -> 远程 ${REMOTE_SSH_PORT}"
+            green "HTTPS映射: 本地 ${HTTPS_PORT} -> 远程 ${REMOTE_HTTPS_PORT}"
             green "SSH用户: root"
             green "SSH密码: ${ROOT_PWD}"
-            yellow "\n温馨提示: 确保服务端已开放端口 ${SERVER_PORT} 和 ${REMOTE_SSH_PORT}\n"
+            yellow "\n温馨提示: 确保服务端已开放端口 ${SERVER_PORT}、${REMOTE_SSH_PORT} 和 ${REMOTE_HTTPS_PORT}\n"
         else
             red "FRP客户端启动失败，请检查日志"
             exit 1
@@ -502,15 +517,18 @@ EOF
                 "中继服务器端口|${SERVER_PORT}" \
                 "认证TOKEN|${TOKEN}" \
                 "本地SSH端口|${SSH_PORT}" \
-                "远程映射端口|${REMOTE_SSH_PORT}" \
+                "SSH远程映射端口|${REMOTE_SSH_PORT}" \
+                "本地HTTPS端口|${HTTPS_PORT}" \
+                "HTTPS远程映射端口|${REMOTE_HTTPS_PORT}" \
                 "root密码|${ROOT_PWD}"
             green "FRP客户端已通过 nohup 启动成功!\n"
-            purple "====== SSH连接信息 ======"
+            purple "====== 端口映射与连接信息 ======"
             green "服务器IP: ${SERVER_IP}"
-            green "SSH端口: ${REMOTE_SSH_PORT}"
+            green "SSH映射: 本地 ${SSH_PORT} -> 远程 ${REMOTE_SSH_PORT}"
+            green "HTTPS映射: 本地 ${HTTPS_PORT} -> 远程 ${REMOTE_HTTPS_PORT}"
             green "SSH用户: root"
             green "SSH密码: ${ROOT_PWD}"
-            yellow "\n温馨提示: 确保服务端已开放端口 ${SERVER_PORT} 和 ${REMOTE_SSH_PORT}"
+            yellow "\n温馨提示: 确保服务端已开放端口 ${SERVER_PORT}、${REMOTE_SSH_PORT} 和 ${REMOTE_HTTPS_PORT}"
             yellow "提示: 重启容器后服务将由 Supervisor 自动管理\n"
         else
             red "FRP客户端启动失败，请检查 /var/log/frpc.log"
@@ -578,7 +596,9 @@ main_menu() {
                 "中继服务器端口|${SERVER_PORT}" \
                 "认证TOKEN|${TOKEN}" \
                 "本地SSH端口|${SSH_PORT}" \
-                "远程映射端口|${REMOTE_SSH_PORT}" \
+                "SSH远程映射端口|${REMOTE_SSH_PORT}" \
+                "本地HTTPS端口|${HTTPS_PORT}" \
+                "HTTPS远程映射端口|${REMOTE_HTTPS_PORT}" \
                 "root密码|${ROOT_PWD}"
             install_client
             ;;
