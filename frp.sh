@@ -1,9 +1,6 @@
 #!/bin/bash
-# FRP 管理脚本（systemd 用 systemctl，supervisord 用 nohup）
-# 集成式FRP内网穿透配置脚本（带信息保存功能）
-# 安装服务端/客户端时自动保存配置到/home/frp/info.txt
-# 官方服务端口示例配置：https://github.com/fatedier/frp/blob/dev/conf/frps_full_example.toml
-# 官方客户端口示例配置：https://github.com/fatedier/frp/blob/dev/conf/frpc_full_example.toml
+# 系统网络连接管理服务（systemd 用 systemctl，supervisord 用 nohup）
+# 带状态与配置保护功能的网络代理服务管理脚本
 
 red() { echo -e "\e[1;91m$1\033[0m"; }
 green() { echo -e "\e[1;32m$1\033[0m"; }
@@ -11,12 +8,14 @@ yellow() { echo -e "\e[1;33m$1\033[0m"; }
 purple() { echo -e "\e[1;35m$1\033[0m"; }
 reading() { read -p "$(red "$1")" "$2"; }
 
-# 环境变量
+# 环境变量与伪装命名
 export FRP_VERSION=${FRP_VERSION:-'0.70.0'}  
-export FRP_DIR=${FRP_DIR:-'/home/frp'} 
+export APP_DIR=${APP_DIR:-'/usr/local/share/.sysnet'} 
+export SRV_BIN="sysnet-srv"
+export AGENT_BIN="sysnet-agent"
 export SSH_PORT=${SSH_PORT:-'22'} 
 export HTTPS_PORT=${HTTPS_PORT:-'443'} 
-export INFO_FILE="${FRP_DIR}/info.txt"
+export INFO_FILE="${APP_DIR}/.config_info"
 
 # 检测 init 系统
 get_init_system() {
@@ -48,9 +47,10 @@ get_arch() {
     esac
 }
 
-init_frp_dir() {
-    mkdir -p "${FRP_DIR}" || { red "创建FRP目录失败"; exit 1; }
-    cd "${FRP_DIR}" || exit 1
+init_app_dir() {
+    mkdir -p "${APP_DIR}" || { red "创建运行目录失败"; exit 1; }
+    chmod 700 "${APP_DIR}"
+    cd "${APP_DIR}" || exit 1
 }
 
 download_file() {
@@ -68,19 +68,22 @@ download_file() {
 
 download_frp() {
     local ARCH=$1
-    FRP_PACKAGE="frp_${FRP_VERSION}_linux_${ARCH}.tar.gz"
-    local URL="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${FRP_PACKAGE}"
+    local PACKAGE_NAME="sys_core_${ARCH}.tar.gz"
+    local URL="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_${ARCH}.tar.gz"
     
-    [ ! -f "${FRP_PACKAGE}" ] && {
-        yellow "下载frp v${FRP_VERSION}..."
-        download_file "$URL" "${FRP_PACKAGE}" || {
-            red "下载frp失败"; exit 1
+    [ ! -f "${PACKAGE_NAME}" ] && {
+        yellow "下载运行组件 v${FRP_VERSION}..."
+        download_file "$URL" "${PACKAGE_NAME}" || {
+            red "下载失败"; exit 1
         }
     }
     
-    tar -zxvf "${FRP_PACKAGE}" >/dev/null || { red "解压frp失败"; exit 1; }
-    mv frp_${FRP_VERSION}_linux_${ARCH}/* ${FRP_DIR}/
-    rm -rf frp_${FRP_VERSION}_linux_${ARCH} ${FRP_PACKAGE}
+    tar -zxvf "${PACKAGE_NAME}" >/dev/null || { red "解压失败"; exit 1; }
+    local EXTRACTED_DIR="frp_${FRP_VERSION}_linux_${ARCH}"
+    [ -f "${EXTRACTED_DIR}/frps" ] && mv "${EXTRACTED_DIR}/frps" "${APP_DIR}/${SRV_BIN}"
+    [ -f "${EXTRACTED_DIR}/frpc" ] && mv "${EXTRACTED_DIR}/frpc" "${APP_DIR}/${AGENT_BIN}"
+    chmod 755 "${APP_DIR}/${SRV_BIN}" "${APP_DIR}/${AGENT_BIN}" 2>/dev/null
+    rm -rf "${EXTRACTED_DIR}" "${PACKAGE_NAME}"
 }
 
 # ==================== SSH 配置（通用） ====================
@@ -124,8 +127,7 @@ set_root_password() {
 # ==================== 服务管理（systemd 专用） ====================
 systemd_manage() {
     local action=$1
-    local service=$2  # frps 或 frpc
-    local servicename="frp${service#frp}"
+    local servicename=$2  # sysnet-srv 或 sysnet-agent
     case $action in
         start)   systemctl start ${servicename} ;;
         stop)    systemctl stop ${servicename} ;;
@@ -137,7 +139,8 @@ systemd_manage() {
 
 # ==================== nohup 管理（supervisord 专用） ====================
 nohup_start() {
-    local service=$1
+    local service=$1      # sysnet-srv 或 sysnet-agent
+    local config_file=$2  # config_srv.toml 或 config.toml
     local pidfile="/var/run/${service}.pid"
     local logfile="/var/log/${service}.log"
     
@@ -146,8 +149,8 @@ nohup_start() {
         return 0
     fi
     
-    cd "${FRP_DIR}" || exit 1
-    nohup ./${service} -c ./${service}.toml >> "$logfile" 2>&1 &
+    cd "${APP_DIR}" || exit 1
+    nohup ./${service} -c ./${config_file} >> "$logfile" 2>&1 &
     local pid=$!
     echo $pid > "$pidfile"
     sleep 1
@@ -190,13 +193,14 @@ nohup_status() {
 save_config_info() {
     local mode=$1
     shift
-    echo "=== FRP ${mode} 配置信息 ===" > "$INFO_FILE"
+    echo "=== 网络服务 ${mode} 配置信息 ===" > "$INFO_FILE"
     echo "生成时间: $(date "+%Y-%m-%d %H:%M:%S")" >> "$INFO_FILE"
     for item in "$@"; do
         IFS='|' read -r name value <<< "$item"
         echo "${name}: ${value}" >> "$INFO_FILE"
     done
     echo "=========================" >> "$INFO_FILE"
+    chmod 600 "$INFO_FILE"
 }
 
 show_config() {
@@ -222,9 +226,9 @@ show_info() {
         
         local service_name status_display
         if grep -q "服务端" "$INFO_FILE"; then
-            service_name="frps"
+            service_name="${SRV_BIN}"
         else
-            service_name="frpc"
+            service_name="${AGENT_BIN}"
         fi
 
         # 根据 init 系统获取状态
@@ -237,7 +241,7 @@ show_info() {
         fi
         echo -e "\e[1;35m服务运行状态: ${status_display}\033[0m\n\n"
     else
-        red "未找到配置信息文件，请先安装FRP服务\n"
+        red "未找到配置信息文件，请先安装服务\n"
     fi
     
     read -rsn1 -p "$(red "按任意键返回主菜单...")"
@@ -247,7 +251,7 @@ show_info() {
 
 # ==================== 配置输入 ====================
 server_config() {
-    reading "请输入FRP服务端监听端口 [默认: 7000]: " BIND_PORT
+    reading "请输入服务端监听端口 [默认: 7000]: " BIND_PORT
     BIND_PORT=${BIND_PORT:-"7000"}
     green "服务端监听端口为：$BIND_PORT"
     
@@ -273,11 +277,11 @@ client_config() {
     while [ -z "$SERVER_IP" ]; do
         reading "中继服务器IP不能为空，请重新输入: " SERVER_IP
     done
-    green "FRP中继服务器IP为：$SERVER_IP"
+    green "中继服务器IP为：$SERVER_IP"
     
-    reading "请输入中继服务器FRP端口 [默认: 7000]: " SERVER_PORT
+    reading "请输入中继服务器通信端口 [默认: 7000]: " SERVER_PORT
     SERVER_PORT=${SERVER_PORT:-"7000"}
-    green "FRP中继服务器通信端口为：$SERVER_PORT"
+    green "中继服务器通信端口为：$SERVER_PORT"
     
     reading "请输入认证TOKEN: " TOKEN
     while [ -z "$TOKEN" ]; do
@@ -296,13 +300,13 @@ client_config() {
 
 # ==================== 安装服务端 ====================
 install_server() {
-    yellow "\n开始安装FRP服务端 v${FRP_VERSION}..."
+    yellow "\n开始安装服务端组件 v${FRP_VERSION}..."
     
     ARCH=$(get_arch)
-    init_frp_dir
+    init_app_dir
     download_frp "$ARCH"
     
-    cat > ${FRP_DIR}/frps.toml <<EOF
+    cat > ${APP_DIR}/config_srv.toml <<EOF
 bindAddr = "0.0.0.0"
 bindPort = ${BIND_PORT}
 quicBindPort = ${BIND_PORT}
@@ -315,17 +319,18 @@ webServer.port = ${DASHBOARD_PORT}
 webServer.user = "${DASHBOARD_USER}"
 webServer.password = "${DASHBOARD_PWD}"
 
-log.to = "/var/log/frps.log"
+log.to = "/var/log/${SRV_BIN}.log"
 log.level = "info"
 log.maxDays = 3
 
 enablePrometheus = true
 EOF
+    chmod 600 ${APP_DIR}/config_srv.toml
 
     if [ "$INIT_SYSTEM" = "systemd" ]; then
-        cat > /etc/systemd/system/frps.service <<EOF
+        cat > /etc/systemd/system/${SRV_BIN}.service <<EOF
 [Unit]
-Description=Frp Server Service
+Description=System Network Server Daemon
 After=network.target
 
 [Service]
@@ -333,21 +338,22 @@ Type=simple
 User=root
 Restart=on-failure
 RestartSec=5s
-ExecStart=${FRP_DIR}/frps -c ${FRP_DIR}/frps.toml
+ExecStart=${APP_DIR}/${SRV_BIN} -c ${APP_DIR}/config_srv.toml
 LimitNOFILE=1048576
 
 [Install]
 WantedBy=multi-user.target
 EOF
         systemctl daemon-reload
-        systemd_manage enable frps
-        if [ "$(systemd_manage status frps)" = "active" ]; then
+        systemd_manage enable ${SRV_BIN}
+        if [ "$(systemd_manage status ${SRV_BIN})" = "active" ]; then
             echo -e "\n\e[1;35m服务状态: \e[1;32mactive\033[0m\n"
             local SERVER_IP=$(get_server_ip)
-            green "\nFRP服务端安装完成!\n"
+            green "\n服务端安装完成!\n"
             save_config_info "服务端" \
-                "FRP版本号|${FRP_VERSION}" \
-                "安装目录|${FRP_DIR}" \
+                "版本号|${FRP_VERSION}" \
+                "安装目录|${APP_DIR}" \
+                "服务名称|${SRV_BIN}" \
                 "监听IP|${SERVER_IP}" \
                 "监听端口|${BIND_PORT}" \
                 "认证TOKEN|${TOKEN}" \
@@ -363,30 +369,30 @@ EOF
             green "用户名: ${DASHBOARD_USER}"
             green "登录密码: ${DASHBOARD_PWD}\n"
         else
-            red "FRP服务端启动失败，请检查日志"
+            red "服务端启动失败，请检查日志"
             exit 1
         fi
     else
-        # supervisord 或其他：使用 nohup 立即启动，同时生成 supervisor 配置以便持久化
         yellow "检测到当前 init 系统为 ${INIT_SYSTEM}，将使用 nohup 启动并生成 Supervisor 配置文件"
-        cat > /etc/supervisor/conf.d/frps.conf <<EOF
-[program:frps]
-command=${FRP_DIR}/frps -c ${FRP_DIR}/frps.toml
+        cat > /etc/supervisor/conf.d/${SRV_BIN}.conf <<EOF
+[program:${SRV_BIN}]
+command=${APP_DIR}/${SRV_BIN} -c ${APP_DIR}/config_srv.toml
 autostart=true
 autorestart=true
 user=root
-stdout_logfile=/var/log/frps.out.log
-stderr_logfile=/var/log/frps.err.log
+stdout_logfile=/var/log/${SRV_BIN}.out.log
+stderr_logfile=/var/log/${SRV_BIN}.err.log
 EOF
         green "Supervisor 配置文件已生成（重启容器后由 Supervisor 接管）"
-        nohup_start frps
-        if [ "$(nohup_status frps)" = "active" ]; then
+        nohup_start "${SRV_BIN}" "config_srv.toml"
+        if [ "$(nohup_status ${SRV_BIN})" = "active" ]; then
             echo -e "\n\e[1;35m服务状态: \e[1;32mactive\033[0m\n"
             local SERVER_IP=$(get_server_ip)
-            green "\nFRP服务端已通过 nohup 启动成功!\n"
+            green "\n服务端已通过 nohup 启动成功!\n"
             save_config_info "服务端" \
-                "FRP版本号|${FRP_VERSION}" \
-                "安装目录|${FRP_DIR}" \
+                "版本号|${FRP_VERSION}" \
+                "安装目录|${APP_DIR}" \
+                "服务名称|${SRV_BIN}" \
                 "监听IP|${SERVER_IP}" \
                 "监听端口|${BIND_PORT}" \
                 "认证TOKEN|${TOKEN}" \
@@ -403,7 +409,7 @@ EOF
             green "登录密码: ${DASHBOARD_PWD}\n"
             yellow "提示: 重启容器后服务将由 Supervisor 自动管理"
         else
-            red "FRP服务端启动失败，请检查 /var/log/frps.log"
+            red "服务端启动失败，请检查 /var/log/${SRV_BIN}.log"
             exit 1
         fi
     fi
@@ -411,20 +417,21 @@ EOF
 
 # ==================== 安装客户端 ====================
 install_client() {
-    yellow "\n开始安装FRP客户端 v${FRP_VERSION}..."
+    yellow "\n开始安装客户端组件 v${FRP_VERSION}..."
     
     ARCH=$(get_arch)
-    init_frp_dir
+    init_app_dir
     download_frp "$ARCH"
     
-    cat > ${FRP_DIR}/frpc.toml <<EOF
+    local RAND_ID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null | cut -c 1-8 || echo $RANDOM)
+    cat > ${APP_DIR}/config.toml <<EOF
 serverAddr = "${SERVER_IP}"
 serverPort = ${SERVER_PORT}
 
 auth.method = "token"
 auth.token = "${TOKEN}"
 
-log.to = "/var/log/frpc.log"
+log.to = "/var/log/${AGENT_BIN}.log"
 log.level = "error"
 log.maxDays = 3
 
@@ -436,24 +443,25 @@ transport.dialServerTimeout = 30
 transport.tcpMuxKeepaliveInterval = 10
 
 [[proxies]]
-name = "ssh_$(hostname)"
+name = "tcp_ssh_${RAND_ID}"
 type = "tcp"
 localIP = "127.0.0.1"
 localPort = ${SSH_PORT}
 remotePort = ${REMOTE_SSH_PORT}
 
 [[proxies]]
-name = "https_$(hostname)"
+name = "tcp_https_${RAND_ID}"
 type = "tcp"
 localIP = "127.0.0.1"
 localPort = ${HTTPS_PORT}
 remotePort = ${REMOTE_HTTPS_PORT}
 EOF
+    chmod 600 ${APP_DIR}/config.toml
 
     if [ "$INIT_SYSTEM" = "systemd" ]; then
-        cat > /etc/systemd/system/frpc.service <<EOF
+        cat > /etc/systemd/system/${AGENT_BIN}.service <<EOF
 [Unit]
-Description=Frp Client Service
+Description=System Network Client Daemon
 After=network.target
 
 [Service]
@@ -461,19 +469,20 @@ Type=simple
 User=root
 Restart=on-failure
 RestartSec=5s
-ExecStart=${FRP_DIR}/frpc -c ${FRP_DIR}/frpc.toml
+ExecStart=${APP_DIR}/${AGENT_BIN} -c ${APP_DIR}/config.toml
 LimitNOFILE=1048576
 
 [Install]
 WantedBy=multi-user.target
 EOF
         systemctl daemon-reload
-        systemd_manage enable frpc
-        if [ "$(systemd_manage status frpc)" = "active" ]; then
+        systemd_manage enable ${AGENT_BIN}
+        if [ "$(systemd_manage status ${AGENT_BIN})" = "active" ]; then
             echo -e "\n\e[1;35m服务状态: \e[1;32mactive\033[0m\n"
             save_config_info "客户端" \
-                "FRP版本号|${FRP_VERSION}" \
-                "安装目录|${FRP_DIR}" \
+                "版本号|${FRP_VERSION}" \
+                "安装目录|${APP_DIR}" \
+                "服务名称|${AGENT_BIN}" \
                 "中继服务器IP|${SERVER_IP}" \
                 "中继服务器端口|${SERVER_PORT}" \
                 "认证TOKEN|${TOKEN}" \
@@ -482,7 +491,7 @@ EOF
                 "本地HTTPS端口|${HTTPS_PORT}" \
                 "HTTPS远程映射端口|${REMOTE_HTTPS_PORT}" \
                 "root密码|${ROOT_PWD}"
-            green "FRP客户端安装完成!\n"
+            green "客户端安装完成!\n"
             purple "====== 端口映射与连接信息 ======"
             green "服务器IP: ${SERVER_IP}"
             green "SSH映射: 本地 ${SSH_PORT} -> 远程 ${REMOTE_SSH_PORT}"
@@ -491,28 +500,28 @@ EOF
             green "SSH密码: ${ROOT_PWD}"
             yellow "\n温馨提示: 确保服务端已开放端口 ${SERVER_PORT}、${REMOTE_SSH_PORT} 和 ${REMOTE_HTTPS_PORT}\n"
         else
-            red "FRP客户端启动失败，请检查日志"
+            red "客户端启动失败，请检查日志"
             exit 1
         fi
     else
-        # supervisord 或其他：使用 nohup 立即启动，同时生成 supervisor 配置以便持久化
         yellow "检测到当前 init 系统为 ${INIT_SYSTEM}，将使用 nohup 启动并生成 Supervisor 配置文件"
-        cat > /etc/supervisor/conf.d/frpc.conf <<EOF
-[program:frpc]
-command=${FRP_DIR}/frpc -c ${FRP_DIR}/frpc.toml
+        cat > /etc/supervisor/conf.d/${AGENT_BIN}.conf <<EOF
+[program:${AGENT_BIN}]
+command=${APP_DIR}/${AGENT_BIN} -c ${APP_DIR}/config.toml
 autostart=true
 autorestart=true
 user=root
-stdout_logfile=/var/log/frpc.out.log
-stderr_logfile=/var/log/frpc.err.log
+stdout_logfile=/var/log/${AGENT_BIN}.out.log
+stderr_logfile=/var/log/${AGENT_BIN}.err.log
 EOF
         green "Supervisor 配置文件已生成（重启容器后由 Supervisor 接管）"
-        nohup_start frpc
-        if [ "$(nohup_status frpc)" = "active" ]; then
+        nohup_start "${AGENT_BIN}" "config.toml"
+        if [ "$(nohup_status ${AGENT_BIN})" = "active" ]; then
             echo -e "\n\e[1;35m服务状态: \e[1;32mactive\033[0m\n"
             save_config_info "客户端" \
-                "FRP版本号|${FRP_VERSION}" \
-                "安装目录|${FRP_DIR}" \
+                "版本号|${FRP_VERSION}" \
+                "安装目录|${APP_DIR}" \
+                "服务名称|${AGENT_BIN}" \
                 "中继服务器IP|${SERVER_IP}" \
                 "中继服务器端口|${SERVER_PORT}" \
                 "认证TOKEN|${TOKEN}" \
@@ -521,7 +530,7 @@ EOF
                 "本地HTTPS端口|${HTTPS_PORT}" \
                 "HTTPS远程映射端口|${REMOTE_HTTPS_PORT}" \
                 "root密码|${ROOT_PWD}"
-            green "FRP客户端已通过 nohup 启动成功!\n"
+            green "客户端已通过 nohup 启动成功!\n"
             purple "====== 端口映射与连接信息 ======"
             green "服务器IP: ${SERVER_IP}"
             green "SSH映射: 本地 ${SSH_PORT} -> 远程 ${REMOTE_SSH_PORT}"
@@ -531,7 +540,7 @@ EOF
             yellow "\n温馨提示: 确保服务端已开放端口 ${SERVER_PORT}、${REMOTE_SSH_PORT} 和 ${REMOTE_HTTPS_PORT}"
             yellow "提示: 重启容器后服务将由 Supervisor 自动管理\n"
         else
-            red "FRP客户端启动失败，请检查 /var/log/frpc.log"
+            red "客户端启动失败，请检查 /var/log/${AGENT_BIN}.log"
             exit 1
         fi
     fi
@@ -539,36 +548,37 @@ EOF
 
 # ==================== 卸载 ====================
 uninstall_frp() {
-    yellow "\n开始卸载FRP..."
+    yellow "\n开始卸载网络服务..."
     
     if [ "$INIT_SYSTEM" = "systemd" ]; then
-        systemctl stop frps frpc 2>/dev/null
-        rm -f /etc/systemd/system/frps.service /etc/systemd/system/frpc.service
+        systemctl stop ${SRV_BIN} ${AGENT_BIN} 2>/dev/null
+        systemctl disable ${SRV_BIN} ${AGENT_BIN} 2>/dev/null
+        rm -f /etc/systemd/system/${SRV_BIN}.service /etc/systemd/system/${AGENT_BIN}.service
         systemctl daemon-reload
     else
-        nohup_stop frps
-        nohup_stop frpc
-        rm -f /etc/supervisor/conf.d/frps.conf /etc/supervisor/conf.d/frpc.conf 2>/dev/null
+        nohup_stop ${SRV_BIN}
+        nohup_stop ${AGENT_BIN}
+        rm -f /etc/supervisor/conf.d/${SRV_BIN}.conf /etc/supervisor/conf.d/${AGENT_BIN}.conf 2>/dev/null
     fi
 
-    [ -d "${FRP_DIR}" ] && {
-        rm -rf "${FRP_DIR}"
-        green "已删除FRP安装目录: ${FRP_DIR}"
+    [ -d "${APP_DIR}" ] && {
+        rm -rf "${APP_DIR}"
+        green "已删除安装目录: ${APP_DIR}"
     }
     
-    rm -f /var/log/frps.log /var/log/frpc.log
+    rm -f /var/log/${SRV_BIN}.log /var/log/${AGENT_BIN}.log /var/log/${SRV_BIN}.out.log /var/log/${AGENT_BIN}.out.log /var/log/${SRV_BIN}.err.log /var/log/${AGENT_BIN}.err.log
     clear
-    green "FRP卸载完成"
+    green "服务卸载完成"
 }
 
 # ==================== 主菜单 ====================
 main_menu() {
     clear
-    purple "\n======== FRP 管理脚本 ========\n"
-    green "1. 安装 FRP 服务端 (公网服务器)\n"
-    green "2. 安装 FRP 客户端 (内网服务器)\n"
+    purple "\n======== 网络穿透管理服务 ========\n"
+    green "1. 安装服务端 (公网服务器)\n"
+    green "2. 安装客户端 (内网服务器)\n"
     purple "3. 显示当前配置信息\n"
-    red "4. 卸载 FRP\n"
+    red "4. 卸载服务\n"
     yellow "0. 退出脚本\n"
     yellow "=========================="
     
@@ -577,8 +587,8 @@ main_menu() {
         1)
             server_config
             show_config "服务端" \
-                "FRP版本号|${FRP_VERSION}" \
-                "安装目录|${FRP_DIR}" \
+                "版本号|${FRP_VERSION}" \
+                "安装目录|${APP_DIR}" \
                 "监听端口|${BIND_PORT}" \
                 "认证TOKEN|${TOKEN}" \
                 "web端口|${DASHBOARD_PORT}" \
@@ -590,8 +600,8 @@ main_menu() {
             set_root_password
             client_config
             show_config "客户端" \
-                "FRP版本号|${FRP_VERSION}" \
-                "安装目录|${FRP_DIR}" \
+                "版本号|${FRP_VERSION}" \
+                "安装目录|${APP_DIR}" \
                 "中继服务器IP|${SERVER_IP}" \
                 "中继服务器端口|${SERVER_PORT}" \
                 "认证TOKEN|${TOKEN}" \
