@@ -111,6 +111,11 @@ select:focus,input:focus{outline:none;border-color:var(--accent)}
 .rg b{font-weight:600;font-size:12px;display:block}
 .rg em{display:block;font-style:normal;color:var(--dim);font-size:11px;margin-top:2px}
 
+.stepper{display:flex;align-items:center;width:fit-content;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:#0d1117}
+.stepper button{border:0;border-radius:0;background:transparent;padding:7px 15px;cursor:pointer;color:var(--text);font-size:15px;font-weight:700}
+.stepper button:hover{background:rgba(255,255,255,.06)}
+.stepper input{width:60px;text-align:center;font:inherit;background:transparent;border:0;border-left:1px solid var(--line);border-right:1px solid var(--line);color:var(--text);padding:7px 0;font-variant-numeric:tabular-nums;border-radius:0}
+
 .toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#1f242c;border:1px solid var(--line);border-radius:6px;padding:9px 16px;font-size:13px;z-index:80;opacity:0;pointer-events:none;transition:opacity .18s;box-shadow:0 4px 12px rgba(0,0,0,.4)}
 .toast.show{opacity:1}
 .toast.bad{border-color:rgba(248,81,73,.5);color:var(--bad)}
@@ -182,6 +187,14 @@ textarea{width:100%;min-height:280px;background:#0d1117;border:1px solid var(--l
         <span>选择目标国家/地区</span>
         <input type="search" id="rgFilter" placeholder="搜索地区，如 JP、美国、日本、韩国...">
         <div class="regions" id="rgList"></div>
+      </label>
+      <label class="f" style="margin-top:14px">
+        <span>同时建立出口数量</span>
+        <div class="stepper">
+          <button type="button" id="stepDecBtn">−</button>
+          <input id="exitCountInput" type="text" value="1" readonly>
+          <button type="button" id="stepIncBtn">+</button>
+        </div>
       </label>
       <div style="color:var(--dim);font-size:12px" id="newExitSummary">拉取成功后，将在上方出口隧道池中生成对应的 SOCKS5 出口，供下方各节点选择绑定。</div>
     </div>
@@ -533,7 +546,23 @@ $('#goToNewExitBtn').onclick = () => {
 };
 
 // ---- 新建国家出口相关 ----
+let exitCount = 1;
+$('#stepDecBtn').onclick = () => {
+  if(exitCount > 1){
+    exitCount--;
+    $('#exitCountInput').value = exitCount;
+  }
+};
+$('#stepIncBtn').onclick = () => {
+  if(exitCount < 20){
+    exitCount++;
+    $('#exitCountInput').value = exitCount;
+  }
+};
+
 $('#openNewExitModalBtn').onclick = async () => {
+  exitCount = 1;
+  $('#exitCountInput').value = exitCount;
   if(!regionList.length){
     try{
       regionList = await api('/api/regions') || [];
@@ -556,10 +585,11 @@ $('#rgFilter').oninput = renderRegionList;
 
 $('#startProvisionBtn').onclick = async e => {
   if(!selectedRegion){ toast('请选择目标地区', true); return; }
+  const count = Math.max(1, Math.min(20, parseInt($('#exitCountInput').value, 10) || 1));
   e.target.disabled = true;
   try{
-    await api('/api/provision?count=1&region=' + encodeURIComponent(selectedRegion), {method:'POST'});
-    toast('正在拉取「' + selectedRegion + '」出口隧道...');
+    await api('/api/provision?count=' + count + '&region=' + encodeURIComponent(selectedRegion), {method:'POST'});
+    toast('正在拉取 ' + count + ' 条「' + selectedRegion + '」出口隧道...');
     closeModal('newExitModal');
     poll();
   }catch(err){ toast(err.message, true); }
