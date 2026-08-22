@@ -594,7 +594,6 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		byHost[t.Node.HostName] = t
 	}
 
-	// 读取已启用的 client IDs 赋给新入站
 	clientIDs := s.sqliteQuery("SELECT GROUP_CONCAT(id) FROM clients WHERE enable = 1;")
 	if clientIDs == "" {
 		clientIDs = s.sqliteQuery("SELECT GROUP_CONCAT(id) FROM clients;")
@@ -613,10 +612,8 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		}
 		usedPorts[port] = true
 
-		// 格式要求：在原名称后面加上（国家/地区名+家宽），如：（日本家宽）
 		cName := countryNameCN(t.Node.CountryCode, t.Node.Country)
 		newTag := fmt.Sprintf("%s (%s家宽)", origTag, cName)
-		// 如果已存在同名 tag，追加端口号避免冲突
 		for _, inb := range allInbounds {
 			if inb.Tag == newTag {
 				newTag = fmt.Sprintf("%s (%s家宽-%d)", origTag, cName, port)
@@ -758,6 +755,139 @@ func (s *SUI) InboundDetail(id int, publicHost string) (*InboundDetail, error) {
 	return nil, fmt.Errorf("入站 %d 不存在", id)
 }
 
+func (s *SUI) buildLinkFromOutJson(outJsonBytes []byte, clientConfigBytes []byte, publicHost string, tag string) string {
+	if len(outJsonBytes) == 0 {
+		return ""
+	}
+	var out struct {
+		Type       string `json:"type"`
+		Server     string `json:"server"`
+		ServerPort int    `json:"server_port"`
+		Tag        string `json:"tag"`
+		TLS        struct {
+			Enabled    bool   `json:"enabled"`
+			ServerName string `json:"server_name"`
+			Reality    struct {
+				Enabled   bool   `json:"enabled"`
+				PublicKey string `json:"public_key"`
+				ShortID   string `json:"short_id"`
+			} `json:"reality"`
+			UTLS struct {
+				Enabled     bool   `json:"enabled"`
+				Fingerprint string `json:"fingerprint"`
+			} `json:"utls"`
+			Insecure bool `json:"insecure"`
+		} `json:"tls"`
+		Transport struct {
+			Type                string            `json:"type"`
+			Path                string            `json:"path"`
+			Host                string            `json:"host"`
+			Headers             map[string]string `json:"headers"`
+			ServiceName         string            `json:"service_name"`
+			EarlyDataHeaderName string            `json:"early_data_header_name"`
+		} `json:"transport"`
+		CongestionControl string `json:"congestion_control"`
+	}
+	if err := json.Unmarshal(outJsonBytes, &out); err != nil {
+		return ""
+	}
+
+	var clientCfg map[string]map[string]any
+	_ = json.Unmarshal(clientConfigBytes, &clientCfg)
+
+	host := publicHost
+	if host == "" {
+		host = out.Server
+	}
+	if host == "127.0.0.1" || host == "localhost" || host == "" {
+		if publicHost != "" {
+			host = publicHost
+		} else {
+			host = s.Host
+		}
+	}
+
+	port := out.ServerPort
+	remark := tag
+	if remark == "" {
+		remark = out.Tag
+	}
+
+	switch strings.ToLower(out.Type) {
+	case "vless":
+		u := clientCfg["vless"]["uuid"]
+		uuidStr, _ := u.(string)
+		if uuidStr == "" {
+			uuidStr = "auto"
+		}
+		v := url.Values{}
+		tp := out.Transport.Type
+		if tp == "" {
+			tp = "tcp"
+		}
+		v.Set("type", tp)
+		if out.Transport.Path != "" {
+			v.Set("path", out.Transport.Path)
+		}
+		if out.Transport.Headers != nil && out.Transport.Headers["Host"] != "" {
+			v.Set("host", out.Transport.Headers["Host"])
+		}
+		if out.Transport.ServiceName != "" {
+			v.Set("serviceName", out.Transport.ServiceName)
+		}
+		if out.TLS.Enabled {
+			if out.TLS.Reality.Enabled {
+				v.Set("security", "reality")
+				v.Set("pbk", out.TLS.Reality.PublicKey)
+				v.Set("sid", out.TLS.Reality.ShortID)
+			} else {
+				v.Set("security", "tls")
+				if out.TLS.Insecure {
+					v.Set("allowInsecure", "1")
+				}
+			}
+			if out.TLS.ServerName != "" {
+				v.Set("sni", out.TLS.ServerName)
+			}
+			if out.TLS.UTLS.Fingerprint != "" {
+				v.Set("fp", out.TLS.UTLS.Fingerprint)
+			}
+			if flow, ok := clientCfg["vless"]["flow"].(string); ok && flow != "" && tp == "tcp" {
+				v.Set("flow", flow)
+			}
+		}
+		return fmt.Sprintf("vless://%s@%s:%d?%s#%s", uuidStr, host, port, v.Encode(), url.QueryEscape(remark))
+
+	case "tuic":
+		uuidStr, _ := clientCfg["tuic"]["uuid"].(string)
+		passStr, _ := clientCfg["tuic"]["password"].(string)
+		v := url.Values{}
+		if out.TLS.Enabled {
+			v.Set("security", "tls")
+			if out.TLS.ServerName != "" {
+				v.Set("sni", out.TLS.ServerName)
+			}
+		}
+		if out.CongestionControl != "" {
+			v.Set("congestion_control", out.CongestionControl)
+		}
+		return fmt.Sprintf("tuic://%s:%s@%s:%d?%s#%s", uuidStr, passStr, host, port, v.Encode(), url.QueryEscape(remark))
+
+	case "trojan":
+		passStr, _ := clientCfg["trojan"]["password"].(string)
+		v := url.Values{}
+		if out.TLS.Enabled {
+			v.Set("security", "tls")
+			if out.TLS.ServerName != "" {
+				v.Set("sni", out.TLS.ServerName)
+			}
+		}
+		return fmt.Sprintf("trojan://%s@%s:%d?%s#%s", passStr, host, port, v.Encode(), url.QueryEscape(remark))
+	}
+
+	return ""
+}
+
 func (s *SUI) InboundLinks(ids []int, publicHost string) ([]string, error) {
 	inbounds, err := s.Inbounds(nil)
 	if err != nil {
@@ -768,17 +898,10 @@ func (s *SUI) InboundLinks(ids []int, publicHost string) ([]string, error) {
 		idMap[inb.ID] = inb
 	}
 
-	rawLinks := s.sqliteQuery("SELECT links FROM clients WHERE enable = 1;")
-	if rawLinks == "" {
-		rawLinks = s.sqliteQuery("SELECT links FROM clients;")
+	clientCfgJSON := s.sqliteQuery("SELECT config FROM clients WHERE enable = 1 LIMIT 1;")
+	if clientCfgJSON == "" {
+		clientCfgJSON = s.sqliteQuery("SELECT config FROM clients LIMIT 1;")
 	}
-
-	var allClientLinks []struct {
-		Remark string `json:"remark"`
-		Type   string `json:"type"`
-		URI    string `json:"uri"`
-	}
-	_ = json.Unmarshal([]byte(rawLinks), &allClientLinks)
 
 	var links []string
 	for _, id := range ids {
@@ -786,28 +909,12 @@ func (s *SUI) InboundLinks(ids []int, publicHost string) ([]string, error) {
 		if !ok {
 			continue
 		}
-		for _, item := range allClientLinks {
-			if item.Remark == inb.Tag || item.Remark == inb.Remark || strings.Contains(item.URI, fmt.Sprintf(":%d?", inb.Port)) || strings.Contains(item.URI, fmt.Sprintf(":%d#", inb.Port)) || strings.HasPrefix(item.Remark, inb.Remark) {
-				uri := item.URI
-				if atIdx := strings.Index(uri, "@"); atIdx != -1 {
-					qIdx := strings.Index(uri, "?")
-					if qIdx == -1 {
-						qIdx = strings.Index(uri, "#")
-					}
-					if qIdx != -1 && qIdx > atIdx {
-						hostPort := uri[atIdx+1 : qIdx]
-						colonIdx := strings.LastIndex(hostPort, ":")
-						hostPart := hostPort
-						if colonIdx != -1 {
-							hostPart = hostPort[:colonIdx]
-						}
-						if publicHost != "" && (hostPart == "127.0.0.1" || hostPart == "localhost" || hostPart == "") {
-							hostPart = publicHost
-						}
-						uri = uri[:atIdx+1] + fmt.Sprintf("%s:%d", hostPart, inb.Port) + uri[qIdx:]
-					}
-				}
-				links = append(links, uri)
+		outJSON := s.sqliteQuery(fmt.Sprintf("SELECT out_json FROM inbounds WHERE id = %d;", id))
+		if outJSON != "" {
+			l := s.buildLinkFromOutJson([]byte(outJSON), []byte(clientCfgJSON), publicHost, inb.Tag)
+			if l != "" {
+				links = append(links, l)
+				continue
 			}
 		}
 	}
