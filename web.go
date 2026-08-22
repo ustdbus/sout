@@ -587,10 +587,25 @@ $('#openNewExitModalBtn').onclick = async () => {
 
 function renderRegionList(){
   const kw = ($('#rgFilter').value || '').trim().toLowerCase();
-  const filtered = regionList.filter(r => !kw || r.code.toLowerCase().includes(kw) || r.name.toLowerCase().includes(kw));
+  let totalAvail = 0;
+  let maxSpeed = 0;
+  regionList.forEach(r => {
+    totalAvail += r.available || 0;
+    if((r.best_speed_mbps || 0) > maxSpeed) maxSpeed = r.best_speed_mbps;
+  });
+
+  const allItem = {
+    code: 'ALL',
+    name: '不限地区 (自动选全球最高速)',
+    available: totalAvail,
+    best_speed_mbps: maxSpeed,
+  };
+
+  const fullList = [allItem, ...regionList];
+  const filtered = fullList.filter(r => !kw || r.code.toLowerCase().includes(kw) || r.name.toLowerCase().includes(kw));
   $('#rgList').innerHTML = filtered.map(r =>
     '<button class="rg' + (selectedRegion === r.code ? ' sel' : '') + '" data-rgcode="' + esc(r.code) + '">'
-    + '<b>' + esc(r.code) + ' ' + esc(r.name) + '</b>'
+    + '<b>' + (r.code === 'ALL' ? '🌐 ' : '') + esc(r.code) + ' ' + esc(r.name) + '</b>'
     + '<em>' + r.available + ' 个可用 · ' + r.best_speed_mbps.toFixed(0) + ' Mbps</em>'
     + '</button>').join('');
 }
@@ -600,9 +615,10 @@ $('#startProvisionBtn').onclick = async e => {
   if(!selectedRegion){ toast('请选择目标地区', true); return; }
   const count = Math.max(1, Math.min(20, parseInt($('#exitCountInput').value, 10) || 1));
   e.target.disabled = true;
+  const label = selectedRegion === 'ALL' ? '全球最高速' : selectedRegion;
   try{
     await api('/api/provision?count=' + count + '&region=' + encodeURIComponent(selectedRegion), {method:'POST'});
-    toast('正在拉取 ' + count + ' 条「' + selectedRegion + '」出口隧道...');
+    toast('正在拉取 ' + count + ' 条「' + label + '」出口隧道...');
     closeModal('newExitModal');
     poll();
   }catch(err){ toast(err.message, true); }
