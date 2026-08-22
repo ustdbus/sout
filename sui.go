@@ -856,7 +856,7 @@ func (s *SUI) buildLinkFromOutJson(outJsonBytes []byte, clientConfigBytes []byte
 				v.Set("flow", flow)
 			}
 		}
-		return fmt.Sprintf("vless://%s@%s:%d?%s#%s", uuidStr, host, port, v.Encode(), url.QueryEscape(remark))
+		return fmt.Sprintf("vless://%s@%s:%d?%s#%s", uuidStr, host, port, v.Encode(), url.PathEscape(remark))
 
 	case "tuic":
 		uuidStr, _ := clientCfg["tuic"]["uuid"].(string)
@@ -871,7 +871,7 @@ func (s *SUI) buildLinkFromOutJson(outJsonBytes []byte, clientConfigBytes []byte
 		if out.CongestionControl != "" {
 			v.Set("congestion_control", out.CongestionControl)
 		}
-		return fmt.Sprintf("tuic://%s:%s@%s:%d?%s#%s", uuidStr, passStr, host, port, v.Encode(), url.QueryEscape(remark))
+		return fmt.Sprintf("tuic://%s:%s@%s:%d?%s#%s", uuidStr, passStr, host, port, v.Encode(), url.PathEscape(remark))
 
 	case "trojan":
 		passStr, _ := clientCfg["trojan"]["password"].(string)
@@ -882,7 +882,7 @@ func (s *SUI) buildLinkFromOutJson(outJsonBytes []byte, clientConfigBytes []byte
 				v.Set("sni", out.TLS.ServerName)
 			}
 		}
-		return fmt.Sprintf("trojan://%s@%s:%d?%s#%s", passStr, host, port, v.Encode(), url.QueryEscape(remark))
+		return fmt.Sprintf("trojan://%s@%s:%d?%s#%s", passStr, host, port, v.Encode(), url.PathEscape(remark))
 	}
 
 	return ""
