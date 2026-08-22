@@ -340,7 +340,7 @@ func (s *SUI) getDBInboundIDs(inboundsRaw json.RawMessage) []int {
 	return ids
 }
 
-// getBoundUserRoutes 读取 sing-box 路由规则中按用户 (user) 分流的映射
+// getBoundUserRoutes 读取 sing-box 路由规则中按用户 (auth_user) 分流的映射
 func (s *SUI) getBoundUserRoutes() (map[string]string, error) {
 	configObj, err := s.callAPI(http.MethodGet, "config", nil)
 	if err != nil {
@@ -365,14 +365,14 @@ func (s *SUI) getBoundUserRoutes() (map[string]string, error) {
 			continue
 		}
 		host := strings.TrimPrefix(outbound, suiTagPrefix)
-		if uList, ok := rule["user"].([]any); ok {
-			for _, u := range uList {
-				if uStr, ok := u.(string); ok {
-					bound[uStr] = host
-				}
+		users := toSUITagSlice(rule["auth_user"])
+		if len(users) == 0 {
+			users = toSUITagSlice(rule["user"])
+		}
+		for _, u := range users {
+			if u != "" {
+				bound[u] = host
 			}
-		} else if uStr, ok := rule["user"].(string); ok {
-			bound[uStr] = host
 		}
 	}
 	return bound, nil
@@ -503,7 +503,10 @@ func (s *SUI) BindUserRoute(userName string, hostname string, tunnels []*Tunnel)
 		}
 		outbound, _ := ruleMap["outbound"].(string)
 		if strings.HasPrefix(outbound, suiTagPrefix) {
-			users := toSUITagSlice(ruleMap["user"])
+			users := toSUITagSlice(ruleMap["auth_user"])
+			if len(users) == 0 {
+				users = toSUITagSlice(ruleMap["user"])
+			}
 			var remainUsers []string
 			for _, item := range users {
 				if item != userName {
@@ -511,7 +514,9 @@ func (s *SUI) BindUserRoute(userName string, hostname string, tunnels []*Tunnel)
 				}
 			}
 			if len(remainUsers) > 0 {
-				ruleMap["user"] = remainUsers
+				ruleMap["auth_user"] = remainUsers
+				delete(ruleMap, "user")
+				ruleMap["action"] = "route"
 				newRules = append(newRules, ruleMap)
 			}
 			continue
@@ -521,8 +526,9 @@ func (s *SUI) BindUserRoute(userName string, hostname string, tunnels []*Tunnel)
 
 	if hostname != "" {
 		newRules = append(newRules, map[string]any{
-			"user":     []string{userName},
-			"outbound": suiTagPrefix + sanitizeTag(hostname),
+			"action":    "route",
+			"auth_user": []string{userName},
+			"outbound":  suiTagPrefix + sanitizeTag(hostname),
 		})
 	}
 
