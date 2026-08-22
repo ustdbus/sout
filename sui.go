@@ -1,0 +1,677 @@
+package main
+
+import (
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"math/rand"
+	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+const (
+	suiDBPathDefault = "/usr/local/s-ui/db/s-ui.db"
+	suiBinaryDefault = "/usr/local/s-ui/sui"
+	suiTagPrefix     = "fanout-"
+	suiTokenFile     = "sui-token"
+)
+
+var (
+	cachedSUIToken   string
+	cachedSUITokenMu sync.Mutex
+)
+
+// SUI 结构体，对接本机 s-ui 面板
+type SUI struct {
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	BasePath string `json:"base_path"`
+	Scheme   string `json:"scheme"`
+	token    string
+	dbPath   string
+	client   *http.Client
+	workDir  string
+}
+
+func (s *SUI) Kind() string { return "s-ui" }
+
+func (s *SUI) Describe() string {
+	return fmt.Sprintf("接管本机 s-ui 面板（%s:%d）", s.Host, s.Port)
+}
+
+func (s *SUI) base() string {
+	return fmt.Sprintf("%s://%s:%d%s", s.Scheme, s.Host, s.Port, s.BasePath)
+}
+
+func localSUIClient() *http.Client {
+	return &http.Client{
+		Timeout: 20 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+}
+
+func suiRunning() bool {
+	if exec.Command("systemctl", "is-active", "--quiet", "s-ui").Run() == nil {
+		return true
+	}
+	if exec.Command("pgrep", "-x", "sui").Run() == nil {
+		return true
+	}
+	return false
+}
+
+// DetectSUI 自动探测本机 s-ui 安装状态、端口、路径并提取或生成 Token
+func DetectSUI(workDir string) (*SUI, error) {
+	dbPath := suiDBPathDefault
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		altPath := "/etc/s-ui/s-ui.db"
+		if _, err := os.Stat(altPath); err == nil {
+			dbPath = altPath
+		} else {
+			return nil, fmt.Errorf("未检测到 s-ui 数据库文件")
+		}
+	}
+
+	// 1. 读取 s-ui settings
+	sqliteQuery := func(query string) string {
+		out, err := exec.Command("sqlite3", dbPath, query).Output()
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	portStr := sqliteQuery("SELECT value FROM settings WHERE key='webPort';")
+	port := 2095
+	if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
+		port = p
+	}
+
+	basePath := sqliteQuery("SELECT value FROM settings WHERE key='webPath';")
+	if basePath == "" {
+		basePath = "/app/"
+	}
+	if !strings.HasPrefix(basePath, "/") {
+		basePath = "/" + basePath
+	}
+	if !strings.HasSuffix(basePath, "/") {
+		basePath += "/"
+	}
+
+	scheme := "http"
+	certFile := sqliteQuery("SELECT value FROM settings WHERE key='webCertFile';")
+	keyFile := sqliteQuery("SELECT value FROM settings WHERE key='webKeyFile';")
+	if certFile != "" && keyFile != "" {
+		scheme = "https"
+	}
+
+	newSUI := func(token string) *SUI {
+		return &SUI{
+			Host:     "127.0.0.1",
+			Port:     port,
+			BasePath: basePath,
+			Scheme:   scheme,
+			token:    token,
+			dbPath:   dbPath,
+			client:   localSUIClient(),
+			workDir:  workDir,
+		}
+	}
+
+	cachedSUITokenMu.Lock()
+	defer cachedSUITokenMu.Unlock()
+	if cachedSUIToken != "" {
+		s := newSUI(cachedSUIToken)
+		if s.tokenValid() {
+			return s, nil
+		}
+	}
+
+	// 检查落盘的 token
+	if workDir != "" {
+		saved := readSavedTokenFile(workDir, suiTokenFile)
+		if saved != "" {
+			s := newSUI(saved)
+			if s.tokenValid() {
+				cachedSUIToken = saved
+				return s, nil
+			}
+		}
+	}
+
+	// 从数据库查询现有 fanout token
+	existingToken := sqliteQuery("SELECT token FROM tokens WHERE desc='fanout' AND (expiry=0 OR expiry > " + strconv.FormatInt(time.Now().Unix(), 10) + ") LIMIT 1;")
+	if existingToken != "" {
+		s := newSUI(existingToken)
+		if s.tokenValid() {
+			cachedSUIToken = existingToken
+			if workDir != "" {
+				saveTokenFile(workDir, suiTokenFile, existingToken)
+			}
+			return s, nil
+		}
+	}
+
+	// 创建新的 Token 并写入数据库，然后重启 s-ui 使其加载入内存
+	newToken := generateRandomToken(32)
+	adminIDStr := sqliteQuery("SELECT id FROM users LIMIT 1;")
+	adminID := "1"
+	if adminIDStr != "" {
+		adminID = adminIDStr
+	}
+	_ = exec.Command("sqlite3", dbPath, fmt.Sprintf("INSERT INTO tokens (desc, token, expiry, user_id) VALUES ('fanout', '%s', 0, %s);", newToken, adminID)).Run()
+
+	// 重启 s-ui 以加载 token
+	_ = exec.Command("systemctl", "restart", "s-ui").Run()
+	time.Sleep(2 * time.Second)
+
+	s := newSUI(newToken)
+	cachedSUIToken = newToken
+	if workDir != "" {
+		saveTokenFile(workDir, suiTokenFile, newToken)
+	}
+
+	return s, nil
+}
+
+func readSavedTokenFile(workDir, filename string) string {
+	blob, err := os.ReadFile(filepath.Join(workDir, filename))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(blob))
+}
+
+func saveTokenFile(workDir, filename, token string) {
+	path := filepath.Join(workDir, filename)
+	if err := os.WriteFile(path, []byte(token+"\n"), 0600); err != nil {
+		log.Printf("保存 Token 失败: %v", err)
+	}
+}
+
+func generateRandomToken(n int) string {
+	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = letters[r.Intn(len(letters))]
+	}
+	return string(b)
+}
+
+func (s *SUI) tokenValid() bool {
+	_, err := s.callAPI(http.MethodGet, "inbounds", nil)
+	return err == nil
+}
+
+func (s *SUI) callAPI(method, endpoint string, form url.Values) ([]byte, error) {
+	fullURL := fmt.Sprintf("%s/apiv2/%s", strings.TrimSuffix(s.base(), "/"), strings.TrimPrefix(endpoint, "/"))
+	var reqBody io.Reader
+	if form != nil {
+		reqBody = strings.NewReader(form.Encode())
+	}
+
+	req, err := http.NewRequest(method, fullURL, reqBody)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Token", s.token)
+	if form != nil {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("请求 s-ui API (%s) 失败: %w", endpoint, err)
+	}
+	defer resp.Body.Close()
+
+	respData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var res struct {
+		Success bool            `json:"success"`
+		Msg     string          `json:"msg"`
+		Obj     json.RawMessage `json:"obj"`
+	}
+	if err := json.Unmarshal(respData, &res); err != nil {
+		return nil, fmt.Errorf("解析 s-ui 响应失败: %s", string(respData))
+	}
+	if !res.Success {
+		return nil, fmt.Errorf("s-ui API 报错: %s", res.Msg)
+	}
+
+	return res.Obj, nil
+}
+
+// Inbounds 获取 s-ui 中的所有入站并关联绑定状态
+func (s *SUI) Inbounds(live map[string]bool) ([]Inbound, error) {
+	obj, err := s.callAPI(http.MethodGet, "inbounds", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var rawWrap struct {
+		Inbounds []struct {
+			ID         int             `json:"id"`
+			Type       string          `json:"type"`
+			Tag        string          `json:"tag"`
+			Listen     string          `json:"listen"`
+			ListenPort int             `json:"listen_port"`
+			OutJson    json.RawMessage `json:"out_json"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(obj, &rawWrap); err != nil {
+		return nil, fmt.Errorf("解析入站列表失败: %w", err)
+	}
+
+	boundMap, err := s.getBoundRoutes()
+	if err != nil {
+		boundMap = make(map[string]string)
+	}
+
+	var list []Inbound
+	for _, item := range rawWrap.Inbounds {
+		boundHost := boundMap[item.Tag]
+		list = append(list, Inbound{
+			ID:       item.ID,
+			Port:     item.ListenPort,
+			Protocol: item.Type,
+			Remark:   item.Tag,
+			Enable:   true,
+			Tag:      item.Tag,
+			BoundTo:  boundHost,
+			BoundUp:  live[boundHost],
+		})
+	}
+	return list, nil
+}
+
+func (s *SUI) getBoundRoutes() (map[string]string, error) {
+	configObj, err := s.callAPI(http.MethodGet, "config", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var cfg struct {
+		Config struct {
+			Route struct {
+				Rules []map[string]any `json:"rules"`
+			} `json:"route"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(configObj, &cfg); err != nil {
+		return nil, err
+	}
+
+	bound := make(map[string]string)
+	for _, rule := range cfg.Config.Route.Rules {
+		outbound, _ := rule["outbound"].(string)
+		if !strings.HasPrefix(outbound, suiTagPrefix) {
+			continue
+		}
+		host := strings.TrimPrefix(outbound, suiTagPrefix)
+		if inbList, ok := rule["inbound"].([]any); ok {
+			for _, inb := range inbList {
+				if tagStr, ok := inb.(string); ok {
+					bound[tagStr] = host
+				}
+			}
+		} else if tagStr, ok := rule["inbound"].(string); ok {
+			bound[tagStr] = host
+		}
+	}
+	return bound, nil
+}
+
+// Bind 绑定/解绑某个入站到指定隧道
+func (s *SUI) Bind(inboundTag string, hostname string, tunnels []*Tunnel) error {
+	if err := s.syncOutbounds(tunnels); err != nil {
+		return fmt.Errorf("同步 s-ui 出站失败: %w", err)
+	}
+
+	configObj, err := s.callAPI(http.MethodGet, "config", nil)
+	if err != nil {
+		return err
+	}
+
+	var cfg map[string]any
+	if err := json.Unmarshal(configObj, &cfg); err != nil {
+		return err
+	}
+	rawConfig, _ := cfg["config"].(map[string]any)
+	if rawConfig == nil {
+		rawConfig = make(map[string]any)
+	}
+	route, _ := rawConfig["route"].(map[string]any)
+	if route == nil {
+		route = make(map[string]any)
+	}
+	rules, _ := route["rules"].([]any)
+
+	newRules := make([]any, 0, len(rules)+1)
+	for _, r := range rules {
+		ruleMap, ok := r.(map[string]any)
+		if !ok {
+			newRules = append(newRules, r)
+			continue
+		}
+		outbound, _ := ruleMap["outbound"].(string)
+		if strings.HasPrefix(outbound, suiTagPrefix) {
+			inbs := toSUITagSlice(ruleMap["inbound"])
+			var remainInbs []string
+			for _, item := range inbs {
+				if item != inboundTag {
+					remainInbs = append(remainInbs, item)
+				}
+			}
+			if len(remainInbs) > 0 {
+				ruleMap["inbound"] = remainInbs
+				newRules = append(newRules, ruleMap)
+			}
+			continue
+		}
+		newRules = append(newRules, r)
+	}
+
+	if hostname != "" {
+		newRules = append(newRules, map[string]any{
+			"inbound":  []string{inboundTag},
+			"outbound": suiTagPrefix + sanitizeTag(hostname),
+		})
+	}
+
+	route["rules"] = newRules
+	rawConfig["route"] = route
+
+	configBytes, _ := json.Marshal(rawConfig)
+	form := url.Values{
+		"object": {"config"},
+		"action": {"edit"},
+		"data":   {string(configBytes)},
+	}
+	if _, err := s.callAPI(http.MethodPost, "save", form); err != nil {
+		return fmt.Errorf("保存路由配置失败: %w", err)
+	}
+
+	_, _ = s.callAPI(http.MethodPost, "restartSb", nil)
+	return nil
+}
+
+func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {
+	outboundsObj, err := s.callAPI(http.MethodGet, "outbounds", nil)
+	if err != nil {
+		return err
+	}
+
+	var rawWrap struct {
+		Outbounds []struct {
+			ID   int    `json:"id"`
+			Tag  string `json:"tag"`
+			Type string `json:"type"`
+		} `json:"outbounds"`
+	}
+	_ = json.Unmarshal(outboundsObj, &rawWrap)
+
+	existingFanoutTags := make(map[string]bool)
+	for _, ob := range rawWrap.Outbounds {
+		if strings.HasPrefix(ob.Tag, suiTagPrefix) {
+			existingFanoutTags[ob.Tag] = true
+		}
+	}
+
+	activeTags := make(map[string]bool)
+	for _, t := range tunnels {
+		if t.Status != "up" {
+			continue
+		}
+		tag := suiTagPrefix + sanitizeTag(t.Node.HostName)
+		activeTags[tag] = true
+
+		cred := t.credential()
+		outboundPayload := map[string]any{
+			"type":        "socks",
+			"tag":         tag,
+			"server":      "127.0.0.1",
+			"server_port": t.Port,
+			"version":     "5",
+		}
+		if cred.User != "" {
+			outboundPayload["username"] = cred.User
+			outboundPayload["password"] = cred.Pass
+		}
+
+		payloadBytes, _ := json.Marshal(outboundPayload)
+		action := "new"
+		if existingFanoutTags[tag] {
+			action = "edit"
+		}
+		form := url.Values{
+			"object": {"outbounds"},
+			"action": {action},
+			"data":   {string(payloadBytes)},
+		}
+		_, _ = s.callAPI(http.MethodPost, "save", form)
+	}
+
+	for tag := range existingFanoutTags {
+		if !activeTags[tag] {
+			tagBytes, _ := json.Marshal(tag)
+			form := url.Values{
+				"object": {"outbounds"},
+				"action": {"del"},
+				"data":   {string(tagBytes)},
+			}
+			_, _ = s.callAPI(http.MethodPost, "save", form)
+		}
+	}
+
+	return nil
+}
+
+func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) ([]int, error) {
+	inboundsObj, err := s.callAPI(http.MethodGet, fmt.Sprintf("inbounds?id=%d", templateID), nil)
+	if err != nil {
+		return nil, err
+	}
+	var rawWrap struct {
+		Inbounds []map[string]any `json:"inbounds"`
+	}
+	if err := json.Unmarshal(inboundsObj, &rawWrap); err != nil || len(rawWrap.Inbounds) == 0 {
+		return nil, fmt.Errorf("未找到模板入站 %d", templateID)
+	}
+	tpl := rawWrap.Inbounds[0]
+
+	usedPorts := make(map[int]bool)
+	allInbounds, _ := s.Inbounds(nil)
+	for _, inb := range allInbounds {
+		usedPorts[inb.Port] = true
+	}
+
+	byHost := make(map[string]*Tunnel)
+	for _, t := range tunnels {
+		byHost[t.Node.HostName] = t
+	}
+
+	var createdPorts []int
+	for _, host := range hosts {
+		t := byHost[host]
+		if t == nil || t.Status != "up" {
+			continue
+		}
+
+		port, err := freeRandomPort(usedPorts)
+		if err != nil {
+			return createdPorts, err
+		}
+		usedPorts[port] = true
+
+		newTag := fmt.Sprintf("%s-%d", exitLabel(t), port)
+		clone := make(map[string]any)
+		for k, v := range tpl {
+			clone[k] = v
+		}
+		delete(clone, "id")
+		clone["tag"] = newTag
+		clone["listen_port"] = port
+
+		cloneBytes, _ := json.Marshal(clone)
+		form := url.Values{
+			"object": {"inbounds"},
+			"action": {"new"},
+			"data":   {string(cloneBytes)},
+		}
+		_, err = s.callAPI(http.MethodPost, "save", form)
+		if err != nil {
+			return createdPorts, fmt.Errorf("创建入站 (端口 %d) 失败: %w", port, err)
+		}
+
+		if err := s.Bind(newTag, t.Node.HostName, tunnels); err != nil {
+			return createdPorts, fmt.Errorf("绑定端口 %d 失败: %w", port, err)
+		}
+		createdPorts = append(createdPorts, port)
+	}
+
+	return createdPorts, nil
+}
+
+func (s *SUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
+	boundMap, err := s.getBoundRoutes()
+	if err != nil {
+		return err
+	}
+	for inbTag, host := range boundMap {
+		if host == oldHost {
+			if err := s.Bind(inbTag, target.Node.HostName, tunnels); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *SUI) ResyncOutbound(t *Tunnel, tunnels []*Tunnel) error {
+	return s.syncOutbounds(tunnels)
+}
+
+func (s *SUI) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
+	for _, id := range ids {
+		tag := fmt.Sprintf("%d", id)
+		tagBytes, _ := json.Marshal(tag)
+		form := url.Values{
+			"object": {"inbounds"},
+			"action": {"del"},
+			"data":   {string(tagBytes)},
+		}
+		_, _ = s.callAPI(http.MethodPost, "save", form)
+	}
+	_, _ = s.callAPI(http.MethodPost, "restartSb", nil)
+	return nil
+}
+
+func (s *SUI) InboundDetail(id int, publicHost string) (*InboundDetail, error) {
+	inbounds, err := s.Inbounds(nil)
+	if err != nil {
+		return nil, err
+	}
+	for _, inb := range inbounds {
+		if inb.ID == id {
+			return &InboundDetail{
+				Inbound: Inbound{
+					ID:       inb.ID,
+					Port:     inb.Port,
+					Protocol: inb.Protocol,
+					Remark:   inb.Remark,
+					Enable:   inb.Enable,
+					BoundTo:  inb.BoundTo,
+				},
+				Listen: "0.0.0.0",
+			}, nil
+		}
+	}
+	return nil, fmt.Errorf("入站 %d 不存在", id)
+}
+
+func (s *SUI) InboundLinks(ids []int, publicHost string) ([]string, error) {
+	obj, err := s.callAPI(http.MethodGet, "inbounds", nil)
+	if err != nil {
+		return nil, err
+	}
+	var rawWrap struct {
+		Inbounds []struct {
+			ID      int             `json:"id"`
+			OutJson json.RawMessage `json:"out_json"`
+		} `json:"inbounds"`
+	}
+	_ = json.Unmarshal(obj, &rawWrap)
+
+	var links []string
+	idSet := make(map[int]bool)
+	for _, id := range ids {
+		idSet[id] = true
+	}
+
+	for _, item := range rawWrap.Inbounds {
+		if idSet[item.ID] && len(item.OutJson) > 0 {
+			var linkList []string
+			_ = json.Unmarshal(item.OutJson, &linkList)
+			links = append(links, linkList...)
+		}
+	}
+	return links, nil
+}
+
+func (s *SUI) CreateInbound(spec NewInboundSpec, tunnels []*Tunnel) (*CreatedInbound, error) {
+	return nil, fmt.Errorf("s-ui 模式下建议在 s-ui 面板中创建模板入站，或使用新建出口向导")
+}
+
+func (s *SUI) UpdateInbound(id int, patch InboundPatch, tunnels []*Tunnel) error {
+	return nil
+}
+
+func (s *SUI) AddClient(id int, email string, tunnels []*Tunnel) error {
+	return nil
+}
+
+func (s *SUI) DeleteClient(id int, email string, tunnels []*Tunnel) error {
+	return nil
+}
+
+func (s *SUI) ResetClient(id int, email string, tunnels []*Tunnel) error {
+	return nil
+}
+
+func (s *SUI) OnTunnelsChanged(tunnels []*Tunnel) error {
+	return s.syncOutbounds(tunnels)
+}
+
+func (s *SUI) Close() {}
+
+func toSUITagSlice(v any) []string {
+	if s, ok := v.(string); ok {
+		return []string{s}
+	}
+	if arr, ok := v.([]any); ok {
+		var res []string
+		for _, item := range arr {
+			if s, ok := item.(string); ok {
+				res = append(res, s)
+			}
+		}
+		return res
+	}
+	return nil
+}

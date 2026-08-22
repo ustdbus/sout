@@ -1,0 +1,245 @@
+package main
+
+import (
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+)
+
+// Panel 是 fanout 管理节点链接的后端。
+type Panel interface {
+	// Kind 返回 "s-ui", "3x-ui", "xray-cf-lite", "native"
+	Kind() string
+	// Describe 给出一行人能读的后端说明。
+	Describe() string
+
+	Inbounds(live map[string]bool) ([]Inbound, error)
+	InboundDetail(id int, publicHost string) (*InboundDetail, error)
+	InboundLinks(ids []int, publicHost string) ([]string, error)
+
+	Bind(inboundTag string, hostname string, tunnels []*Tunnel) error
+	Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error
+	ResyncOutbound(t *Tunnel, tunnels []*Tunnel) error
+
+	CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) ([]int, error)
+	DeleteInbounds(ids []int, tunnels []*Tunnel) error
+
+	CreateInbound(spec NewInboundSpec, tunnels []*Tunnel) (*CreatedInbound, error)
+	UpdateInbound(id int, patch InboundPatch, tunnels []*Tunnel) error
+
+	AddClient(id int, email string, tunnels []*Tunnel) error
+	DeleteClient(id int, email string, tunnels []*Tunnel) error
+	ResetClient(id int, email string, tunnels []*Tunnel) error
+
+	OnTunnelsChanged(tunnels []*Tunnel) error
+	Close()
+}
+
+type InboundPatch struct {
+	Port   *int
+	Remark *string
+	Enable *bool
+}
+
+type CreatedInbound struct {
+	ID       int    `json:"id"`
+	Port     int    `json:"port"`
+	Protocol string `json:"protocol"`
+	Remark   string `json:"remark"`
+	Network  string `json:"network"`
+	Security string `json:"security"`
+}
+
+func closePanel() {
+	panelState.mu.Lock()
+	p := panelState.current
+	panelState.mu.Unlock()
+	if p != nil {
+		p.Close()
+	}
+}
+
+var panelState struct {
+	mu      sync.Mutex
+	current Panel
+	workDir string
+	forced  string
+}
+
+func panelModeFile(dir string) string { return filepath.Join(dir, "panel_mode") }
+
+func configurePanel(workDir, mode string) {
+	panelState.mu.Lock()
+	defer panelState.mu.Unlock()
+	panelState.workDir = workDir
+	if mode == "" {
+		blob, err := os.ReadFile(panelModeFile(workDir))
+		if err == nil {
+			mode = strings.TrimSpace(string(blob))
+		}
+	}
+	panelState.forced = mode
+	panelState.current = nil
+}
+
+func savePanelMode(dir, mode string) error {
+	if dir == "" {
+		return nil
+	}
+	path := panelModeFile(dir)
+	if mode == "" {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return os.WriteFile(path, []byte(mode), 0600)
+}
+
+func openPanel() (Panel, error) {
+	panelState.mu.Lock()
+	defer panelState.mu.Unlock()
+
+	if panelState.current != nil {
+		return panelState.current, nil
+	}
+
+	switch panelState.forced {
+	case "s-ui":
+		s, err := DetectSUI(panelState.workDir)
+		if err != nil {
+			return nil, fmt.Errorf("指定了 s-ui 模式但探测失败: %w", err)
+		}
+		panelState.current = s
+		return s, nil
+	case "3x-ui":
+		x, err := DetectXUI(panelState.workDir)
+		if err != nil {
+			return nil, fmt.Errorf("指定了 3x-ui 模式但探测失败: %w", err)
+		}
+		panelState.current = x
+		return x, nil
+	case "native":
+		n, err := openNative(panelState.workDir)
+		if err != nil {
+			return nil, err
+		}
+		panelState.current = n
+		return n, nil
+	case "xray-cf-lite":
+		xc, err := DetectXCL()
+		if err != nil {
+			return nil, fmt.Errorf("指定了 xray-cf-lite 模式但探测失败: %w", err)
+		}
+		panelState.current = xc
+		return xc, nil
+	}
+
+	// 自动探测优先级：s-ui -> 3x-ui -> xray-cf-lite -> native
+	if s, err := DetectSUI(panelState.workDir); err == nil {
+		panelState.current = s
+		return s, nil
+	}
+
+	if xc, err := DetectXCL(); err == nil {
+		panelState.current = xc
+		return xc, nil
+	}
+
+	if x, err := DetectXUI(panelState.workDir); err == nil {
+		panelState.current = x
+		return x, nil
+	}
+
+	n, err := openNative(panelState.workDir)
+	if err != nil {
+		return nil, err
+	}
+	panelState.current = n
+	return n, nil
+}
+
+func currentPanelMode() string {
+	panelState.mu.Lock()
+	defer panelState.mu.Unlock()
+	if panelState.forced != "" {
+		return panelState.forced
+	}
+	if panelState.current != nil {
+		return panelState.current.Kind()
+	}
+	return ""
+}
+
+func availablePanelModes(workDir string) []map[string]any {
+	modes := []map[string]any{}
+
+	suiOK, suiReason := true, ""
+	if _, err := DetectSUI(workDir); err != nil {
+		suiOK, suiReason = false, err.Error()
+	}
+	modes = append(modes, map[string]any{"mode": "s-ui", "label": "s-ui 面板", "available": suiOK, "reason": suiReason})
+
+	xcOK, xcReason := true, ""
+	if _, err := DetectXCL(); err != nil {
+		xcOK, xcReason = false, err.Error()
+	}
+	modes = append(modes, map[string]any{"mode": "xray-cf-lite", "label": "xray-cf-lite", "available": xcOK, "reason": xcReason})
+
+	xuiOK, xuiReason := true, ""
+	if _, err := DetectXUI(workDir); err != nil {
+		xuiOK, xuiReason = false, err.Error()
+	}
+	modes = append(modes, map[string]any{"mode": "3x-ui", "label": "3x-ui 面板", "available": xuiOK, "reason": xuiReason})
+
+	modes = append(modes, map[string]any{"mode": "native", "label": "自建 Xray", "available": true, "reason": ""})
+
+	return modes
+}
+
+func switchPanelMode(mode string) (Panel, error) {
+	switch mode {
+	case "", "s-ui", "3x-ui", "native", "xray-cf-lite":
+	default:
+		return nil, fmt.Errorf("未知后端模式 %q", mode)
+	}
+
+	panelState.mu.Lock()
+	old := panelState.current
+	workDir := panelState.workDir
+	panelState.mu.Unlock()
+	if old != nil {
+		old.Close()
+	}
+
+	panelState.mu.Lock()
+	panelState.forced = mode
+	panelState.current = nil
+	panelState.mu.Unlock()
+
+	p, err := openPanel()
+	if err != nil {
+		panelState.mu.Lock()
+		panelState.forced = ""
+		panelState.current = nil
+		panelState.mu.Unlock()
+		return nil, err
+	}
+	if err := savePanelMode(workDir, mode); err != nil {
+		log.Printf("记录后端模式失败: %v", err)
+	}
+	return p, nil
+}
+
+func xuiAbsent() bool {
+	if _, err := os.Stat(xuiBinary); err == nil {
+		return false
+	}
+	if _, err := os.Stat(xuiMenu); err == nil {
+		return false
+	}
+	return true
+}
