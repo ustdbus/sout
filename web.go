@@ -292,6 +292,12 @@ textarea{width:100%;min-height:280px;background:#0d1117;border:1px solid var(--l
         <input id="setPath" type="text" placeholder="留空去掉前缀"></label>
       <label class="f"><span>管理端口</span>
         <input id="setPort" type="text" inputmode="numeric"></label>
+      <label class="f"><span>监听地址</span>
+        <select id="setListen">
+          <option value="0.0.0.0">0.0.0.0 (公网直接访问)</option>
+          <option value="127.0.0.1">127.0.0.1 (仅本地，用于 Nginx / 1Panel 等反向代理)</option>
+        </select>
+      </label>
     </div>
     <div class="foot">
       <span class="spacer"></span>
@@ -628,6 +634,7 @@ $('#settingsBtn').onclick = async () => {
     const s = await api('/api/settings');
     $('#setPath').value = (s.base_path || '').replace(/^\//, '');
     $('#setPort').value = s.port || '';
+    $('#setListen').value = (s.listen_addr === '127.0.0.1') ? '127.0.0.1' : '0.0.0.0';
   }catch(e){}
 };
 
@@ -639,6 +646,7 @@ $('#saveSettingsBtn').onclick = async e => {
   body.base_path = $('#setPath').value.trim();
   const port = parseInt($('#setPort').value.trim(), 10);
   if(port) body.port = port;
+  body.listen_addr = $('#setListen').value;
   try{
     await api('/api/settings', {
       method:'POST',
