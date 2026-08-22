@@ -146,11 +146,11 @@ textarea{width:100%;min-height:280px;background:#0d1117;border:1px solid var(--l
       <svg viewBox="0 0 24 24" style="color:var(--ok)"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
       VPN Gate 出口隧道池
     </h2>
-    <span class="desc">在此拉取并运行各国公共家宽出口隧道（SOCKS5）</span>
+    <span class="desc">在此拉取并运行各国家/地区公共家宽出口隧道（SOCKS5）</span>
     <span class="spacer"></span>
     <button class="primary" id="openNewExitModalBtn" style="box-shadow:0 2px 6px rgba(88,166,255,.3)">
       <svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
-      新建国家出口
+      新建国家/地区出口
     </button>
     <button id="stopAllExitsBtn">全部停止</button>
   </div>
@@ -174,11 +174,11 @@ textarea{width:100%;min-height:280px;background:#0d1117;border:1px solid var(--l
   <div id="nodesContainer"></div>
 </main>
 
-<!-- Modal 1: 在隧道池中「新建国家出口」 -->
+<!-- Modal 1: 在隧道池中「新建国家/地区出口」 -->
 <div class="modal" id="newExitModal">
   <div class="sheet">
     <div class="head">
-      <h2>新建 VPN Gate 国家出口</h2>
+      <h2>新建 VPN Gate 国家/地区出口</h2>
       <span class="spacer"></span>
       <button class="icon" data-close="newExitModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
@@ -374,7 +374,7 @@ function renderExits(){
   const box = $('#exitsContainer');
   const exits = viewData.exits || [];
   if(!exits.length){
-    box.innerHTML = '<div class="empty">出口隧道池中暂无运行的隧道，请点击右上角「+ 新建国家出口」拉取</div>';
+    box.innerHTML = '<div class="empty">出口隧道池中暂无运行的隧道，请点击右上角「+ 新建国家/地区出口」拉取</div>';
     return;
   }
 
@@ -390,7 +390,7 @@ function renderExits(){
       +   '<button class="chip-btn" data-cred="' + e.slot + '" title="查看 SOCKS5 凭据">' + ICON.lock + ' SOCKS5 :' + e.port + '</button>'
       + '</div>'
       + '<div class="branch-acts">'
-      +   '<button class="icon" data-swap="' + e.slot + '" title="换一个同国节点">' + ICON.redo + '</button>'
+      +   '<button class="icon" data-swap="' + e.slot + '" title="换一个同国家/地区节点">' + ICON.redo + '</button>'
       +   '<button class="icon danger" data-stop="' + e.slot + '" title="停止此出口">' + ICON.trash + '</button>'
       + '</div>'
       + '</div>';
@@ -551,7 +551,7 @@ $('#goToNewExitBtn').onclick = () => {
   $('#openNewExitModalBtn').click();
 };
 
-// ---- 新建国家出口相关 ----
+// ---- 新建国家/地区出口相关 ----
 let exitCount = 1;
 $('#stepDecBtn').onclick = () => {
   if(exitCount > 1){

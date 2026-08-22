@@ -215,7 +215,7 @@ func (m *Manager) ExitsOf() ExitsView {
 			}
 		}
 
-		boundLabel := "直连 (香港母机)"
+		boundLabel := "直连（香港）"
 		if ib.BoundTo != "" {
 			if t, ok := hostToTunnel[ib.BoundTo]; ok {
 				cName := countryNameCN(t.Node.CountryCode, t.Node.Country)
