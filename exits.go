@@ -24,6 +24,8 @@ type Exit struct {
 	Host      string        `json:"host"`
 	Region    string        `json:"region"`
 	Country   string        `json:"country"`
+	Ping      int           `json:"ping"`
+	SpeedMbps float64       `json:"speed_mbps"`
 	ExitIP    string        `json:"exit_ip"`
 	Status    string        `json:"status"`
 	Err       string        `json:"err,omitempty"`
@@ -147,6 +149,7 @@ func (m *Manager) ExitsOf() ExitsView {
 		view.Exits = append(view.Exits, Exit{
 			Slot: t.Slot, Port: t.Port, Host: t.Node.HostName,
 			Region: t.Node.CountryCode, Country: t.Node.Country,
+			Ping: t.Node.Ping, SpeedMbps: t.Node.SpeedMbps,
 			ExitIP: t.ExitIP, Status: t.Status, Err: t.Err, Since: t.Since,
 			SocksUser: cred.User, SocksPass: cred.Pass,
 		})

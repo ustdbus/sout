@@ -61,6 +61,9 @@ main{padding:20px;max-width:1120px;margin:0 auto}
 .exit-ip{font-weight:700;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text)}
 .exit-meta{color:var(--dim);font-size:12px;display:flex;align-items:center;gap:8px}
 .socks-tag{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#0d1117;border:1px solid var(--line);padding:1px 6px;border-radius:4px;color:var(--dim);font-size:11px}
+.metric-tag{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;padding:2px 6px;border-radius:4px;font-weight:600}
+.metric-tag.speed{color:#3fb950;border:1px solid rgba(63,185,80,.3);background:rgba(63,185,80,.1)}
+.metric-tag.ping{color:#58a6ff;border:1px solid rgba(88,166,255,.3);background:rgba(88,166,255,.1)}
 
 /* s-ui 节点管理 */
 .node-card{background:var(--panel);border:1px solid var(--line);border-radius:8px;margin-bottom:16px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.2)}
@@ -382,11 +385,15 @@ function renderExits(){
     const label = e.exit_ip || (e.status === 'starting' ? '连接中…' : '—');
     const place = (e.country && e.country.toUpperCase() !== (e.region||'').toUpperCase())
       ? (e.region + ' ' + e.country) : (e.region || '—');
+    const pingBadge = e.ping > 0 ? ('<span class="metric-tag ping" title="延迟">' + e.ping + ' ms</span>') : '';
+    const speedBadge = e.speed_mbps > 0 ? ('<span class="metric-tag speed" title="带宽">' + e.speed_mbps.toFixed(0) + ' Mbps</span>') : '';
     return '<div class="exit-row">'
       + '<span class="dot ' + e.status + '" title="' + e.status + '"></span>'
       + '<span class="exit-ip">' + esc(label) + '</span>'
       + '<div class="exit-meta">'
       +   '<span>' + esc(place) + ' · ' + esc(e.host) + '</span>'
+      +   pingBadge
+      +   speedBadge
       +   '<button class="chip-btn" data-cred="' + e.slot + '" title="查看 SOCKS5 凭据">' + ICON.lock + ' SOCKS5 :' + e.port + '</button>'
       + '</div>'
       + '<div class="branch-acts">'
