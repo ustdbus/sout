@@ -218,7 +218,7 @@ change_panel_url() {
   cur=$(web_panel_url)
   echo
   echo -e "  当前面板 URL: ${B}${cur:-(未设置)}${N}"
-  read -rp "  请输入新面板 URL (如 https://fanout.20023.bond/8VmShnFQie/，留空清除): " new_url
+  read -rp "  请输入新面板 URL (如 https://example.com/xxxx/，留空清除): " new_url
   new_url=$(echo "$new_url" | tr -d ' \r\n')
 
   python3 -c "

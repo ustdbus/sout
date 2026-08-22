@@ -302,7 +302,7 @@ textarea{width:100%;min-height:280px;background:#0d1117;border:1px solid var(--l
         </select>
       </label>
       <label class="f"><span>面板 URL (反代域名/完整地址)</span>
-        <input id="setPanelUrl" type="text" placeholder="如 https://fanout.20023.bond/8VmShnFQie/ 或留空"></label>
+        <input id="setPanelUrl" type="text" placeholder="如 https://example.com/xxxx/ 或留空"></label>
     </div>
     <div class="foot">
       <span class="spacer"></span>

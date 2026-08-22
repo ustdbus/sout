@@ -1,0 +1,7 @@
+*.tmp
+*.txt
+*.log
+*.exe
+*.sub
+scratch/
+__pycache__/
