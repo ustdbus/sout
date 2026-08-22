@@ -141,6 +141,7 @@ func DetectSUI(workDir string) (*SUI, error) {
 	if cachedSUIToken != "" {
 		s := newSUI(cachedSUIToken)
 		if s.tokenValid() {
+			s.syncSUIDatabaseLinks(hostPublicIP())
 			return s, nil
 		}
 	}
@@ -151,6 +152,7 @@ func DetectSUI(workDir string) (*SUI, error) {
 			s := newSUI(saved)
 			if s.tokenValid() {
 				cachedSUIToken = saved
+				s.syncSUIDatabaseLinks(hostPublicIP())
 				return s, nil
 			}
 		}
@@ -164,6 +166,7 @@ func DetectSUI(workDir string) (*SUI, error) {
 			if workDir != "" {
 				saveTokenFile(workDir, suiTokenFile, existingToken)
 			}
+			s.syncSUIDatabaseLinks(hostPublicIP())
 			return s, nil
 		}
 	}
@@ -184,6 +187,7 @@ func DetectSUI(workDir string) (*SUI, error) {
 	if workDir != "" {
 		saveTokenFile(workDir, suiTokenFile, newToken)
 	}
+	s.syncSUIDatabaseLinks(hostPublicIP())
 
 	return s, nil
 }
@@ -229,6 +233,14 @@ func (s *SUI) callAPI(method, endpoint string, form url.Values) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
+
+	// 传递真实的母机公网 IP / 域名作为 Host，避免 s-ui 将连接地址误记为 127.0.0.1
+	pubIP := hostPublicIP()
+	if pubIP != "" {
+		req.Host = pubIP
+		req.Header.Set("X-Forwarded-Host", pubIP)
+	}
+
 	req.Header.Set("Token", s.token)
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -365,7 +377,6 @@ func (s *SUI) Bind(inboundTag string, hostname string, tunnels []*Tunnel) error 
 	}
 	rules, _ := route["rules"].([]any)
 
-	// 获取当前所有合法的入站 Tag
 	validTags := make(map[string]bool)
 	if allInb, err := s.Inbounds(nil); err == nil {
 		for _, inb := range allInb {
@@ -418,7 +429,6 @@ func (s *SUI) Bind(inboundTag string, hostname string, tunnels []*Tunnel) error 
 		return fmt.Errorf("保存路由配置失败: %w", err)
 	}
 
-	// 强制通知 sing-box 重新加载出站与路由规则
 	s.restartSingBox()
 
 	return nil
@@ -583,6 +593,20 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		origTag = fmt.Sprintf("inbound-%d", templateID)
 	}
 
+	// 获取母模板配置中的 server 地址（如域名或公网 IP）
+	serverHost := hostPublicIP()
+	if tplOutJSONStr, ok := tpl["out_json"].(string); ok && tplOutJSONStr != "" {
+		var tplOut struct {
+			Server string `json:"server"`
+		}
+		if json.Unmarshal([]byte(tplOutJSONStr), &tplOut) == nil && tplOut.Server != "" && tplOut.Server != "127.0.0.1" && tplOut.Server != "localhost" {
+			serverHost = tplOut.Server
+		}
+	}
+	if serverHost == "" {
+		serverHost = s.Host
+	}
+
 	usedPorts := make(map[int]bool)
 	allInbounds, _ := s.Inbounds(nil)
 	for _, inb := range allInbounds {
@@ -629,6 +653,15 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		clone["tag"] = newTag
 		clone["listen_port"] = port
 
+		// 明确指定 addrs，确保 s-ui 生成客户端链接与 out_json 时写入正确的公网 IP / 域名和端口
+		clone["addrs"] = []map[string]any{
+			{
+				"server":      serverHost,
+				"server_port": port,
+				"remark":      newTag,
+			},
+		}
+
 		cloneBytes, _ := json.Marshal(clone)
 		form := url.Values{
 			"object":    {"inbounds"},
@@ -644,10 +677,74 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		if err := s.Bind(newTag, t.Node.HostName, tunnels); err != nil {
 			return createdPorts, fmt.Errorf("绑定入站 %s 失败: %w", newTag, err)
 		}
+
+		// 同步修复 s-ui 数据库中 inbounds.out_json 和 clients.links，确保两边完全一致
+		s.syncSUIDatabaseLinks(serverHost)
+
 		createdPorts = append(createdPorts, port)
 	}
 
 	return createdPorts, nil
+}
+
+// syncSUIDatabaseLinks 深度同步 s-ui 数据库中的 inbounds.out_json 与 clients.links
+func (s *SUI) syncSUIDatabaseLinks(publicHost string) {
+	if publicHost == "" {
+		publicHost = hostPublicIP()
+	}
+	if publicHost == "" {
+		return
+	}
+
+	// 1. 将 inbounds 表中 server 为 127.0.0.1 的记录替换为 publicHost
+	_ = s.sqliteQuery(fmt.Sprintf(
+		"UPDATE inbounds SET out_json = replace(out_json, '\"server\": \"127.0.0.1\"', '\"server\": \"%s\"') WHERE out_json LIKE '%%\"server\": \"127.0.0.1\"%%';",
+		publicHost,
+	))
+
+	// 2. 重新构建并刷入 clients.links
+	clientCfgJSON := s.sqliteQuery("SELECT config FROM clients WHERE enable = 1 LIMIT 1;")
+	if clientCfgJSON == "" {
+		clientCfgJSON = s.sqliteQuery("SELECT config FROM clients LIMIT 1;")
+	}
+	if clientCfgJSON == "" {
+		return
+	}
+
+	allInbounds, err := s.Inbounds(nil)
+	if err != nil {
+		return
+	}
+
+	type SUIClientLink struct {
+		Remark string `json:"remark"`
+		Type   string `json:"type"`
+		URI    string `json:"uri"`
+	}
+
+	var fixedLinks []SUIClientLink
+	for _, inb := range allInbounds {
+		outJSON := s.sqliteQuery(fmt.Sprintf("SELECT out_json FROM inbounds WHERE id = %d;", inb.ID))
+		if outJSON == "" {
+			continue
+		}
+		linkURI := s.buildLinkFromOutJson([]byte(outJSON), []byte(clientCfgJSON), publicHost, inb.Tag)
+		if linkURI != "" {
+			fixedLinks = append(fixedLinks, SUIClientLink{
+				Remark: inb.Tag,
+				Type:   "local",
+				URI:    linkURI,
+			})
+		}
+	}
+
+	if len(fixedLinks) > 0 {
+		linksJSON, err := json.MarshalIndent(fixedLinks, "", "  ")
+		if err == nil {
+			escapedJSON := strings.ReplaceAll(string(linksJSON), "'", "''")
+			_ = s.sqliteQuery(fmt.Sprintf("UPDATE clients SET links = '%s';", escapedJSON))
+		}
+	}
 }
 
 func (s *SUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
@@ -697,6 +794,8 @@ func (s *SUI) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
 		// 清理该 tag 的分流规则
 		_ = s.Bind(tag, "", tunnels)
 	}
+
+	s.syncSUIDatabaseLinks(hostPublicIP())
 
 	return nil
 }
