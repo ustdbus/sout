@@ -211,9 +211,15 @@ func (m *Manager) ExitsOf() ExitsView {
 
 	// 第三轮：挂载分支
 	for _, ib := range list {
+		targetID := ib.ID
+		if ib.ClientID > 0 {
+			targetID = ib.ClientID
+		}
 		var links []string
-		if p != nil {
-			if l, err := p.InboundLinks([]int{ib.ID}, publicHost); err == nil {
+		if sui, ok := p.(*SUI); ok {
+			links = sui.InboundBranchLinks(ib.ID, ib.ClientID, ib.Tag, publicHost)
+		} else if p != nil {
+			if l, err := p.InboundLinks([]int{targetID}, publicHost); err == nil {
 				links = l
 			}
 		}
@@ -232,9 +238,12 @@ func (m *Manager) ExitsOf() ExitsView {
 			}
 		}
 
-		isBase := !isResidentialBranch(ib.Tag)
+		isBase := ib.IsBase
+		if !isBase && isResidentialBranch(ib.Tag) {
+			isBase = false
+		}
 		branch := NodeBranch{
-			ID:         ib.ID,
+			ID:         targetID,
 			Tag:        ib.Tag,
 			Remark:     ib.Remark,
 			Protocol:   strings.ToUpper(ib.Protocol),
