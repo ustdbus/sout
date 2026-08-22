@@ -71,6 +71,14 @@ func suiRunning() bool {
 	return false
 }
 
+func (s *SUI) sqliteQuery(query string) string {
+	out, err := exec.Command("sqlite3", s.dbPath, query).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // DetectSUI 自动探测本机 s-ui 安装状态、端口、路径并提取或生成 Token
 func DetectSUI(workDir string) (*SUI, error) {
 	dbPath := suiDBPathDefault
@@ -83,8 +91,7 @@ func DetectSUI(workDir string) (*SUI, error) {
 		}
 	}
 
-	// 1. 读取 s-ui settings
-	sqliteQuery := func(query string) string {
+	sqliteExec := func(query string) string {
 		out, err := exec.Command("sqlite3", dbPath, query).Output()
 		if err != nil {
 			return ""
@@ -92,13 +99,13 @@ func DetectSUI(workDir string) (*SUI, error) {
 		return strings.TrimSpace(string(out))
 	}
 
-	portStr := sqliteQuery("SELECT value FROM settings WHERE key='webPort';")
+	portStr := sqliteExec("SELECT value FROM settings WHERE key='webPort';")
 	port := 2095
 	if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
 		port = p
 	}
 
-	basePath := sqliteQuery("SELECT value FROM settings WHERE key='webPath';")
+	basePath := sqliteExec("SELECT value FROM settings WHERE key='webPath';")
 	if basePath == "" {
 		basePath = "/app/"
 	}
@@ -110,8 +117,8 @@ func DetectSUI(workDir string) (*SUI, error) {
 	}
 
 	scheme := "http"
-	certFile := sqliteQuery("SELECT value FROM settings WHERE key='webCertFile';")
-	keyFile := sqliteQuery("SELECT value FROM settings WHERE key='webKeyFile';")
+	certFile := sqliteExec("SELECT value FROM settings WHERE key='webCertFile';")
+	keyFile := sqliteExec("SELECT value FROM settings WHERE key='webKeyFile';")
 	if certFile != "" && keyFile != "" {
 		scheme = "https"
 	}
@@ -138,7 +145,6 @@ func DetectSUI(workDir string) (*SUI, error) {
 		}
 	}
 
-	// 检查落盘的 token
 	if workDir != "" {
 		saved := readSavedTokenFile(workDir, suiTokenFile)
 		if saved != "" {
@@ -150,8 +156,7 @@ func DetectSUI(workDir string) (*SUI, error) {
 		}
 	}
 
-	// 从数据库查询现有 fanout token
-	existingToken := sqliteQuery("SELECT token FROM tokens WHERE desc='fanout' AND (expiry=0 OR expiry > " + strconv.FormatInt(time.Now().Unix(), 10) + ") LIMIT 1;")
+	existingToken := sqliteExec("SELECT token FROM tokens WHERE desc='fanout' AND (expiry=0 OR expiry > " + strconv.FormatInt(time.Now().Unix(), 10) + ") LIMIT 1;")
 	if existingToken != "" {
 		s := newSUI(existingToken)
 		if s.tokenValid() {
@@ -163,16 +168,14 @@ func DetectSUI(workDir string) (*SUI, error) {
 		}
 	}
 
-	// 创建新的 Token 并写入数据库，然后重启 s-ui 使其加载入内存
 	newToken := generateRandomToken(32)
-	adminIDStr := sqliteQuery("SELECT id FROM users LIMIT 1;")
+	adminIDStr := sqliteExec("SELECT id FROM users LIMIT 1;")
 	adminID := "1"
 	if adminIDStr != "" {
 		adminID = adminIDStr
 	}
 	_ = exec.Command("sqlite3", dbPath, fmt.Sprintf("INSERT INTO tokens (desc, token, expiry, user_id) VALUES ('fanout', '%s', 0, %s);", newToken, adminID)).Run()
 
-	// 重启 s-ui 以加载 token
 	_ = exec.Command("systemctl", "restart", "s-ui").Run()
 	time.Sleep(2 * time.Second)
 
@@ -337,7 +340,7 @@ func (s *SUI) getBoundRoutes() (map[string]string, error) {
 	return bound, nil
 }
 
-// Bind 绑定/解绑某个入站到指定隧道
+// Bind 绑定/解绑某个入站到指定隧道。hostname 为空时解除绑定变回直连。
 func (s *SUI) Bind(inboundTag string, hostname string, tunnels []*Tunnel) error {
 	if err := s.syncOutbounds(tunnels); err != nil {
 		return fmt.Errorf("同步 s-ui 出站失败: %w", err)
@@ -407,7 +410,6 @@ func (s *SUI) Bind(inboundTag string, hostname string, tunnels []*Tunnel) error 
 		return fmt.Errorf("保存路由配置失败: %w", err)
 	}
 
-	_, _ = s.callAPI(http.MethodPost, "restartSb", nil)
 	return nil
 }
 
@@ -482,6 +484,73 @@ func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {
 	return nil
 }
 
+// countryNameCN 把国家代码和英文名转换为中文国家名称
+func countryNameCN(code, name string) string {
+	switch strings.ToUpper(strings.TrimSpace(code)) {
+	case "JP":
+		return "日本"
+	case "US":
+		return "美国"
+	case "KR":
+		return "韩国"
+	case "HK":
+		return "香港"
+	case "TW":
+		return "台湾"
+	case "SG":
+		return "新加坡"
+	case "DE":
+		return "德国"
+	case "GB", "UK":
+		return "英国"
+	case "CA":
+		return "加拿大"
+	case "AU":
+		return "澳大利亚"
+	case "FR":
+		return "法国"
+	case "RU":
+		return "俄罗斯"
+	case "TH":
+		return "泰国"
+	case "VN":
+		return "越南"
+	case "MY":
+		return "马来西亚"
+	case "PH":
+		return "菲律宾"
+	case "IN":
+		return "印度"
+	case "BR":
+		return "巴西"
+	case "NL":
+		return "荷兰"
+	case "IT":
+		return "意大利"
+	case "ES":
+		return "西班牙"
+	case "SE":
+		return "瑞典"
+	case "CH":
+		return "瑞士"
+	case "UA":
+		return "乌克兰"
+	case "ID":
+		return "印尼"
+	case "TR":
+		return "土耳其"
+	default:
+		if name != "" {
+			return name
+		}
+		if code != "" {
+			return code
+		}
+		return "海外"
+	}
+}
+
+// CloneToTunnels 为每个隧道克隆一个新入站，保留原模板节点为直连，新节点命名为：原名称 (地区+家宽)
 func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) ([]int, error) {
 	inboundsObj, err := s.callAPI(http.MethodGet, fmt.Sprintf("inbounds?id=%d", templateID), nil)
 	if err != nil {
@@ -494,6 +563,10 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		return nil, fmt.Errorf("未找到模板入站 %d", templateID)
 	}
 	tpl := rawWrap.Inbounds[0]
+	origTag, _ := tpl["tag"].(string)
+	if origTag == "" {
+		origTag = fmt.Sprintf("inbound-%d", templateID)
+	}
 
 	usedPorts := make(map[int]bool)
 	allInbounds, _ := s.Inbounds(nil)
@@ -504,6 +577,12 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 	byHost := make(map[string]*Tunnel)
 	for _, t := range tunnels {
 		byHost[t.Node.HostName] = t
+	}
+
+	// 读取已启用的 client IDs 赋给新入站
+	clientIDs := s.sqliteQuery("SELECT GROUP_CONCAT(id) FROM clients WHERE enable = 1;")
+	if clientIDs == "" {
+		clientIDs = s.sqliteQuery("SELECT GROUP_CONCAT(id) FROM clients;")
 	}
 
 	var createdPorts []int
@@ -519,7 +598,17 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		}
 		usedPorts[port] = true
 
-		newTag := fmt.Sprintf("%s-%d", exitLabel(t), port)
+		// 格式要求：在原名称后面加上（国家/地区名+家宽），如：（日本家宽）
+		cName := countryNameCN(t.Node.CountryCode, t.Node.Country)
+		newTag := fmt.Sprintf("%s (%s家宽)", origTag, cName)
+		// 如果已存在同名 tag，追加端口号避免冲突
+		for _, inb := range allInbounds {
+			if inb.Tag == newTag {
+				newTag = fmt.Sprintf("%s (%s家宽-%d)", origTag, cName, port)
+				break
+			}
+		}
+
 		clone := make(map[string]any)
 		for k, v := range tpl {
 			clone[k] = v
@@ -530,17 +619,18 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 
 		cloneBytes, _ := json.Marshal(clone)
 		form := url.Values{
-			"object": {"inbounds"},
-			"action": {"new"},
-			"data":   {string(cloneBytes)},
+			"object":    {"inbounds"},
+			"action":    {"new"},
+			"data":      {string(cloneBytes)},
+			"initUsers": {clientIDs},
 		}
 		_, err = s.callAPI(http.MethodPost, "save", form)
 		if err != nil {
-			return createdPorts, fmt.Errorf("创建入站 (端口 %d) 失败: %w", port, err)
+			return createdPorts, fmt.Errorf("创建入站 (%s) 失败: %w", newTag, err)
 		}
 
 		if err := s.Bind(newTag, t.Node.HostName, tunnels); err != nil {
-			return createdPorts, fmt.Errorf("绑定端口 %d 失败: %w", port, err)
+			return createdPorts, fmt.Errorf("绑定入站 %s 失败: %w", newTag, err)
 		}
 		createdPorts = append(createdPorts, port)
 	}
@@ -553,8 +643,9 @@ func (s *SUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
 	if err != nil {
 		return err
 	}
+	oldHostTag := sanitizeTag(oldHost)
 	for inbTag, host := range boundMap {
-		if host == oldHost {
+		if host == oldHost || host == oldHostTag {
 			if err := s.Bind(inbTag, target.Node.HostName, tunnels); err != nil {
 				return err
 			}
@@ -567,9 +658,22 @@ func (s *SUI) ResyncOutbound(t *Tunnel, tunnels []*Tunnel) error {
 	return s.syncOutbounds(tunnels)
 }
 
+// DeleteInbounds 删除入站。通过 tag 删除 s-ui 中的入站并清理相关路由规则
 func (s *SUI) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
+	inbounds, err := s.Inbounds(nil)
+	if err != nil {
+		return err
+	}
+	tagMap := make(map[int]string)
+	for _, inb := range inbounds {
+		tagMap[inb.ID] = inb.Tag
+	}
+
 	for _, id := range ids {
-		tag := fmt.Sprintf("%d", id)
+		tag, ok := tagMap[id]
+		if !ok {
+			continue
+		}
 		tagBytes, _ := json.Marshal(tag)
 		form := url.Values{
 			"object": {"inbounds"},
@@ -577,9 +681,29 @@ func (s *SUI) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
 			"data":   {string(tagBytes)},
 		}
 		_, _ = s.callAPI(http.MethodPost, "save", form)
+
+		// 清理该 tag 的分流规则
+		_ = s.Bind(tag, "", tunnels)
 	}
-	_, _ = s.callAPI(http.MethodPost, "restartSb", nil)
+
 	return nil
+}
+
+func (s *SUI) inboundClients(inboundID int) []string {
+	query := fmt.Sprintf("SELECT clients.name FROM clients, json_each(clients.inbounds) as je WHERE je.value = %d", inboundID)
+	out := s.sqliteQuery(query)
+	if out == "" {
+		return nil
+	}
+	lines := strings.Split(out, "\n")
+	var names []string
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l != "" {
+			names = append(names, l)
+		}
+	}
+	return names
 }
 
 func (s *SUI) InboundDetail(id int, publicHost string) (*InboundDetail, error) {
@@ -589,56 +713,136 @@ func (s *SUI) InboundDetail(id int, publicHost string) (*InboundDetail, error) {
 	}
 	for _, inb := range inbounds {
 		if inb.ID == id {
-			return &InboundDetail{
+			detail := &InboundDetail{
 				Inbound: Inbound{
 					ID:       inb.ID,
 					Port:     inb.Port,
 					Protocol: inb.Protocol,
 					Remark:   inb.Remark,
 					Enable:   inb.Enable,
+					Tag:      inb.Tag, // 必须完整赋值 Tag 供前端绑定使用
 					BoundTo:  inb.BoundTo,
+					BoundUp:  inb.BoundUp,
 				},
 				Listen: "0.0.0.0",
-			}, nil
+			}
+			links, _ := s.InboundLinks([]int{id}, publicHost)
+			detail.Links = links
+
+			clients := s.inboundClients(id)
+			for _, c := range clients {
+				detail.Clients = append(detail.Clients, ClientInfo{
+					Email:  c,
+					ID:     c,
+					Enable: true,
+				})
+			}
+			return detail, nil
 		}
 	}
 	return nil, fmt.Errorf("入站 %d 不存在", id)
 }
 
 func (s *SUI) InboundLinks(ids []int, publicHost string) ([]string, error) {
-	obj, err := s.callAPI(http.MethodGet, "inbounds", nil)
+	inbounds, err := s.Inbounds(nil)
 	if err != nil {
 		return nil, err
 	}
-	var rawWrap struct {
-		Inbounds []struct {
-			ID      int             `json:"id"`
-			OutJson json.RawMessage `json:"out_json"`
-		} `json:"inbounds"`
+	idMap := make(map[int]Inbound)
+	for _, inb := range inbounds {
+		idMap[inb.ID] = inb
 	}
-	_ = json.Unmarshal(obj, &rawWrap)
+
+	rawLinks := s.sqliteQuery("SELECT links FROM clients WHERE enable = 1;")
+	if rawLinks == "" {
+		rawLinks = s.sqliteQuery("SELECT links FROM clients;")
+	}
+
+	var allClientLinks []struct {
+		Remark string `json:"remark"`
+		Type   string `json:"type"`
+		URI    string `json:"uri"`
+	}
+	_ = json.Unmarshal([]byte(rawLinks), &allClientLinks)
 
 	var links []string
-	idSet := make(map[int]bool)
 	for _, id := range ids {
-		idSet[id] = true
-	}
-
-	for _, item := range rawWrap.Inbounds {
-		if idSet[item.ID] && len(item.OutJson) > 0 {
-			var linkList []string
-			_ = json.Unmarshal(item.OutJson, &linkList)
-			links = append(links, linkList...)
+		inb, ok := idMap[id]
+		if !ok {
+			continue
+		}
+		for _, item := range allClientLinks {
+			if item.Remark == inb.Tag || item.Remark == inb.Remark || strings.Contains(item.URI, fmt.Sprintf(":%d?", inb.Port)) || strings.Contains(item.URI, fmt.Sprintf(":%d#", inb.Port)) || strings.HasPrefix(item.Remark, inb.Remark) {
+				uri := item.URI
+				if atIdx := strings.Index(uri, "@"); atIdx != -1 {
+					qIdx := strings.Index(uri, "?")
+					if qIdx == -1 {
+						qIdx = strings.Index(uri, "#")
+					}
+					if qIdx != -1 && qIdx > atIdx {
+						hostPort := uri[atIdx+1 : qIdx]
+						colonIdx := strings.LastIndex(hostPort, ":")
+						hostPart := hostPort
+						if colonIdx != -1 {
+							hostPart = hostPort[:colonIdx]
+						}
+						if publicHost != "" && (hostPart == "127.0.0.1" || hostPart == "localhost" || hostPart == "") {
+							hostPart = publicHost
+						}
+						uri = uri[:atIdx+1] + fmt.Sprintf("%s:%d", hostPart, inb.Port) + uri[qIdx:]
+					}
+				}
+				links = append(links, uri)
+			}
 		}
 	}
 	return links, nil
 }
 
 func (s *SUI) CreateInbound(spec NewInboundSpec, tunnels []*Tunnel) (*CreatedInbound, error) {
-	return nil, fmt.Errorf("s-ui 模式下建议在 s-ui 面板中创建模板入站，或使用新建出口向导")
+	return nil, fmt.Errorf("s-ui 模式下请在 s-ui 面板中创建模板入站，或使用新建出口向导")
 }
 
 func (s *SUI) UpdateInbound(id int, patch InboundPatch, tunnels []*Tunnel) error {
+	inboundsObj, err := s.callAPI(http.MethodGet, fmt.Sprintf("inbounds?id=%d", id), nil)
+	if err != nil {
+		return err
+	}
+	var rawWrap struct {
+		Inbounds []map[string]any `json:"inbounds"`
+	}
+	if err := json.Unmarshal(inboundsObj, &rawWrap); err != nil || len(rawWrap.Inbounds) == 0 {
+		return fmt.Errorf("未找到入站 %d", id)
+	}
+	inb := rawWrap.Inbounds[0]
+	oldTag, _ := inb["tag"].(string)
+
+	if patch.Port != nil {
+		inb["listen_port"] = *patch.Port
+	}
+	if patch.Remark != nil {
+		inb["tag"] = *patch.Remark
+	}
+
+	dataBytes, _ := json.Marshal(inb)
+	form := url.Values{
+		"object": {"inbounds"},
+		"action": {"edit"},
+		"data":   {string(dataBytes)},
+	}
+	if _, err := s.callAPI(http.MethodPost, "save", form); err != nil {
+		return err
+	}
+
+	newTag, _ := inb["tag"].(string)
+	if patch.Remark != nil && oldTag != "" && oldTag != newTag {
+		boundMap, _ := s.getBoundRoutes()
+		if host, ok := boundMap[oldTag]; ok {
+			_ = s.Bind(oldTag, "", tunnels)
+			_ = s.Bind(newTag, host, tunnels)
+		}
+	}
+
 	return nil
 }
 
