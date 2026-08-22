@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -111,6 +112,7 @@ func main() {
 	mux.HandleFunc("/api/panel/client/del", apiClientDelete(mgr))
 	mux.HandleFunc("/api/panel/client/reset", apiClientReset(mgr))
 	mux.HandleFunc("/api/panel/mode", apiPanelMode(*workDir))
+	mux.HandleFunc("/sub", handleSub(mgr))
 
 	auth, created, err := NewAuth(*workDir)
 	if err != nil {
@@ -823,3 +825,40 @@ func apiInboundCreate(m *Manager) http.HandlerFunc {
 		})
 	}
 }
+
+// handleSub 返回包含所有节点（直连与家宽分流）的完整订阅
+func handleSub(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		view := m.ExitsOf()
+
+		var allLinks []string
+		for _, n := range view.Nodes {
+			for _, b := range n.Branches {
+				for _, l := range b.Links {
+					l = strings.TrimSpace(l)
+					if l != "" {
+						allLinks = append(allLinks, l)
+					}
+				}
+			}
+		}
+
+		rawText := strings.Join(allLinks, "\n")
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Profile-Update-Interval", "1")
+		w.Header().Set("Subscription-Userinfo", "upload=0; download=0; total=1073741824000; expire=0")
+
+		accept := r.Header.Get("Accept")
+		isBrowser := strings.Contains(accept, "text/html")
+		isRaw := r.URL.Query().Get("raw") == "1" || r.URL.Query().Get("b64") == "0"
+
+		if isRaw || (isBrowser && r.URL.Query().Get("b64") != "1") {
+			_, _ = w.Write([]byte(rawText + "\n"))
+			return
+		}
+
+		b64 := base64.StdEncoding.EncodeToString([]byte(rawText))
+		_, _ = w.Write([]byte(b64))
+	}
+}
+

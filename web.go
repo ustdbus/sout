@@ -630,15 +630,8 @@ $('#refreshNodesBtn').onclick = () => { toast('已刷新'); poll(); };
 $('#copyCredBtn').onclick = () => copy($('#credURL').textContent);
 
 $('#exportAll').onclick = () => {
-  const allLinks = [];
-  (viewData.nodes || []).forEach(n => {
-    (n.branches || []).forEach(b => {
-      (b.links || []).forEach(l => allLinks.push(l));
-    });
-  });
-  if(!allLinks.length){ toast('暂无可用分享链接', true); return; }
-  $('#allLinksBox').value = allLinks.join('\n');
-  openModal('exportModal');
+  const subURL = new URL('sub', location.href).href;
+  window.open(subURL, '_blank');
 };
 $('#copyAllLinksBtn').onclick = () => copy($('#allLinksBox').value);
 
