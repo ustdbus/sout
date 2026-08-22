@@ -55,7 +55,6 @@ func (m *Manager) RefreshNodes() (int, error) {
 	}
 	m.mu.Unlock()
 
-	_ = m.saveState()
 	return len(nodes), nil
 }
 
