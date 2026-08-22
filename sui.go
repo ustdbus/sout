@@ -727,16 +727,19 @@ func (s *SUI) syncSUIDatabaseLinks(publicHost string) {
 	var fixedLinks []SUIClientLink
 	for _, inb := range allInbounds {
 		outJSON := s.sqliteQuery(fmt.Sprintf("SELECT out_json FROM inbounds WHERE id = %d;", inb.ID))
+		addrsJSON := s.sqliteQuery(fmt.Sprintf("SELECT addrs FROM inbounds WHERE id = %d;", inb.ID))
 		if outJSON == "" {
 			continue
 		}
-		linkURI := s.buildLinkFromOutJson([]byte(outJSON), []byte(clientCfgJSON), publicHost, inb.Tag)
-		if linkURI != "" {
-			fixedLinks = append(fixedLinks, SUIClientLink{
-				Remark: inb.Tag,
-				Type:   "local",
-				URI:    linkURI,
-			})
+		links := s.buildLinksFromInbound([]byte(outJSON), []byte(addrsJSON), []byte(clientCfgJSON), publicHost, inb.Tag)
+		for _, linkURI := range links {
+			if linkURI != "" {
+				fixedLinks = append(fixedLinks, SUIClientLink{
+					Remark: inb.Tag,
+					Type:   "local",
+					URI:    linkURI,
+				})
+			}
 		}
 	}
 
@@ -833,7 +836,7 @@ func (s *SUI) InboundDetail(id int, publicHost string) (*InboundDetail, error) {
 					Protocol: inb.Protocol,
 					Remark:   inb.Remark,
 					Enable:   inb.Enable,
-					Tag:      inb.Tag, // 必须完整赋值 Tag 供前端绑定使用
+					Tag:      inb.Tag,
 					BoundTo:  inb.BoundTo,
 					BoundUp:  inb.BoundUp,
 				},
@@ -856,9 +859,9 @@ func (s *SUI) InboundDetail(id int, publicHost string) (*InboundDetail, error) {
 	return nil, fmt.Errorf("入站 %d 不存在", id)
 }
 
-func (s *SUI) buildLinkFromOutJson(outJsonBytes []byte, clientConfigBytes []byte, publicHost string, tag string) string {
+func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes []byte, publicHost string, tag string) []string {
 	if len(outJsonBytes) == 0 {
-		return ""
+		return nil
 	}
 	var out struct {
 		Type       string `json:"type"`
@@ -890,103 +893,144 @@ func (s *SUI) buildLinkFromOutJson(outJsonBytes []byte, clientConfigBytes []byte
 		CongestionControl string `json:"congestion_control"`
 	}
 	if err := json.Unmarshal(outJsonBytes, &out); err != nil {
-		return ""
+		return nil
+	}
+
+	type AddrItem struct {
+		Server     string `json:"server"`
+		ServerPort int    `json:"server_port"`
+		Remark     string `json:"remark"`
+	}
+	var addrs []AddrItem
+	if len(addrsBytes) > 0 {
+		_ = json.Unmarshal(addrsBytes, &addrs)
+	}
+
+	if len(addrs) == 0 {
+		serverHost := publicHost
+		if serverHost == "" {
+			serverHost = out.Server
+		}
+		if serverHost == "127.0.0.1" || serverHost == "localhost" || serverHost == "" {
+			if publicHost != "" {
+				serverHost = publicHost
+			} else {
+				serverHost = s.Host
+			}
+		}
+		port := out.ServerPort
+		addrs = append(addrs, AddrItem{
+			Server:     serverHost,
+			ServerPort: port,
+			Remark:     tag,
+		})
 	}
 
 	var clientCfg map[string]map[string]any
 	_ = json.Unmarshal(clientConfigBytes, &clientCfg)
 
-	host := publicHost
-	if host == "" {
-		host = out.Server
+	baseRemark := tag
+	if baseRemark == "" {
+		baseRemark = out.Tag
 	}
-	if host == "127.0.0.1" || host == "localhost" || host == "" {
-		if publicHost != "" {
+
+	var links []string
+	for _, addr := range addrs {
+		host := addr.Server
+		if host == "" {
 			host = publicHost
-		} else {
-			host = s.Host
 		}
-	}
-
-	port := out.ServerPort
-	remark := tag
-	if remark == "" {
-		remark = out.Tag
-	}
-
-	switch strings.ToLower(out.Type) {
-	case "vless":
-		u := clientCfg["vless"]["uuid"]
-		uuidStr, _ := u.(string)
-		if uuidStr == "" {
-			uuidStr = "auto"
-		}
-		v := url.Values{}
-		tp := out.Transport.Type
-		if tp == "" {
-			tp = "tcp"
-		}
-		v.Set("type", tp)
-		if out.Transport.Path != "" {
-			v.Set("path", out.Transport.Path)
-		}
-		if out.Transport.Headers != nil && out.Transport.Headers["Host"] != "" {
-			v.Set("host", out.Transport.Headers["Host"])
-		}
-		if out.Transport.ServiceName != "" {
-			v.Set("serviceName", out.Transport.ServiceName)
-		}
-		if out.TLS.Enabled {
-			if out.TLS.Reality.Enabled {
-				v.Set("security", "reality")
-				v.Set("pbk", out.TLS.Reality.PublicKey)
-				v.Set("sid", out.TLS.Reality.ShortID)
+		if host == "127.0.0.1" || host == "localhost" || host == "" {
+			if publicHost != "" {
+				host = publicHost
 			} else {
-				v.Set("security", "tls")
-				if out.TLS.Insecure {
-					v.Set("allowInsecure", "1")
+				host = s.Host
+			}
+		}
+		port := addr.ServerPort
+		if port <= 0 {
+			port = out.ServerPort
+		}
+
+		remark := baseRemark
+		if addr.Remark != "" && addr.Remark != baseRemark && !strings.Contains(baseRemark, addr.Remark) {
+			remark = baseRemark + "-" + addr.Remark
+		}
+
+		switch strings.ToLower(out.Type) {
+		case "vless":
+			u := clientCfg["vless"]["uuid"]
+			uuidStr, _ := u.(string)
+			if uuidStr == "" {
+				uuidStr = "auto"
+			}
+			v := url.Values{}
+			tp := out.Transport.Type
+			if tp == "" {
+				tp = "tcp"
+			}
+			v.Set("type", tp)
+			if out.Transport.Path != "" {
+				v.Set("path", out.Transport.Path)
+			}
+			if out.Transport.Headers != nil && out.Transport.Headers["Host"] != "" {
+				v.Set("host", out.Transport.Headers["Host"])
+			}
+			if out.Transport.ServiceName != "" {
+				v.Set("serviceName", out.Transport.ServiceName)
+			}
+			if out.TLS.Enabled {
+				if out.TLS.Reality.Enabled {
+					v.Set("security", "reality")
+					v.Set("pbk", out.TLS.Reality.PublicKey)
+					v.Set("sid", out.TLS.Reality.ShortID)
+				} else {
+					v.Set("security", "tls")
+					if out.TLS.Insecure {
+						v.Set("allowInsecure", "1")
+					}
+				}
+				if out.TLS.ServerName != "" {
+					v.Set("sni", out.TLS.ServerName)
+				}
+				if out.TLS.UTLS.Fingerprint != "" {
+					v.Set("fp", out.TLS.UTLS.Fingerprint)
+				}
+				if flow, ok := clientCfg["vless"]["flow"].(string); ok && flow != "" && tp == "tcp" {
+					v.Set("flow", flow)
 				}
 			}
-			if out.TLS.ServerName != "" {
-				v.Set("sni", out.TLS.ServerName)
-			}
-			if out.TLS.UTLS.Fingerprint != "" {
-				v.Set("fp", out.TLS.UTLS.Fingerprint)
-			}
-			if flow, ok := clientCfg["vless"]["flow"].(string); ok && flow != "" && tp == "tcp" {
-				v.Set("flow", flow)
-			}
-		}
-		return fmt.Sprintf("vless://%s@%s:%d?%s#%s", uuidStr, host, port, v.Encode(), url.PathEscape(remark))
+			links = append(links, fmt.Sprintf("vless://%s@%s:%d?%s#%s", uuidStr, host, port, v.Encode(), url.PathEscape(remark)))
 
-	case "tuic":
-		uuidStr, _ := clientCfg["tuic"]["uuid"].(string)
-		passStr, _ := clientCfg["tuic"]["password"].(string)
-		v := url.Values{}
-		if out.TLS.Enabled {
-			v.Set("security", "tls")
-			if out.TLS.ServerName != "" {
-				v.Set("sni", out.TLS.ServerName)
+		case "tuic":
+			uuidStr, _ := clientCfg["tuic"]["uuid"].(string)
+			passStr, _ := clientCfg["tuic"]["password"].(string)
+			v := url.Values{}
+			if out.TLS.Enabled {
+				v.Set("security", "tls")
+				if out.TLS.ServerName != "" {
+					v.Set("sni", out.TLS.ServerName)
+				}
 			}
-		}
-		if out.CongestionControl != "" {
-			v.Set("congestion_control", out.CongestionControl)
-		}
-		return fmt.Sprintf("tuic://%s:%s@%s:%d?%s#%s", uuidStr, passStr, host, port, v.Encode(), url.PathEscape(remark))
+			if out.CongestionControl != "" {
+				v.Set("congestion_control", out.CongestionControl)
+			}
+			links = append(links, fmt.Sprintf("tuic://%s:%s@%s:%d?%s#%s", uuidStr, passStr, host, port, v.Encode(), url.PathEscape(remark)))
 
-	case "trojan":
-		passStr, _ := clientCfg["trojan"]["password"].(string)
-		v := url.Values{}
-		if out.TLS.Enabled {
-			v.Set("security", "tls")
-			if out.TLS.ServerName != "" {
-				v.Set("sni", out.TLS.ServerName)
+		case "trojan":
+			passStr, _ := clientCfg["trojan"]["password"].(string)
+			v := url.Values{}
+			if out.TLS.Enabled {
+				v.Set("security", "tls")
+				if out.TLS.ServerName != "" {
+					v.Set("sni", out.TLS.ServerName)
+				}
 			}
+			links = append(links, fmt.Sprintf("trojan://%s@%s:%d?%s#%s", passStr, host, port, v.Encode(), url.PathEscape(remark)))
 		}
-		return fmt.Sprintf("trojan://%s@%s:%d?%s#%s", passStr, host, port, v.Encode(), url.PathEscape(remark))
 	}
 
-	return ""
+	return links
 }
 
 func (s *SUI) InboundLinks(ids []int, publicHost string) ([]string, error) {
@@ -1011,12 +1055,10 @@ func (s *SUI) InboundLinks(ids []int, publicHost string) ([]string, error) {
 			continue
 		}
 		outJSON := s.sqliteQuery(fmt.Sprintf("SELECT out_json FROM inbounds WHERE id = %d;", id))
+		addrsJSON := s.sqliteQuery(fmt.Sprintf("SELECT addrs FROM inbounds WHERE id = %d;", id))
 		if outJSON != "" {
-			l := s.buildLinkFromOutJson([]byte(outJSON), []byte(clientCfgJSON), publicHost, inb.Tag)
-			if l != "" {
-				links = append(links, l)
-				continue
-			}
+			nodeLinks := s.buildLinksFromInbound([]byte(outJSON), []byte(addrsJSON), []byte(clientCfgJSON), publicHost, inb.Tag)
+			links = append(links, nodeLinks...)
 		}
 	}
 	return links, nil
