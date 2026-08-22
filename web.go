@@ -596,7 +596,7 @@ function renderRegionList(){
 
   const allItem = {
     code: 'ALL',
-    name: '不限地区 (自动选全球最高速)',
+    name: '不限地区',
     available: totalAvail,
     best_speed_mbps: maxSpeed,
   };
@@ -605,7 +605,7 @@ function renderRegionList(){
   const filtered = fullList.filter(r => !kw || r.code.toLowerCase().includes(kw) || r.name.toLowerCase().includes(kw));
   $('#rgList').innerHTML = filtered.map(r =>
     '<button class="rg' + (selectedRegion === r.code ? ' sel' : '') + '" data-rgcode="' + esc(r.code) + '">'
-    + '<b>' + (r.code === 'ALL' ? '🌐 ' : '') + esc(r.code) + ' ' + esc(r.name) + '</b>'
+    + '<b>' + (r.code === 'ALL' ? '🌐 ' + esc(r.name) : (esc(r.code) + ' ' + esc(r.name))) + '</b>'
     + '<em>' + r.available + ' 个可用 · ' + r.best_speed_mbps.toFixed(0) + ' Mbps</em>'
     + '</button>').join('');
 }
