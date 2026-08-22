@@ -23,7 +23,6 @@ const indexHTML = `<!DOCTYPE html>
 :root{
   --bg:#0e1117; --panel:#161b22; --card:#1b212b; --line:#2d333b; --text:#e6edf3;
   --dim:#8b949e; --accent:#58a6ff; --accent-hover:#79b8ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
-  --proto-vless:#a371f7; --proto-tuic:#f0883e; --proto-vmess:#1f6feb; --proto-trojan:#56d364;
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);
@@ -50,11 +49,20 @@ svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;
   stroke-linecap:round;stroke-linejoin:round;flex:none}
 main{padding:20px;max-width:1120px;margin:0 auto}
 
-.section-head{display:flex;align-items:center;gap:12px;margin:24px 0 14px}
+.section-head{display:flex;align-items:center;gap:12px;margin:28px 0 14px}
 .section-head:first-child{margin-top:0}
 .section-head h2{font-size:14px;font-weight:700;margin:0;color:var(--text);display:flex;align-items:center;gap:8px}
 .section-head .desc{color:var(--dim);font-size:12px}
 
+/* VPN 出口隧道池 */
+.exits-box{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+.exit-row{display:grid;grid-template-columns:14px 150px 1fr auto auto;align-items:center;gap:12px;padding:11px 16px;border-bottom:1px solid #21262d}
+.exit-row:last-child{border-bottom:none}
+.exit-ip{font-weight:700;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text)}
+.exit-meta{color:var(--dim);font-size:12px;display:flex;align-items:center;gap:8px}
+.socks-tag{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#0d1117;border:1px solid var(--line);padding:1px 6px;border-radius:4px;color:var(--dim);font-size:11px}
+
+/* s-ui 节点管理 */
 .node-card{background:var(--panel);border:1px solid var(--line);border-radius:8px;margin-bottom:16px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.2)}
 .node-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--card);border-bottom:1px solid var(--line)}
 .node-title{display:flex;align-items:center;gap:10px}
@@ -82,12 +90,6 @@ main{padding:20px;max-width:1120px;margin:0 auto}
 .dot.failed{background:var(--bad)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 
-.exits-box{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:20px}
-.exit-row{display:grid;grid-template-columns:14px 140px 1fr auto auto;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid #21262d}
-.exit-row:last-child{border-bottom:none}
-.exit-ip{font-weight:700;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-.exit-meta{color:var(--dim);font-size:12px}
-
 .empty{border:1px dashed var(--line);border-radius:8px;padding:32px 20px;text-align:center;color:var(--dim)}
 
 .modal{position:fixed;inset:0;background:rgba(1,4,9,.75);display:none;align-items:center;justify-content:center;z-index:50;padding:20px;backdrop-filter:blur(2px)}
@@ -98,15 +100,11 @@ main{padding:20px;max-width:1120px;margin:0 auto}
 .sheet .body{overflow:auto;padding:18px}
 .sheet .foot{display:flex;align-items:center;gap:10px;padding:12px 18px;border-top:1px solid var(--line);background:var(--card);border-radius:0 0 8px 8px}
 
-.tab-nav{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:16px;padding-bottom:2px}
-.tab-btn{background:transparent;border:0;border-bottom:2px solid transparent;border-radius:0;color:var(--dim);padding:6px 12px;font-size:13px}
-.tab-btn.active{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
-
 label.f{display:block;margin-bottom:16px}
 label.f>span{display:block;color:var(--dim);font-size:12px;margin-bottom:6px;font-weight:500}
 select,input[type=search],input[type=text],input[type=password]{font:inherit;background:#0d1117;border:1px solid var(--line);color:var(--text);border-radius:6px;padding:7px 10px;width:100%}
 select:focus,input:focus{outline:none;border-color:var(--accent)}
-.regions{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:6px;max-height:220px;overflow:auto;margin-top:8px}
+.regions{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:6px;max-height:240px;overflow:auto;margin-top:8px}
 .rg{border:1px solid var(--line);background:#0d1117;border-radius:6px;padding:7px 9px;cursor:pointer;text-align:left;display:block;width:100%}
 .rg:hover{border-color:var(--accent)}
 .rg.sel{border-color:var(--accent);background:rgba(88,166,255,.12)}
@@ -137,29 +135,15 @@ textarea{width:100%;min-height:280px;background:#0d1117;border:1px solid var(--l
 </header>
 
 <main>
+  <!-- 模块一：VPN Gate 出口隧道池（专注管理出站隧道） -->
   <div class="section-head">
-    <h2>
-      <svg viewBox="0 0 24 24" style="color:var(--accent)"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
-      s-ui 节点与分流管理
-    </h2>
-    <span class="desc">直接读取 s-ui 面板中的节点，支持点击每个节点的「+」同时添加直连与各国出站</span>
-    <span class="spacer"></span>
-    <button class="primary" id="refreshNodesBtn">
-      <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
-      刷新节点
-    </button>
-  </div>
-
-  <div id="nodesContainer"></div>
-
-  <div class="section-head" style="margin-top:36px">
     <h2>
       <svg viewBox="0 0 24 24" style="color:var(--ok)"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
       VPN Gate 出口隧道池
     </h2>
-    <span class="desc">当前连通的公共家宽出口</span>
+    <span class="desc">在此拉取并运行各国公共家宽出口隧道（SOCKS5）</span>
     <span class="spacer"></span>
-    <button id="newExitBtn">
+    <button class="primary" id="openNewExitModalBtn" style="box-shadow:0 2px 6px rgba(88,166,255,.3)">
       <svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
       新建国家出口
     </button>
@@ -167,48 +151,105 @@ textarea{width:100%;min-height:280px;background:#0d1117;border:1px solid var(--l
   </div>
 
   <div id="exitsContainer"></div>
+
+  <!-- 模块二：s-ui 节点与分流管理（专注从已存在的出站中添加绑定） -->
+  <div class="section-head" style="margin-top:36px">
+    <h2>
+      <svg viewBox="0 0 24 24" style="color:var(--accent)"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+      s-ui 节点与分流管理
+    </h2>
+    <span class="desc">直接读取 s-ui 面板中的已有节点，点击每个节点的「+」从上方隧道池中选择出口绑定</span>
+    <span class="spacer"></span>
+    <button id="refreshNodesBtn">
+      <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+      刷新节点
+    </button>
+  </div>
+
+  <div id="nodesContainer"></div>
 </main>
 
-<!-- Modal: 添加出口分流 -->
-<div class="modal" id="addBranchModal">
+<!-- Modal 1: 在隧道池中「新建国家出口」 -->
+<div class="modal" id="newExitModal">
   <div class="sheet">
     <div class="head">
-      <h2 id="abTitle">添加出口分流</h2>
+      <h2>新建 VPN Gate 国家出口</h2>
       <span class="spacer"></span>
-      <button class="icon" data-close="addBranchModal" title="关闭"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+      <button class="icon" data-close="newExitModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
     <div class="body">
-      <div class="tab-nav">
-        <button class="tab-btn active" id="tabExist">从已有出站选择</button>
-        <button class="tab-btn" id="tabNew">新建国家出站</button>
-      </div>
-
-      <div id="paneExist">
-        <label class="f">
-          <span>选择已连通的出口</span>
-          <select id="existExitSelect"></select>
-        </label>
-        <div style="color:var(--dim);font-size:12px">选择后将为此节点克隆一个独立端口，并将流量分流到该出站，原直连节点不受影响。</div>
-      </div>
-
-      <div id="paneNew" style="display:none">
-        <label class="f">
-          <span>选择目标国家/地区</span>
-          <input type="search" id="rgFilter" placeholder="搜索地区，如 JP、美国、日本...">
-          <div class="regions" id="rgList"></div>
-        </label>
-        <div style="color:var(--dim);font-size:12px" id="newExitHint">将自动拉起选定国家的 VPN 隧道并绑定到此节点。</div>
-      </div>
+      <label class="f">
+        <span>选择目标国家/地区</span>
+        <input type="search" id="rgFilter" placeholder="搜索地区，如 JP、美国、日本、韩国...">
+        <div class="regions" id="rgList"></div>
+      </label>
+      <div style="color:var(--dim);font-size:12px" id="newExitSummary">拉取成功后，将在上方出口隧道池中生成对应的 SOCKS5 出口，供下方各节点选择绑定。</div>
     </div>
     <div class="foot">
       <span class="spacer"></span>
-      <button data-close="addBranchModal">取消</button>
-      <button class="primary" id="confirmAddBranchBtn">确定添加</button>
+      <button data-close="newExitModal">取消</button>
+      <button class="primary" id="startProvisionBtn">拉取并建立出口</button>
     </div>
   </div>
 </div>
 
-<!-- Modal: 导出全部链接 -->
+<!-- Modal 2: 在节点上「添加分流出口」（仅从已有出站中选择） -->
+<div class="modal" id="chooseExitModal">
+  <div class="sheet">
+    <div class="head">
+      <h2 id="ceTitle">为节点添加分流出口</h2>
+      <span class="spacer"></span>
+      <button class="icon" data-close="chooseExitModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="body">
+      <div id="hasExitsBox">
+        <label class="f">
+          <span>从已有出口隧道中选择</span>
+          <select id="existExitSelect"></select>
+        </label>
+        <div style="color:var(--dim);font-size:12px">
+          选择后将为此节点克隆一个独立端口，并将流量分流到该出口，原直连节点继续保留可用。
+        </div>
+      </div>
+      <div id="noExitsBox" style="display:none" class="empty">
+        <div style="color:var(--text);font-weight:600;margin-bottom:6px">当前隧道池中暂无可用出口</div>
+        <div style="margin-bottom:14px">请先在上方「VPN Gate 出口隧道池」中拉取出口隧道。</div>
+        <button class="primary" id="goToNewExitBtn">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+          去新建出口
+        </button>
+      </div>
+    </div>
+    <div class="foot">
+      <span class="spacer"></span>
+      <button data-close="chooseExitModal">取消</button>
+      <button class="primary" id="confirmChooseExitBtn">确定添加</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal 3: SOCKS5 凭据 -->
+<div class="modal" id="credModal">
+  <div class="sheet">
+    <div class="head">
+      <h2>SOCKS5 出口凭据</h2>
+      <span class="spacer"></span>
+      <button class="icon" data-close="credModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="body">
+      <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#0d1117;padding:10px;border-radius:6px;border:1px solid var(--line);word-break:break-all;margin-bottom:12px" id="credURL"></div>
+      <label class="f"><span>用户名</span><input id="crUser" type="text"></label>
+      <label class="f"><span>密码</span><input id="crPass" type="text"></label>
+    </div>
+    <div class="foot">
+      <button id="copyCredBtn">复制连接串</button>
+      <span class="spacer"></span>
+      <button data-close="credModal">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal 4: 导出全部链接 -->
 <div class="modal" id="exportModal">
   <div class="sheet">
     <div class="head">
@@ -223,7 +264,7 @@ textarea{width:100%;min-height:280px;background:#0d1117;border:1px solid var(--l
   </div>
 </div>
 
-<!-- Modal: 设置 -->
+<!-- Modal 5: 设置 -->
 <div class="modal" id="settingsModal">
   <div class="sheet">
     <div class="head">
@@ -305,10 +346,39 @@ document.addEventListener('click', e => {
 let viewData = {nodes:[], exits:[], public_ip:''};
 let targetNodeID = 0;
 let targetNodeName = '';
-let currentTab = 'exist';
 let selectedRegion = 'JP';
 let regionList = [];
+let curCred = null;
 
+// ---- 渲染出口隧道池 ----
+function renderExits(){
+  const box = $('#exitsContainer');
+  const exits = viewData.exits || [];
+  if(!exits.length){
+    box.innerHTML = '<div class="empty">出口隧道池中暂无运行的隧道，请点击右上角「+ 新建国家出口」拉取</div>';
+    return;
+  }
+
+  box.innerHTML = '<div class="exits-box">' + exits.map(e => {
+    const label = e.exit_ip || (e.status === 'starting' ? '连接中…' : '—');
+    const place = (e.country && e.country.toUpperCase() !== (e.region||'').toUpperCase())
+      ? (e.region + ' ' + e.country) : (e.region || '—');
+    return '<div class="exit-row">'
+      + '<span class="dot ' + e.status + '" title="' + e.status + '"></span>'
+      + '<span class="exit-ip">' + esc(label) + '</span>'
+      + '<div class="exit-meta">'
+      +   '<span>' + esc(place) + ' · ' + esc(e.host) + '</span>'
+      +   '<button class="chip-btn" data-cred="' + e.slot + '" title="查看 SOCKS5 凭据">' + ICON.lock + ' SOCKS5 :' + e.port + '</button>'
+      + '</div>'
+      + '<div class="branch-acts">'
+      +   '<button class="icon" data-swap="' + e.slot + '" title="换一个同国节点">' + ICON.redo + '</button>'
+      +   '<button class="icon danger" data-stop="' + e.slot + '" title="停止此出口">' + ICON.trash + '</button>'
+      + '</div>'
+      + '</div>';
+  }).join('') + '</div>';
+}
+
+// ---- 渲染 s-ui 节点列表 ----
 function renderNodes(){
   const box = $('#nodesContainer');
   const nodes = viewData.nodes || [];
@@ -336,7 +406,7 @@ function renderNodes(){
             const firstLink = hasLink ? b.links[0] : '';
             return '<div class="branch-row">'
               + '<div class="branch-info">'
-              +   '<span class="dot up" title="正常"></span>'
+              +   '<span class="dot up" title="已就绪"></span>'
               +   '<span class="branch-name">' + esc(b.bound_label) + '</span>'
               +   '<span class="branch-tag">' + esc(b.tag) + '</span>'
               +   '<span class="branch-port">:' + b.port + '</span>'
@@ -352,72 +422,44 @@ function renderNodes(){
   }).join('');
 }
 
-function renderExits(){
-  const box = $('#exitsContainer');
-  const exits = viewData.exits || [];
-  if(!exits.length){
-    box.innerHTML = '<div class="empty">暂无运行中的 VPN 出口隧道</div>';
-    return;
-  }
-
-  box.innerHTML = '<div class="exits-box">' + exits.map(e => {
-    const label = e.exit_ip || (e.status === 'starting' ? '连接中…' : '—');
-    const place = e.country || e.region || '—';
-    return '<div class="exit-row">'
-      + '<span class="dot ' + e.status + '"></span>'
-      + '<span class="exit-ip">' + esc(label) + '</span>'
-      + '<span class="exit-meta">' + esc(place) + ' · ' + esc(e.host) + ' · SOCKS5 :' + e.port + '</span>'
-      + '<span class="branch-acts">'
-      +   '<button class="icon" data-swap="' + e.slot + '" title="换一个节点">' + ICON.redo + '</button>'
-      +   '<button class="icon" data-stop="' + e.slot + '" title="停止此隧道">' + ICON.trash + '</button>'
-      + '</span>'
-      + '</div>';
-  }).join('') + '</div>';
-}
-
 async function poll(){
   try{
     viewData = await api('/api/exits');
-    renderNodes();
     renderExits();
+    renderNodes();
   }catch(e){}
 }
 
-// ---- 添加分流弹窗与事件 ----
+// ---- 事件绑定 ----
 document.addEventListener('click', async e => {
+  // 点击节点的「+ 添加出口分流」-> 仅从已有出站中选择
   const addBtn = e.target.closest('[data-add-node]');
   if(addBtn){
     targetNodeID = Number(addBtn.dataset.addNode);
     targetNodeName = addBtn.dataset.nodeName;
-    $('#abTitle').textContent = '为「' + targetNodeName + '」添加分流出站';
+    $('#ceTitle').textContent = '为「' + targetNodeName + '」选择分流出口';
 
-    // 填充已有出口下拉
     const upExits = (viewData.exits || []).filter(x => x.status === 'up');
     const sel = $('#existExitSelect');
     if(!upExits.length){
-      sel.innerHTML = '<option value="">暂无可用出站（请点右侧新建）</option>';
-      switchTab('new');
+      $('#hasExitsBox').style.display = 'none';
+      $('#noExitsBox').style.display = 'block';
+      $('#confirmChooseExitBtn').disabled = true;
     } else {
+      $('#hasExitsBox').style.display = 'block';
+      $('#noExitsBox').style.display = 'none';
+      $('#confirmChooseExitBtn').disabled = false;
       sel.innerHTML = upExits.map(x =>
         '<option value="' + esc(x.host) + '">' + esc((x.country || x.region) + ' (' + (x.exit_ip || x.host) + ' · SOCKS5:' + x.port + ')') + '</option>').join('');
-      switchTab('exist');
     }
-
-    if(!regionList.length){
-      try{
-        regionList = await api('/api/regions') || [];
-        renderRegionList();
-      }catch(err){}
-    } else {
-      renderRegionList();
-    }
-
-    openModal('addBranchModal');
+    openModal('chooseExitModal');
   }
 
+  // 复制链接
   const cp = e.target.closest('[data-copy]');
   if(cp) copy(cp.dataset.copy);
 
+  // 删除分流节点
   const del = e.target.closest('[data-delone]');
   if(del){
     if(!confirm('删除分流节点「' + del.dataset.name + '」？')) return;
@@ -429,13 +471,15 @@ document.addEventListener('click', async e => {
     }catch(err){ toast(err.message, true); }
   }
 
+  // 停止出口
   const stop = e.target.closest('[data-stop]');
   if(stop){
     stop.disabled = true;
-    try{ await api('/api/stop?slot=' + stop.dataset.stop, {method:'POST'}); toast('已停止'); poll(); }
+    try{ await api('/api/stop?slot=' + stop.dataset.stop, {method:'POST'}); toast('已停止出口'); poll(); }
     catch(err){ toast(err.message, true); }
   }
 
+  // 换出口节点
   const swap = e.target.closest('[data-swap]');
   if(swap){
     swap.disabled = true;
@@ -443,6 +487,24 @@ document.addEventListener('click', async e => {
     catch(err){ toast(err.message, true); }
   }
 
+  // 查看 SOCKS5 凭据
+  const cred = e.target.closest('[data-cred]');
+  if(cred){
+    const slot = Number(cred.dataset.cred);
+    const ex = (viewData.exits || []).find(x => x.slot === slot);
+    if(ex){
+      curCred = ex;
+      const host = viewData.public_ip || location.hostname;
+      const u = ex.socks_user ? (ex.socks_user + ':' + ex.socks_pass + '@') : '';
+      const url = 'socks5://' + u + host + ':' + ex.port;
+      $('#credURL').textContent = url;
+      $('#crUser').value = ex.socks_user || '';
+      $('#crPass').value = ex.socks_pass || '';
+      openModal('credModal');
+    }
+  }
+
+  // 地区选择
   const rg = e.target.closest('[data-rgcode]');
   if(rg){
     selectedRegion = rg.dataset.rgcode;
@@ -450,15 +512,36 @@ document.addEventListener('click', async e => {
   }
 });
 
-function switchTab(t){
-  currentTab = t;
-  $('#tabExist').className = 'tab-btn' + (t === 'exist' ? ' active' : '');
-  $('#tabNew').className = 'tab-btn' + (t === 'new' ? ' active' : '');
-  $('#paneExist').style.display = t === 'exist' ? 'block' : 'none';
-  $('#paneNew').style.display = t === 'new' ? 'block' : 'none';
-}
-$('#tabExist').onclick = () => switchTab('exist');
-$('#tabNew').onclick = () => switchTab('new');
+// 确认从已有出口添加分流
+$('#confirmChooseExitBtn').onclick = async e => {
+  const host = $('#existExitSelect').value;
+  if(!host){ toast('请选择一个出口', true); return; }
+  e.target.disabled = true;
+  try{
+    await api('/api/node/add_branch?template_id=' + targetNodeID + '&host=' + encodeURIComponent(host), {method:'POST'});
+    toast('已成功为「' + targetNodeName + '」添加分流出口');
+    closeModal('chooseExitModal');
+    poll();
+  }catch(err){ toast(err.message, true); }
+  e.target.disabled = false;
+};
+
+// 从无出口提示跳转到新建出口
+$('#goToNewExitBtn').onclick = () => {
+  closeModal('chooseExitModal');
+  $('#openNewExitModalBtn').click();
+};
+
+// ---- 新建国家出口相关 ----
+$('#openNewExitModalBtn').onclick = async () => {
+  if(!regionList.length){
+    try{
+      regionList = await api('/api/regions') || [];
+    }catch(e){}
+  }
+  renderRegionList();
+  openModal('newExitModal');
+};
 
 function renderRegionList(){
   const kw = ($('#rgFilter').value || '').trim().toLowerCase();
@@ -471,26 +554,21 @@ function renderRegionList(){
 }
 $('#rgFilter').oninput = renderRegionList;
 
-$('#confirmAddBranchBtn').onclick = async e => {
+$('#startProvisionBtn').onclick = async e => {
+  if(!selectedRegion){ toast('请选择目标地区', true); return; }
   e.target.disabled = true;
   try{
-    if(currentTab === 'exist'){
-      const host = $('#existExitSelect').value;
-      if(!host) throw new Error('请选择一个已有出站');
-      await api('/api/node/add_branch?template_id=' + targetNodeID + '&host=' + encodeURIComponent(host), {method:'POST'});
-      toast('已成功为「' + targetNodeName + '」添加分流出口');
-    } else {
-      if(!selectedRegion) throw new Error('请选择国家/地区');
-      await api('/api/node/add_branch?template_id=' + targetNodeID + '&region=' + encodeURIComponent(selectedRegion), {method:'POST'});
-      toast('正在拉起「' + selectedRegion + '」出口隧道并绑定节点...');
-    }
-    closeModal('addBranchModal');
+    await api('/api/provision?count=1&region=' + encodeURIComponent(selectedRegion), {method:'POST'});
+    toast('正在拉取「' + selectedRegion + '」出口隧道...');
+    closeModal('newExitModal');
     poll();
   }catch(err){ toast(err.message, true); }
   e.target.disabled = false;
 };
 
 $('#refreshNodesBtn').onclick = () => { toast('已刷新'); poll(); };
+
+$('#copyCredBtn').onclick = () => copy($('#credURL').textContent);
 
 $('#exportAll').onclick = () => {
   const allLinks = [];
@@ -512,13 +590,6 @@ $('#stopAllExitsBtn').onclick = async () => {
   }
   toast('已停止全部出口');
   poll();
-};
-
-$('#newExitBtn').onclick = () => {
-  targetNodeID = (viewData.nodes && viewData.nodes.length) ? viewData.nodes[0].base_id : 1;
-  targetNodeName = (viewData.nodes && viewData.nodes.length) ? viewData.nodes[0].name : '';
-  switchTab('new');
-  openModal('addBranchModal');
 };
 
 $('#settingsBtn').onclick = async () => {

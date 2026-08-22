@@ -99,6 +99,20 @@ func invalidateInbounds() {
 	ibCache.mu.Unlock()
 }
 
+func isResidentialBranch(tag string) bool {
+	return strings.Contains(tag, " (") && (strings.HasSuffix(tag, "家宽)") || strings.Contains(tag, "家宽-"))
+}
+
+func getBaseTag(tag string) string {
+	if isResidentialBranch(tag) {
+		idx := strings.LastIndex(tag, " (")
+		if idx != -1 {
+			return tag[:idx]
+		}
+	}
+	return tag
+}
+
 // ExitsOf 把隧道和入站组织成以「s-ui 节点」和「出口出站」双重视图
 func (m *Manager) ExitsOf() ExitsView {
 	tunnels := m.Tunnels()
@@ -156,13 +170,12 @@ func (m *Manager) ExitsOf() ExitsView {
 		view.Direct = append(view.Direct, row)
 	}
 
-	// 聚合成以 s-ui 节点为中心的视图
 	baseNodeMap := map[string]*GroupedNode{}
 	var baseOrder []string
 
-	// 第一轮：识别基础原生入站
+	// 第一轮：识别基础原生入站（非家宽后缀）
 	for _, ib := range list {
-		if !strings.Contains(ib.Tag, " (") {
+		if !isResidentialBranch(ib.Tag) {
 			node := &GroupedNode{
 				BaseID:   ib.ID,
 				Name:     ib.Tag,
@@ -175,25 +188,25 @@ func (m *Manager) ExitsOf() ExitsView {
 		}
 	}
 
-	// 第二轮：识别没有 baseTag 的孤立分支或特殊 tag
+	// 第二轮：如果某些家宽分支的原生入站不存在，兜底创建 baseNode
 	for _, ib := range list {
-		if strings.Contains(ib.Tag, " (") {
-			prefix := ib.Tag[:strings.Index(ib.Tag, " (")]
-			if _, exists := baseNodeMap[prefix]; !exists {
+		if isResidentialBranch(ib.Tag) {
+			baseTag := getBaseTag(ib.Tag)
+			if _, exists := baseNodeMap[baseTag]; !exists {
 				node := &GroupedNode{
 					BaseID:   ib.ID,
-					Name:     prefix,
+					Name:     baseTag,
 					Protocol: strings.ToUpper(ib.Protocol),
 					Port:     ib.Port,
 					Branches: make([]NodeBranch, 0),
 				}
-				baseNodeMap[prefix] = node
-				baseOrder = append(baseOrder, prefix)
+				baseNodeMap[baseTag] = node
+				baseOrder = append(baseOrder, baseTag)
 			}
 		}
 	}
 
-	// 第三轮：将各个入站挂载到对应 BaseNode 的 Branches 中，并注入链接
+	// 第三轮：挂载分支
 	for _, ib := range list {
 		var links []string
 		if p != nil {
@@ -216,7 +229,7 @@ func (m *Manager) ExitsOf() ExitsView {
 			}
 		}
 
-		isBase := !strings.Contains(ib.Tag, " (")
+		isBase := !isResidentialBranch(ib.Tag)
 		branch := NodeBranch{
 			ID:         ib.ID,
 			Tag:        ib.Tag,
@@ -229,11 +242,7 @@ func (m *Manager) ExitsOf() ExitsView {
 			Links:      links,
 		}
 
-		targetBaseName := ib.Tag
-		if strings.Contains(ib.Tag, " (") {
-			targetBaseName = ib.Tag[:strings.Index(ib.Tag, " (")]
-		}
-
+		targetBaseName := getBaseTag(ib.Tag)
 		if node, ok := baseNodeMap[targetBaseName]; ok {
 			node.Branches = append(node.Branches, branch)
 		}
