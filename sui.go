@@ -365,6 +365,14 @@ func (s *SUI) Bind(inboundTag string, hostname string, tunnels []*Tunnel) error 
 	}
 	rules, _ := route["rules"].([]any)
 
+	// 获取当前所有合法的入站 Tag
+	validTags := make(map[string]bool)
+	if allInb, err := s.Inbounds(nil); err == nil {
+		for _, inb := range allInb {
+			validTags[inb.Tag] = true
+		}
+	}
+
 	newRules := make([]any, 0, len(rules)+1)
 	for _, r := range rules {
 		ruleMap, ok := r.(map[string]any)
@@ -377,7 +385,7 @@ func (s *SUI) Bind(inboundTag string, hostname string, tunnels []*Tunnel) error 
 			inbs := toSUITagSlice(ruleMap["inbound"])
 			var remainInbs []string
 			for _, item := range inbs {
-				if item != inboundTag {
+				if item != inboundTag && validTags[item] {
 					remainInbs = append(remainInbs, item)
 				}
 			}
@@ -410,7 +418,14 @@ func (s *SUI) Bind(inboundTag string, hostname string, tunnels []*Tunnel) error 
 		return fmt.Errorf("保存路由配置失败: %w", err)
 	}
 
+	// 强制通知 sing-box 重新加载出站与路由规则
+	s.restartSingBox()
+
 	return nil
+}
+
+func (s *SUI) restartSingBox() {
+	_, _ = s.callAPI(http.MethodPost, "restartSb", nil)
 }
 
 func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {
