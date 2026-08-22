@@ -277,6 +277,7 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 		BasePath   *string `json:"base_path"`
 		Port       *int    `json:"port"`
 		ListenAddr *string `json:"listen_addr"`
+		PanelURL   *string `json:"panel_url"`
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
@@ -296,6 +297,14 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 					return
 				}
+			}
+			if in.PanelURL != nil {
+				next := getWebSettings()
+				next.PanelURL = strings.TrimSpace(*in.PanelURL)
+				webSettingsMu.Lock()
+				webSettingsCur = next
+				webSettingsMu.Unlock()
+				_ = saveWebSettings()
 			}
 			if in.Port != nil || in.ListenAddr != nil {
 				next := getWebSettings()
@@ -321,6 +330,7 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 			"base_path":    currentBasePath(),
 			"port":         cfg.Port,
 			"listen_addr":  listen,
+			"panel_url":    cfg.PanelURL,
 			"has_password": true,
 			"version":      version,
 		})

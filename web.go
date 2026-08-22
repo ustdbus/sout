@@ -301,6 +301,8 @@ textarea{width:100%;min-height:280px;background:#0d1117;border:1px solid var(--l
           <option value="127.0.0.1">127.0.0.1 (仅本地，用于 Nginx / 1Panel 等反向代理)</option>
         </select>
       </label>
+      <label class="f"><span>面板 URL (反代域名/完整地址)</span>
+        <input id="setPanelUrl" type="text" placeholder="如 https://fanout.20023.bond/8VmShnFQie/ 或留空"></label>
     </div>
     <div class="foot">
       <span class="spacer"></span>
@@ -651,6 +653,7 @@ $('#settingsBtn').onclick = async () => {
     $('#setPath').value = (s.base_path || '').replace(/^\//, '');
     $('#setPort').value = s.port || '';
     $('#setListen').value = (s.listen_addr === '127.0.0.1') ? '127.0.0.1' : '0.0.0.0';
+    $('#setPanelUrl').value = s.panel_url || '';
   }catch(e){}
 };
 
@@ -663,6 +666,7 @@ $('#saveSettingsBtn').onclick = async e => {
   const port = parseInt($('#setPort').value.trim(), 10);
   if(port) body.port = port;
   body.listen_addr = $('#setListen').value;
+  body.panel_url = $('#setPanelUrl').value.trim();
   try{
     await api('/api/settings', {
       method:'POST',

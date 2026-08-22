@@ -11,10 +11,11 @@ import (
 	"sync"
 )
 
-// WebSettings 是面板的可持久化配置（端口、监听地址等）
+// WebSettings 是面板的可持久化配置（端口、监听地址、自定义面板 URL 等）
 type WebSettings struct {
 	Port       int    `json:"port"`
 	ListenAddr string `json:"listen_addr"`
+	PanelURL   string `json:"panel_url,omitempty"`
 }
 
 var (
