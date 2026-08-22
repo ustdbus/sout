@@ -453,10 +453,10 @@ func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {
 	}
 	_ = json.Unmarshal(outboundsObj, &rawWrap)
 
-	existingFanoutTags := make(map[string]bool)
+	existingFanoutTags := make(map[string]int)
 	for _, ob := range rawWrap.Outbounds {
 		if strings.HasPrefix(ob.Tag, suiTagPrefix) {
-			existingFanoutTags[ob.Tag] = true
+			existingFanoutTags[ob.Tag] = ob.ID
 		}
 	}
 
@@ -481,11 +481,13 @@ func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {
 			outboundPayload["password"] = cred.Pass
 		}
 
-		payloadBytes, _ := json.Marshal(outboundPayload)
 		action := "new"
-		if existingFanoutTags[tag] {
+		if id, exists := existingFanoutTags[tag]; exists {
 			action = "edit"
+			outboundPayload["id"] = id
 		}
+
+		payloadBytes, _ := json.Marshal(outboundPayload)
 		form := url.Values{
 			"object": {"outbounds"},
 			"action": {action},
@@ -742,7 +744,7 @@ func (s *SUI) syncSUIDatabaseLinks(publicHost string) {
 		linksJSON, err := json.MarshalIndent(fixedLinks, "", "  ")
 		if err == nil {
 			escapedJSON := strings.ReplaceAll(string(linksJSON), "'", "''")
-			_ = s.sqliteQuery(fmt.Sprintf("UPDATE clients SET links = '%s';", escapedJSON))
+			_ = s.sqliteQuery(fmt.Sprintf("UPDATE clients SET links = CAST('%s' AS BLOB);", escapedJSON))
 		}
 	}
 }
