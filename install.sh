@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-REPO="${REPO:-byJoey/fanout}"
+REPO="${REPO:-ustdbus/sout}"
 BIN="/usr/local/bin/fanout"
 WORK_DIR="/var/lib/fanout"
 WEB_PORT=8899
@@ -45,7 +45,7 @@ svc_install() {
     cat > /etc/init.d/fanout <<INITEOF
 #!/sbin/openrc-run
 name="fanout"
-description="fanout - VPN Gate 动态出口 (s-ui/3x-ui 插件)"
+description="sout - s-ui 动态家宽出口插件"
 command="${BIN}"
 command_args="-dir ${WORK_DIR}"
 command_background=true
@@ -145,7 +145,7 @@ if [[ ${#need_cmd[@]} -gt 0 ]]; then
   }
 fi
 
-echo "[2/6] 获取 fanout 二进制文件..."
+echo "[2/6] 获取 sout 二进制文件..."
 ARCH=$(uname -m)
 case "$ARCH" in
   x86_64)  GOARCH=amd64 ;;
@@ -159,7 +159,7 @@ if [[ -f main.go ]] && command -v go >/dev/null; then
 else
   echo "      正在拉取预编译包 (${GOARCH})..."
   TMP=$(mktemp -d)
-  URL="https://github.com/${REPO}/releases/latest/download/fanout-linux-${GOARCH}.tar.gz"
+  URL="https://github.com/${REPO}/releases/latest/download/sout-linux-${GOARCH}.tar.gz"
   if ! curl -fsSL "$URL" -o "$TMP/f.tar.gz"; then
     echo "      下载失败: $URL" >&2
     exit 1
@@ -171,39 +171,13 @@ else
   rm -rf "$TMP"
 fi
 
-echo "[3/6] 检测节点管理后端与内核..."
-mkdir -p "${WORK_DIR}/bin"
+echo "[3/6] 检测节点管理面板..."
 if [[ -f /usr/local/s-ui/db/s-ui.db ]] || command -v /usr/local/s-ui/sui >/dev/null 2>&1; then
-  echo "      检测到已安装 s-ui 面板（将自动以 s-ui sing-box 模式接管分流）"
+  echo "      检测到已安装 s-ui 面板（将自动以 s-ui 模式接管分流）"
 elif command -v /usr/local/x-ui/x-ui >/dev/null 2>&1 || [[ -x /usr/bin/x-ui ]]; then
-  echo "      检测到已安装 3x-ui 面板（将自动以 3x-ui Xray 模式接管出入站）"
-elif [[ -d /etc/xray-cf-lite && -f /usr/local/etc/xray/config.json ]]; then
-  echo "      检测到已安装 xray-cf-lite（将自动以 xray-cf-lite 模式接管）"
-elif [[ -x "${WORK_DIR}/bin/xray" ]]; then
-  echo "      复用已有独立 Xray 内核: $("${WORK_DIR}/bin/xray" version 2>/dev/null | head -1)"
+  echo "      检测到已安装 3x-ui 面板（将自动以 3x-ui 模式接管出入站）"
 else
-  echo "      未检测到外部面板，准备下载独立 Xray 内核作为自建后端..."
-  case "$GOARCH" in
-    amd64) XRAY_ASSET=Xray-linux-64.zip ;;
-    arm64) XRAY_ASSET=Xray-linux-arm64-v8a.zip ;;
-  esac
-  XT=$(mktemp -d)
-  XURL="https://github.com/XTLS/Xray-core/releases/latest/download/${XRAY_ASSET}"
-  if curl -fsSL "$XURL" -o "$XT/x.zip"; then
-    if command -v unzip >/dev/null; then
-      unzip -qo "$XT/x.zip" -d "$XT"
-    elif command -v busybox >/dev/null && busybox unzip -h >/dev/null 2>&1; then
-      busybox unzip -qo "$XT/x.zip" -d "$XT"
-    else
-      [[ -n "$MGR" ]] && install_pkgs "$MGR" unzip >/dev/null 2>&1 || true
-      command -v unzip >/dev/null && unzip -qo "$XT/x.zip" -d "$XT"
-    fi
-    if [[ -f "$XT/xray" ]]; then
-      install -m 755 "$XT/xray" "${WORK_DIR}/bin/xray"
-      echo "      独立 Xray 内核准备完毕: $("${WORK_DIR}/bin/xray" version 2>/dev/null | head -1)"
-    fi
-  fi
-  rm -rf "$XT"
+  echo "      提示：未检测到 s-ui 面板，请在安装后配置 s-ui 以启用节点分流联动。"
 fi
 
 echo "[4/6] 配置网络转发与防火墙规则..."
@@ -224,6 +198,7 @@ if [[ -f f.sh ]]; then
 elif [[ -n "${TMP:-}" && -f "${TMP}/f.sh" ]]; then
   install -m 755 "${TMP}/f.sh" /usr/local/bin/f
 fi
+ln -sf /usr/local/bin/f /usr/local/bin/sout 2>/dev/null || true
 mkdir -p "$WORK_DIR"
 chmod 700 "$WORK_DIR"
 seed_settings
@@ -252,5 +227,5 @@ echo
 echo "  管理地址:  http://${IP}:${WEB_PORT}/${BP}/"
 echo "  访问口令:  $(cat "${WORK_DIR}/password" 2>/dev/null || echo "见 ${WORK_DIR}/password")"
 echo
-echo "  快捷管理:  在终端直接输入 f 即可呼出管理菜单"
+echo "  快捷管理:  在终端直接输入 sout 或 f 即可呼出管理菜单"
 echo

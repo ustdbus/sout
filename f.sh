@@ -375,7 +375,7 @@ menu() {
   while true; do
     clear
     echo -e "${B}========================================${N}"
-    echo -e "${B}  fanout - VPN Gate 动态出口管理 (s-ui)  ${N}"
+    echo -e "${B}  sout - s-ui 动态家宽出口插件 (VPN Gate) ${N}"
     echo -e "${B}========================================${N}"
     show_info
     echo -e "${D}----------------------------------------${N}"
@@ -388,7 +388,7 @@ menu() {
     echo -e "   9) 重置访问口令     10) 重置访问路径"
     echo -e "  11) 面板 URL 设置"
     echo
-    echo -e "  12) 开关开机自启     13) 彻底卸载 fanout"
+    echo -e "  12) 开关开机自启     13) 彻底卸载 sout"
     echo -e "   0) 退出脚本"
     echo -e "${D}----------------------------------------${N}"
     read -rp "  请选择 [0-13]: " choice
@@ -436,7 +436,7 @@ case "${1:-}" in
   uninstall) do_uninstall ;;
   "")        menu ;;
   *)
-    echo "用法: f [start|stop|restart|status|log|info|list|listen|url|uninstall]"
-    echo "直接输入 f 即可进入交互控制菜单"
+    echo "用法: sout [start|stop|restart|status|log|info|list|listen|url|uninstall]"
+    echo "直接在终端输入 sout 或 f 即可进入交互控制菜单"
     ;;
 esac

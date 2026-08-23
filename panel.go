@@ -122,31 +122,12 @@ func openPanel() (Panel, error) {
 		}
 		panelState.current = x
 		return x, nil
-	case "native":
-		n, err := openNative(panelState.workDir)
-		if err != nil {
-			return nil, err
-		}
-		panelState.current = n
-		return n, nil
-	case "xray-cf-lite":
-		xc, err := DetectXCL()
-		if err != nil {
-			return nil, fmt.Errorf("指定了 xray-cf-lite 模式但探测失败: %w", err)
-		}
-		panelState.current = xc
-		return xc, nil
 	}
 
-	// 自动探测优先级：s-ui -> 3x-ui -> xray-cf-lite -> native
+	// 自动探测优先级：s-ui -> 3x-ui
 	if s, err := DetectSUI(panelState.workDir); err == nil {
 		panelState.current = s
 		return s, nil
-	}
-
-	if xc, err := DetectXCL(); err == nil {
-		panelState.current = xc
-		return xc, nil
 	}
 
 	if x, err := DetectXUI(panelState.workDir); err == nil {
@@ -154,12 +135,7 @@ func openPanel() (Panel, error) {
 		return x, nil
 	}
 
-	n, err := openNative(panelState.workDir)
-	if err != nil {
-		return nil, err
-	}
-	panelState.current = n
-	return n, nil
+	return nil, fmt.Errorf("未检测到支持的面板（请先安装 s-ui 面板）")
 }
 
 func currentPanelMode() string {
@@ -181,28 +157,20 @@ func availablePanelModes(workDir string) []map[string]any {
 	if _, err := DetectSUI(workDir); err != nil {
 		suiOK, suiReason = false, err.Error()
 	}
-	modes = append(modes, map[string]any{"mode": "s-ui", "label": "s-ui 面板", "available": suiOK, "reason": suiReason})
-
-	xcOK, xcReason := true, ""
-	if _, err := DetectXCL(); err != nil {
-		xcOK, xcReason = false, err.Error()
-	}
-	modes = append(modes, map[string]any{"mode": "xray-cf-lite", "label": "xray-cf-lite", "available": xcOK, "reason": xcReason})
+	modes = append(modes, map[string]any{"mode": "s-ui", "label": "s-ui 面板 (sing-box)", "available": suiOK, "reason": suiReason})
 
 	xuiOK, xuiReason := true, ""
 	if _, err := DetectXUI(workDir); err != nil {
 		xuiOK, xuiReason = false, err.Error()
 	}
-	modes = append(modes, map[string]any{"mode": "3x-ui", "label": "3x-ui 面板", "available": xuiOK, "reason": xuiReason})
-
-	modes = append(modes, map[string]any{"mode": "native", "label": "自建 Xray", "available": true, "reason": ""})
+	modes = append(modes, map[string]any{"mode": "3x-ui", "label": "3x-ui 面板 (Xray)", "available": xuiOK, "reason": xuiReason})
 
 	return modes
 }
 
 func switchPanelMode(mode string) (Panel, error) {
 	switch mode {
-	case "", "s-ui", "3x-ui", "native", "xray-cf-lite":
+	case "", "s-ui", "3x-ui":
 	default:
 		return nil, fmt.Errorf("未知后端模式 %q", mode)
 	}

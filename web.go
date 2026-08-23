@@ -18,7 +18,7 @@ const indexHTML = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>fanout - s-ui 外部对接插件</title>
+<title>sout - s-ui 动态家宽出口插件</title>
 <style>
 :root{
   --bg:#0e1117; --panel:#161b22; --card:#1b212b; --line:#2d333b; --text:#e6edf3;
@@ -129,7 +129,7 @@ textarea{width:100%;min-height:280px;background:#0d1117;border:1px solid var(--l
 <header>
   <h1>
     <svg viewBox="0 0 24 24" style="color:var(--accent)"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-    fanout
+    sout
     <span class="badge" id="backendBadge">s-ui 已连接</span>
   </h1>
   <span class="spacer"></span>

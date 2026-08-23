@@ -24,7 +24,7 @@ func main() {
 		maxSlots = flag.Int("max", 20, "最多同时运行的隧道数")
 		workDir  = flag.String("dir", "/var/lib/fanout", "工作目录")
 	)
-	panelMode := flag.String("panel", "", "节点链接后端: 留空按界面设置/自动探测, 3x-ui, native, xray-cf-lite, s-ui")
+	panelMode := flag.String("panel", "", "节点链接后端: 留空自动探测, s-ui, 3x-ui")
 	publicIP := flag.String("ip", "", "母机公网 IPv4，用于分享链接/SOCKS5 地址；留空则自动探测")
 	showVersion := flag.Bool("version", false, "显示版本后退出")
 	flag.Parse()
@@ -34,7 +34,7 @@ func main() {
 	}
 
 	if *showVersion {
-		fmt.Println("fanout", version)
+		fmt.Println("sout", version)
 		return
 	}
 
@@ -466,12 +466,11 @@ func apiXUIStatus(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	_, isXCL := p.(*XCL)
 	resp := map[string]any{
 		"available":  true,
 		"kind":       p.Kind(),
 		"describe":   p.Describe(),
-		"can_create": !isXCL,
+		"can_create": true,
 	}
 	if x, ok := p.(*XUI); ok {
 		resp["port"] = x.Port
