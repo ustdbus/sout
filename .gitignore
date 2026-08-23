@@ -3,5 +3,7 @@
 *.log
 *.exe
 *.sub
+*.tar.gz
 scratch/
 __pycache__/
+
