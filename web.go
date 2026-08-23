@@ -943,15 +943,26 @@ async function loadSourcesList(){
       return;
     }
     box.innerHTML = list.map(s => {
+      const typeBadge = s.is_builtin
+        ? '<span style="background:#238636;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600">系统内置</span>'
+        : '<span style="background:#1f6feb;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600">自定义源</span>';
+      
+      const actBtns = s.is_builtin
+        ? ('<button class="chip-btn" data-refresh-src="' + esc(s.id) + '" title="立即刷新官方节点数据">' + ICON.redo + ' 刷新节点池</button>')
+        : ('<button class="chip-btn" data-import-src="' + esc(s.id) + '" title="从该源导入节点并启用出口">启用出口</button>'
+           + '<button class="icon" data-refresh-src="' + esc(s.id) + '" title="刷新源节点">' + ICON.redo + '</button>'
+           + '<button class="icon danger" data-del-src="' + esc(s.id) + '" title="删除此源">' + ICON.trash + '</button>');
+
       return '<div style="background:#12151a;border:1px solid var(--line);border-radius:4px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between">'
         + '<div>'
-        +   '<div style="font-weight:600;font-size:13px">' + esc(s.name) + ' <span style="font-size:11px;color:var(--ok);margin-left:6px">' + s.count + ' 个节点</span></div>'
-        +   '<div style="font-size:11px;color:var(--dim);margin-top:2px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(s.url) + '</div>'
+        +   '<div style="font-weight:600;font-size:13px;display:flex;align-items:center;gap:6px">' 
+        +     esc(s.name) + ' ' + typeBadge 
+        +     '<span style="font-size:11px;color:var(--ok);font-weight:normal">' + s.count + ' 个节点</span>'
+        +   '</div>'
+        +   '<div style="font-size:11px;color:var(--dim);margin-top:2px;max-width:330px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(s.url) + '</div>'
         + '</div>'
-        + '<div style="display:flex;gap:6px">'
-        +   '<button class="chip-btn" data-import-src="' + esc(s.id) + '" title="从该源导入节点并启用出口">启用出口</button>'
-        +   '<button class="icon" data-refresh-src="' + esc(s.id) + '" title="刷新源节点">' + ICON.redo + '</button>'
-        +   '<button class="icon danger" data-del-src="' + esc(s.id) + '" title="删除此源">' + ICON.trash + '</button>'
+        + '<div style="display:flex;gap:6px;align-items:center">'
+        +   actBtns
         + '</div>'
         + '</div>';
     }).join('');

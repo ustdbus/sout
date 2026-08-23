@@ -117,9 +117,9 @@ func main() {
 	mux.HandleFunc("/api/custom/socks/add", apiCustomSocksAdd(mgr))
 	mux.HandleFunc("/api/custom/socks/test", apiCustomSocksTest)
 	mux.HandleFunc("/api/custom/source/add", apiCustomSourceAdd)
-	mux.HandleFunc("/api/custom/source/list", apiCustomSourceList)
+	mux.HandleFunc("/api/custom/source/list", apiCustomSourceList(mgr))
 	mux.HandleFunc("/api/custom/source/delete", apiCustomSourceDelete)
-	mux.HandleFunc("/api/custom/source/refresh", apiCustomSourceRefresh)
+	mux.HandleFunc("/api/custom/source/refresh", apiCustomSourceRefresh(mgr))
 	mux.HandleFunc("/api/custom/source/import", apiCustomSourceImport(mgr))
 
 	mux.HandleFunc("/sub", handleSub(mgr))
@@ -1105,16 +1105,48 @@ func apiCustomSourceAdd(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func apiCustomSourceList(w http.ResponseWriter, r *http.Request) {
-	var list []*CustomSource
-	if globalCustomStore != nil {
-		globalCustomStore.mu.RLock()
-		for _, s := range globalCustomStore.Sources {
-			list = append(list, s)
+func apiCustomSourceList(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		type SourceItem struct {
+			ID        string    `json:"id"`
+			Name      string    `json:"name"`
+			URL       string    `json:"url"`
+			Count     int       `json:"count"`
+			UpdatedAt time.Time `json:"updated_at"`
+			IsBuiltin bool      `json:"is_builtin"`
+			Type      string    `json:"type"`
 		}
-		globalCustomStore.mu.RUnlock()
+
+		nodes, fetched := m.Nodes()
+		list := []SourceItem{
+			{
+				ID:        "builtin-vpngate",
+				Name:      "VPN Gate 官方全球家宽源",
+				URL:       "https://www.vpngate.net/api/iphone/",
+				Count:     len(nodes),
+				UpdatedAt: fetched,
+				IsBuiltin: true,
+				Type:      "vpngate",
+			},
+		}
+
+		if globalCustomStore != nil {
+			globalCustomStore.mu.RLock()
+			for _, s := range globalCustomStore.Sources {
+				list = append(list, SourceItem{
+					ID:        s.ID,
+					Name:      s.Name,
+					URL:       s.URL,
+					Count:     s.Count,
+					UpdatedAt: s.UpdatedAt,
+					IsBuiltin: false,
+					Type:      "socks5",
+				})
+			}
+			globalCustomStore.mu.RUnlock()
+		}
+		writeJSON(w, http.StatusOK, list)
 	}
-	writeJSON(w, http.StatusOK, list)
 }
 
 func apiCustomSourceDelete(w http.ResponseWriter, r *http.Request) {
@@ -1125,6 +1157,10 @@ func apiCustomSourceDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	if id == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id 不能为空"})
+		return
+	}
+	if id == "builtin-vpngate" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "系统内置源不允许删除"})
 		return
 	}
 	if globalCustomStore != nil {
@@ -1141,46 +1177,61 @@ func apiCustomSourceDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "已删除"})
 }
 
-func apiCustomSourceRefresh(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
-		return
-	}
-	id := r.URL.Query().Get("id")
-	if id == "" || globalCustomStore == nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id 不能为空"})
-		return
-	}
-	globalCustomStore.mu.RLock()
-	src, ok := globalCustomStore.Sources[id]
-	globalCustomStore.mu.RUnlock()
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "未找到该源"})
-		return
-	}
-
-	nodes, err := FetchSourceNodes(src.URL, 12*time.Second)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("拉取源失败: %v", err)})
-		return
-	}
-
-	globalCustomStore.mu.Lock()
-	src.Count = len(nodes)
-	src.UpdatedAt = time.Now()
-	for k, n := range globalCustomStore.Nodes {
-		if n.SourceID == id {
-			delete(globalCustomStore.Nodes, k)
+func apiCustomSourceRefresh(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
+			return
 		}
-	}
-	for _, n := range nodes {
-		n.SourceID = id
-		globalCustomStore.Nodes[n.ID] = &n
-	}
-	globalCustomStore.mu.Unlock()
-	_ = globalCustomStore.save()
+		id := r.URL.Query().Get("id")
+		if id == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id 不能为空"})
+			return
+		}
+		if id == "builtin-vpngate" {
+			nodes, err := m.RefreshNodes()
+			if err != nil {
+				writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("刷新官方源失败: %v", err)})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(nodes)})
+			return
+		}
+		if globalCustomStore == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "存储未初始化"})
+			return
+		}
+		globalCustomStore.mu.RLock()
+		src, ok := globalCustomStore.Sources[id]
+		globalCustomStore.mu.RUnlock()
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "未找到该源"})
+			return
+		}
 
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(nodes)})
+		nodes, err := FetchSourceNodes(src.URL, 12*time.Second)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("拉取源失败: %v", err)})
+			return
+		}
+
+		globalCustomStore.mu.Lock()
+		src.Count = len(nodes)
+		src.UpdatedAt = time.Now()
+		for k, n := range globalCustomStore.Nodes {
+			if n.SourceID == id {
+				delete(globalCustomStore.Nodes, k)
+			}
+		}
+		for _, n := range nodes {
+			n.SourceID = id
+			globalCustomStore.Nodes[n.ID] = &n
+		}
+		globalCustomStore.mu.Unlock()
+		_ = globalCustomStore.save()
+
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(nodes)})
+	}
 }
 
 func apiCustomSourceImport(m *Manager) http.HandlerFunc {
