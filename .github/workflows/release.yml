@@ -5,13 +5,18 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release Tag Name (e.g. v1.0.0)'
+        required: false
+        default: 'v1.0.0'
 
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Build
+    name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -39,12 +44,15 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: |
-          VERSION="${{ github.ref_name }}"
-          if [ -z "$VERSION" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="v1.0.0"
+          TAG="${{ github.event.inputs.tag_name }}"
+          if [ -z "$TAG" ]; then
+            TAG="${{ github.ref_name }}"
+          fi
+          if [ -z "$TAG" ] || [ "$TAG" = "main" ]; then
+            TAG="v1.0.0"
           fi
           mkdir -p dist/${{ matrix.pkg_name }}
-          go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o dist/${{ matrix.pkg_name }}/fanout .
+          go build -trimpath -ldflags "-s -w -X main.version=${TAG}" -o dist/${{ matrix.pkg_name }}/fanout .
           cp f.sh dist/${{ matrix.pkg_name }}/
           cp fanout.service dist/${{ matrix.pkg_name }}/
           tar -czf ${{ matrix.pkg_name }}.tar.gz -C dist/${{ matrix.pkg_name }} fanout f.sh fanout.service
@@ -75,9 +83,22 @@ jobs:
           cd release_assets
           sha256sum sout-linux-*.tar.gz > checksums.txt
 
+      - name: Determine Tag
+        id: tag_info
+        run: |
+          TAG="${{ github.event.inputs.tag_name }}"
+          if [ -z "$TAG" ]; then
+            TAG="${{ github.ref_name }}"
+          fi
+          if [ -z "$TAG" ] || [ "$TAG" = "main" ]; then
+            TAG="v1.0.0"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.tag_info.outputs.tag }}
           files: |
             release_assets/sout-linux-amd64.tar.gz
             release_assets/sout-linux-arm64.tar.gz
