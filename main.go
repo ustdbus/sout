@@ -111,7 +111,16 @@ func main() {
 	mux.HandleFunc("/api/panel/client/add", apiClientAdd(mgr))
 	mux.HandleFunc("/api/panel/client/del", apiClientDelete(mgr))
 	mux.HandleFunc("/api/panel/client/reset", apiClientReset(mgr))
-	mux.HandleFunc("/api/panel/mode", apiPanelMode(*workDir))
+	initCustomStore(*workDir)
+
+	mux.HandleFunc("/api/custom/socks/add", apiCustomSocksAdd(mgr))
+	mux.HandleFunc("/api/custom/socks/test", apiCustomSocksTest)
+	mux.HandleFunc("/api/custom/source/add", apiCustomSourceAdd)
+	mux.HandleFunc("/api/custom/source/list", apiCustomSourceList)
+	mux.HandleFunc("/api/custom/source/delete", apiCustomSourceDelete)
+	mux.HandleFunc("/api/custom/source/refresh", apiCustomSourceRefresh)
+	mux.HandleFunc("/api/custom/source/import", apiCustomSourceImport(mgr))
+
 	mux.HandleFunc("/sub", handleSub(mgr))
 
 	auth, created, err := NewAuth(*workDir)
@@ -908,6 +917,325 @@ func handleSub(m *Manager) http.HandlerFunc {
 
 		b64 := base64.StdEncoding.EncodeToString([]byte(rawText))
 		_, _ = w.Write([]byte(b64))
+	}
+}
+
+func apiCustomSocksTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
+		return
+	}
+	var req struct {
+		RawURL string `json:"raw_url"`
+		Host   string `json:"host"`
+		Port   int    `json:"port"`
+		User   string `json:"user"`
+		Pass   string `json:"pass"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	h, p, u, pwd := req.Host, req.Port, req.User, req.Pass
+	if req.RawURL != "" {
+		parsedH, parsedP, parsedU, parsedPwd, _, err := ParseSocksURL(req.RawURL)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		h, p, u, pwd = parsedH, parsedP, parsedU, parsedPwd
+	}
+	if h == "" || p <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "主机地址与端口不能为空"})
+		return
+	}
+	remoteAddr := fmt.Sprintf("%s:%d", h, p)
+	exitIP, ping, err := ProbeCustomSocks(remoteAddr, u, pwd, 8*time.Second)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("连通性测试失败: %v", err)})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      true,
+		"exit_ip": exitIP,
+		"ping":    ping,
+		"host":    h,
+		"port":    p,
+		"user":    u,
+		"pass":    pwd,
+	})
+}
+
+func apiCustomSocksAdd(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
+			return
+		}
+		var req struct {
+			RawURL      string `json:"raw_url"`
+			Host        string `json:"host"`
+			Port        int    `json:"port"`
+			User        string `json:"user"`
+			Pass        string `json:"pass"`
+			Remark      string `json:"remark"`
+			Country     string `json:"country"`
+			CountryCode string `json:"country_code"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		h, p, u, pwd, remark := req.Host, req.Port, req.User, req.Pass, req.Remark
+		if req.RawURL != "" {
+			parsedH, parsedP, parsedU, parsedPwd, parsedRemark, err := ParseSocksURL(req.RawURL)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			h, p, u, pwd = parsedH, parsedP, parsedU, parsedPwd
+			if remark == "" {
+				remark = parsedRemark
+			}
+		}
+		if h == "" || p <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "主机地址与端口不能为空"})
+			return
+		}
+		if remark == "" {
+			remark = h
+		}
+		remoteAddr := fmt.Sprintf("%s:%d", h, p)
+		exitIP, ping, err := ProbeCustomSocks(remoteAddr, u, pwd, 10*time.Second)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("连接 SOCKS5 代理失败: %v", err)})
+			return
+		}
+
+		country := req.Country
+		if country == "" {
+			country = "自定义"
+		}
+		countryCode := req.CountryCode
+		if countryCode == "" {
+			countryCode = "CUSTOM"
+		}
+
+		nodeID := fmt.Sprintf("custom-%s-%d", h, p)
+		node := CustomNode{
+			ID:          nodeID,
+			HostName:    nodeID,
+			Host:        h,
+			Port:        p,
+			User:        u,
+			Pass:        pwd,
+			Country:     country,
+			CountryCode: countryCode,
+			Remark:      remark,
+			Ping:        ping,
+			SpeedMbps:   100.0,
+			ExitIP:      exitIP,
+		}
+
+		t, err := m.AddCustomExit(node)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":      true,
+			"slot":    t.Slot,
+			"port":    t.Port,
+			"exit_ip": exitIP,
+		})
+	}
+}
+
+func apiCustomSourceAdd(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+		URL  string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.URL = strings.TrimSpace(req.URL)
+	if req.Name == "" || req.URL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "源名称和 URL 不能为空"})
+		return
+	}
+
+	nodes, err := FetchSourceNodes(req.URL, 12*time.Second)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("拉取源失败: %v", err)})
+		return
+	}
+
+	id := fmt.Sprintf("src-%d", time.Now().Unix())
+	src := &CustomSource{
+		ID:        id,
+		Name:      req.Name,
+		URL:       req.URL,
+		Count:     len(nodes),
+		UpdatedAt: time.Now(),
+	}
+
+	if globalCustomStore != nil {
+		globalCustomStore.mu.Lock()
+		globalCustomStore.Sources[id] = src
+		for _, n := range nodes {
+			n.SourceID = id
+			globalCustomStore.Nodes[n.ID] = &n
+		}
+		globalCustomStore.mu.Unlock()
+		_ = globalCustomStore.save()
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":    true,
+		"id":    id,
+		"count": len(nodes),
+	})
+}
+
+func apiCustomSourceList(w http.ResponseWriter, r *http.Request) {
+	var list []*CustomSource
+	if globalCustomStore != nil {
+		globalCustomStore.mu.RLock()
+		for _, s := range globalCustomStore.Sources {
+			list = append(list, s)
+		}
+		globalCustomStore.mu.RUnlock()
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+func apiCustomSourceDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
+		return
+	}
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id 不能为空"})
+		return
+	}
+	if globalCustomStore != nil {
+		globalCustomStore.mu.Lock()
+		delete(globalCustomStore.Sources, id)
+		for k, n := range globalCustomStore.Nodes {
+			if n.SourceID == id {
+				delete(globalCustomStore.Nodes, k)
+			}
+		}
+		globalCustomStore.mu.Unlock()
+		_ = globalCustomStore.save()
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"ok": "已删除"})
+}
+
+func apiCustomSourceRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
+		return
+	}
+	id := r.URL.Query().Get("id")
+	if id == "" || globalCustomStore == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id 不能为空"})
+		return
+	}
+	globalCustomStore.mu.RLock()
+	src, ok := globalCustomStore.Sources[id]
+	globalCustomStore.mu.RUnlock()
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "未找到该源"})
+		return
+	}
+
+	nodes, err := FetchSourceNodes(src.URL, 12*time.Second)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("拉取源失败: %v", err)})
+		return
+	}
+
+	globalCustomStore.mu.Lock()
+	src.Count = len(nodes)
+	src.UpdatedAt = time.Now()
+	for k, n := range globalCustomStore.Nodes {
+		if n.SourceID == id {
+			delete(globalCustomStore.Nodes, k)
+		}
+	}
+	for _, n := range nodes {
+		n.SourceID = id
+		globalCustomStore.Nodes[n.ID] = &n
+	}
+	globalCustomStore.mu.Unlock()
+	_ = globalCustomStore.save()
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(nodes)})
+}
+
+func apiCustomSourceImport(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
+			return
+		}
+		id := r.URL.Query().Get("id")
+		if id == "" || globalCustomStore == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id 不能为空"})
+			return
+		}
+		globalCustomStore.mu.RLock()
+		var candidateNodes []CustomNode
+		for _, n := range globalCustomStore.Nodes {
+			if n.SourceID == id {
+				candidateNodes = append(candidateNodes, *n)
+			}
+		}
+		globalCustomStore.mu.RUnlock()
+
+		if len(candidateNodes) == 0 {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "该源暂无节点"})
+			return
+		}
+
+		var lastErr error
+		for _, node := range candidateNodes {
+			remoteAddr := fmt.Sprintf("%s:%d", node.Host, node.Port)
+			ip, ping, err := ProbeCustomSocks(remoteAddr, node.User, node.Pass, 8*time.Second)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			node.ExitIP = ip
+			node.Ping = ping
+			t, err := m.AddCustomExit(node)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ok":      true,
+				"slot":    t.Slot,
+				"port":    t.Port,
+				"exit_ip": ip,
+				"remark":  node.Remark,
+			})
+			return
+		}
+		if lastErr != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("测试可用节点失败: %v", lastErr)})
+			return
+		}
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "无可用节点"})
 	}
 }
 

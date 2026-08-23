@@ -18,8 +18,13 @@ type persistedTunnel struct {
 	SpeedMbps   float64 `json:"speed_mbps,omitempty"`
 	Config      string  `json:"config"`
 	// SOCKS5 凭据
-	SocksUser string `json:"socks_user,omitempty"`
-	SocksPass string `json:"socks_pass,omitempty"`
+	SocksUser  string `json:"socks_user,omitempty"`
+	SocksPass  string `json:"socks_pass,omitempty"`
+	Kind       string `json:"kind,omitempty"`
+	CustomHost string `json:"custom_host,omitempty"`
+	CustomPort int    `json:"custom_port,omitempty"`
+	CustomUser string `json:"custom_user,omitempty"`
+	CustomPass string `json:"custom_pass,omitempty"`
 }
 
 type persistedState struct {
@@ -46,6 +51,11 @@ func (m *Manager) saveState() error {
 			Config:      t.Node.Config,
 			SocksUser:   t.Cred.User,
 			SocksPass:   t.Cred.Pass,
+			Kind:        t.Kind,
+			CustomHost:  t.CustomHost,
+			CustomPort:  t.CustomPort,
+			CustomUser:  t.CustomUser,
+			CustomPass:  t.CustomPass,
 		})
 	}
 
@@ -108,11 +118,16 @@ func (m *Manager) restoreState() (int, error) {
 			cred = gen
 		}
 		t := &Tunnel{
-			Slot:   p.Slot,
-			Port:   p.Port,
-			Node:   node,
-			Status: "starting",
-			Cred:   cred,
+			Slot:       p.Slot,
+			Port:       p.Port,
+			Node:       node,
+			Status:     "starting",
+			Cred:       cred,
+			Kind:       p.Kind,
+			CustomHost: p.CustomHost,
+			CustomPort: p.CustomPort,
+			CustomUser: p.CustomUser,
+			CustomPass: p.CustomPass,
 		}
 		m.mu.Lock()
 		m.tunnels[p.Slot] = t

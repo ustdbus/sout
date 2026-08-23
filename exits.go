@@ -33,6 +33,7 @@ type Exit struct {
 	SocksUser string        `json:"socks_user"`
 	SocksPass string        `json:"socks_pass"`
 	Inbounds  []ExitInbound `json:"inbounds"`
+	Kind      string        `json:"kind,omitempty"` // "vpngate" | "custom"
 }
 
 // NodeBranch 是某个节点下的一个分流分支（如直连分支、日本家宽分支等）
@@ -59,13 +60,14 @@ type GroupedNode struct {
 
 // ExitsView 是主界面需要的全部数据。
 type ExitsView struct {
-	Nodes     []GroupedNode `json:"nodes"`
-	Exits     []Exit        `json:"exits"`
-	Direct    []ExitInbound `json:"direct"`
-	Panel     string        `json:"panel"`
-	Backend   string        `json:"backend"`
-	PanelInfo string        `json:"panel_info"`
-	PublicIP  string        `json:"public_ip"`
+	Nodes         []GroupedNode   `json:"nodes"`
+	Exits         []Exit          `json:"exits"`
+	Direct        []ExitInbound   `json:"direct"`
+	CustomSources []*CustomSource `json:"custom_sources,omitempty"`
+	Panel         string          `json:"panel,omitempty"`
+	Backend       string          `json:"backend"`
+	PanelInfo     string          `json:"panel_info"`
+	PublicIP      string          `json:"public_ip"`
 }
 
 type inboundCache struct {
@@ -152,6 +154,7 @@ func (m *Manager) ExitsOf() ExitsView {
 			Ping: t.Node.Ping, SpeedMbps: t.Node.SpeedMbps,
 			ExitIP: t.ExitIP, Status: t.Status, Err: t.Err, Since: t.Since,
 			SocksUser: cred.User, SocksPass: cred.Pass,
+			Kind: t.Kind,
 		})
 	}
 
@@ -227,12 +230,20 @@ func (m *Manager) ExitsOf() ExitsView {
 		boundLabel := "直连（香港）"
 		if ib.BoundTo != "" {
 			if t, ok := hostToTunnel[ib.BoundTo]; ok {
-				cName := countryNameCN(t.Node.CountryCode, t.Node.Country)
 				exitIP := t.ExitIP
 				if exitIP == "" {
 					exitIP = "连接中"
 				}
-				boundLabel = fmt.Sprintf("%s家宽 (%s · SOCKS5:%d)", cName, exitIP, t.Port)
+				if t.Kind == "custom" {
+					tag := t.Node.Country
+					if tag == "" {
+						tag = "自定义S5"
+					}
+					boundLabel = fmt.Sprintf("%s (%s · SOCKS5:%d)", tag, exitIP, t.Port)
+				} else {
+					cName := countryNameCN(t.Node.CountryCode, t.Node.Country)
+					boundLabel = fmt.Sprintf("%s家宽 (%s · SOCKS5:%d)", cName, exitIP, t.Port)
+				}
 			} else {
 				boundLabel = fmt.Sprintf("出口 (%s)", ib.BoundTo)
 			}

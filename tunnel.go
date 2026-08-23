@@ -22,14 +22,19 @@ type SocksCred struct {
 
 // Tunnel 是一条运行中的隧道：一个 netns + 一个 openvpn 进程 + 一个本地 SOCKS5 端口。
 type Tunnel struct {
-	Slot   int       `json:"slot"`
-	Port   int       `json:"port"`
-	Node   Node      `json:"node"`
-	Status string    `json:"status"` // starting | up | failed | stopped
-	ExitIP string    `json:"exit_ip"`
-	Err    string    `json:"err,omitempty"`
-	Since  time.Time `json:"since"`
-	Cred   SocksCred `json:"cred"`
+	Slot       int       `json:"slot"`
+	Port       int       `json:"port"`
+	Node       Node      `json:"node"`
+	Status     string    `json:"status"` // starting | up | failed | stopped
+	ExitIP     string    `json:"exit_ip"`
+	Err        string    `json:"err,omitempty"`
+	Since      time.Time `json:"since"`
+	Cred       SocksCred `json:"cred"`
+	Kind       string    `json:"kind,omitempty"` // "vpngate" | "custom"
+	CustomHost string    `json:"custom_host,omitempty"`
+	CustomPort int       `json:"custom_port,omitempty"`
+	CustomUser string    `json:"custom_user,omitempty"`
+	CustomPass string    `json:"custom_pass,omitempty"`
 
 	ns       string
 	listener net.Listener
@@ -240,6 +245,62 @@ func (t *Tunnel) setCredential(c SocksCred) {
 	t.Cred = c
 }
 
+// startCustom 启动自定义 SOCKS5 转发隧道
+func (t *Tunnel) startCustom() error {
+	var ln net.Listener
+	var err error
+	for i := 0; i < 6; i++ {
+		ln, err = net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", t.Port))
+		if err == nil {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if err != nil {
+		port, perr := freeRandomPort(map[int]bool{t.Port: true})
+		if perr != nil {
+			return fmt.Errorf("监听 %d 失败: %w", t.Port, err)
+		}
+		ln, err = net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+		if err != nil {
+			return fmt.Errorf("监听 %d 失败: %w", port, err)
+		}
+		t.Port = port
+	}
+	t.listener = ln
+	t.Status = "up"
+	t.Since = time.Now()
+
+	remoteAddr := fmt.Sprintf("%s:%d", t.CustomHost, t.CustomPort)
+	dial := func(network, targetAddr string) (net.Conn, error) {
+		return dialSocks5(remoteAddr, t.CustomUser, t.CustomPass, targetAddr, 15*time.Second)
+	}
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			cred := t.credential()
+			go serveSocks(conn, &cred, dial)
+		}
+	}()
+
+	go func() {
+		if ip, ping, err := ProbeCustomSocks(remoteAddr, t.CustomUser, t.CustomPass, 10*time.Second); err == nil {
+			t.mu.Lock()
+			t.ExitIP = ip
+			if ping > 0 {
+				t.Node.Ping = ping
+			}
+			t.mu.Unlock()
+		}
+	}()
+
+	return nil
+}
+
 // switchPort 动态切换隧道 SOCKS5 监听端口
 func (t *Tunnel) switchPort(newPort int) error {
 	t.mu.Lock()
@@ -262,7 +323,16 @@ func (t *Tunnel) switchPort(newPort int) error {
 		_ = oldLn.Close()
 	}
 
-	dial := dialerInNetns(t.nsName())
+	var dial func(network, targetAddr string) (net.Conn, error)
+	if t.Kind == "custom" {
+		remoteAddr := fmt.Sprintf("%s:%d", t.CustomHost, t.CustomPort)
+		dial = func(network, targetAddr string) (net.Conn, error) {
+			return dialSocks5(remoteAddr, t.CustomUser, t.CustomPass, targetAddr, 15*time.Second)
+		}
+	} else {
+		dial = dialerInNetns(t.nsName())
+	}
+
 	go func() {
 		for {
 			conn, err := ln.Accept()
@@ -279,6 +349,11 @@ func (t *Tunnel) switchPort(newPort int) error {
 
 // probeExitIP 通过隧道查询出口 IP，用于确认这条隧道确实换了 IP。
 func (t *Tunnel) probeExitIP() (string, error) {
+	if t.Kind == "custom" {
+		remoteAddr := fmt.Sprintf("%s:%d", t.CustomHost, t.CustomPort)
+		ip, _, err := ProbeCustomSocks(remoteAddr, t.CustomUser, t.CustomPass, 10*time.Second)
+		return ip, err
+	}
 	out, err := exec.Command("ip", "netns", "exec", t.nsName(),
 		"curl", "-s", "--max-time", "15", "http://api.ipify.org").Output()
 	if err != nil {
@@ -303,6 +378,8 @@ func (t *Tunnel) stop() {
 		_ = t.ovpn.Process.Kill()
 		t.ovpn = nil
 	}
-	t.teardownNetns()
+	if t.Kind != "custom" {
+		t.teardownNetns()
+	}
 	t.Status = "stopped"
 }

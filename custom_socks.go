@@ -1,0 +1,337 @@
+package main
+
+import (
+	"context"
+	"crypto/tls"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+// CustomNode 记录一个用户自定义的 SOCKS5 出口节点
+type CustomNode struct {
+	ID          string  `json:"id"`
+	HostName    string  `json:"hostname"`
+	Host        string  `json:"host"`
+	Port        int     `json:"port"`
+	User        string  `json:"user"`
+	Pass        string  `json:"pass"`
+	Country     string  `json:"country"`
+	CountryCode string  `json:"country_code"`
+	Remark      string  `json:"remark"`
+	Ping        int     `json:"ping"`
+	SpeedMbps   float64 `json:"speed_mbps"`
+	ExitIP      string  `json:"exit_ip"`
+	SourceID    string  `json:"source_id,omitempty"`
+}
+
+// CustomSource 记录一个第三方的 SOCKS5 订阅/API 节点源
+type CustomSource struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	URL       string    `json:"url"`
+	Count     int       `json:"count"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type CustomStore struct {
+	mu      sync.RWMutex
+	dir     string
+	Sources map[string]*CustomSource `json:"sources"`
+	Nodes   map[string]*CustomNode   `json:"nodes"`
+}
+
+var globalCustomStore *CustomStore
+
+func initCustomStore(dir string) *CustomStore {
+	cs := &CustomStore{
+		dir:     dir,
+		Sources: make(map[string]*CustomSource),
+		Nodes:   make(map[string]*CustomNode),
+	}
+	cs.load()
+	globalCustomStore = cs
+	return cs
+}
+
+func (cs *CustomStore) savePath() string {
+	return filepath.Join(cs.dir, "custom_store.json")
+}
+
+func (cs *CustomStore) load() {
+	blob, err := os.ReadFile(cs.savePath())
+	if err != nil {
+		return
+	}
+	var data struct {
+		Sources map[string]*CustomSource `json:"sources"`
+		Nodes   map[string]*CustomNode   `json:"nodes"`
+	}
+	if err := json.Unmarshal(blob, &data); err == nil {
+		if data.Sources != nil {
+			cs.Sources = data.Sources
+		}
+		if data.Nodes != nil {
+			cs.Nodes = data.Nodes
+		}
+	}
+}
+
+func (cs *CustomStore) save() error {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	data := struct {
+		Sources map[string]*CustomSource `json:"sources"`
+		Nodes   map[string]*CustomNode   `json:"nodes"`
+	}{
+		Sources: cs.Sources,
+		Nodes:   cs.Nodes,
+	}
+	blob, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(cs.savePath(), blob, 0600)
+}
+
+// dialSocks5 建立到远端上游 SOCKS5 代理的 TCP 隧道 (支持无认证与 RFC1929 用户名密码)
+func dialSocks5(proxyAddr, user, pass, targetAddr string, timeout time.Duration) (net.Conn, error) {
+	conn, err := net.DialTimeout("tcp", proxyAddr, timeout)
+	if err != nil {
+		return nil, err
+	}
+	_ = conn.SetDeadline(time.Now().Add(timeout))
+
+	if user != "" || pass != "" {
+		_, err = conn.Write([]byte{0x05, 0x01, 0x02})
+	} else {
+		_, err = conn.Write([]byte{0x05, 0x01, 0x00})
+	}
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+
+	resp := make([]byte, 2)
+	if _, err = io.ReadFull(conn, resp); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if resp[0] != 0x05 {
+		_ = conn.Close()
+		return nil, fmt.Errorf("非 SOCKS5 响应")
+	}
+
+	if resp[1] == 0x02 {
+		req := []byte{0x01, byte(len(user))}
+		req = append(req, []byte(user)...)
+		req = append(req, byte(len(pass)))
+		req = append(req, []byte(pass)...)
+		if _, err = conn.Write(req); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		authResp := make([]byte, 2)
+		if _, err = io.ReadFull(conn, authResp); err != nil || authResp[1] != 0x00 {
+			_ = conn.Close()
+			return nil, fmt.Errorf("SOCKS5 用户名或密码认证失败")
+		}
+	} else if resp[1] != 0x00 {
+		_ = conn.Close()
+		return nil, fmt.Errorf("SOCKS5 握手认证被拒绝 (方法代码: %d)", resp[1])
+	}
+
+	host, portStr, err := net.SplitHostPort(targetAddr)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	port, _ := strconv.Atoi(portStr)
+
+	var req []byte
+	if ip := net.ParseIP(host); ip != nil {
+		if ip4 := ip.To4(); ip4 != nil {
+			req = []byte{0x05, 0x01, 0x00, 0x01}
+			req = append(req, ip4...)
+		} else {
+			req = []byte{0x05, 0x01, 0x00, 0x04}
+			req = append(req, ip.To16()...)
+		}
+	} else {
+		req = []byte{0x05, 0x01, 0x00, 0x03, byte(len(host))}
+		req = append(req, []byte(host)...)
+	}
+	req = append(req, byte(port>>8), byte(port&0xff))
+
+	if _, err = conn.Write(req); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+
+	connResp := make([]byte, 4)
+	if _, err = io.ReadFull(conn, connResp); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if connResp[1] != 0x00 {
+		_ = conn.Close()
+		return nil, fmt.Errorf("SOCKS5 CONNECT 失败: %d", connResp[1])
+	}
+
+	switch connResp[3] {
+	case 0x01:
+		_, _ = io.CopyN(io.Discard, conn, 4+2)
+	case 0x04:
+		_, _ = io.CopyN(io.Discard, conn, 16+2)
+	case 0x03:
+		l := make([]byte, 1)
+		_, _ = io.ReadFull(conn, l)
+		_, _ = io.CopyN(io.Discard, conn, int64(l[0])+2)
+	}
+
+	_ = conn.SetDeadline(time.Time{})
+	return conn, nil
+}
+
+// ProbeCustomSocks 探测自定义 SOCKS5 代理的真实出口 IP 和延迟
+func ProbeCustomSocks(proxyAddr, user, pass string, timeout time.Duration) (string, int, error) {
+	start := time.Now()
+	dialer := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return dialSocks5(proxyAddr, user, pass, addr, timeout)
+	}
+	tr := &http.Transport{
+		DialContext:     dialer,
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	client := &http.Client{Transport: tr, Timeout: timeout}
+
+	resp, err := client.Get("http://api.ipify.org")
+	if err != nil {
+		return "", 0, fmt.Errorf("连接 SOCKS5 失败: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", 0, fmt.Errorf("读取出口响应失败: %w", err)
+	}
+	ip := strings.TrimSpace(string(body))
+	if net.ParseIP(ip) == nil {
+		return "", 0, fmt.Errorf("出口 IP 返回异常: %s", ip)
+	}
+	ping := int(time.Since(start).Milliseconds())
+	return ip, ping, nil
+}
+
+// ParseSocksURL 解析 socks5://user:pass@host:port#remark 格式或 host:port:user:pass 格式
+func ParseSocksURL(raw string) (host string, port int, user, pass, remark string, err error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", 0, "", "", "", fmt.Errorf("链接为空")
+	}
+
+	if strings.HasPrefix(raw, "socks5://") || strings.HasPrefix(raw, "socks://") {
+		u, err := url.Parse(raw)
+		if err != nil {
+			return "", 0, "", "", "", err
+		}
+		host = u.Hostname()
+		p, _ := strconv.Atoi(u.Port())
+		port = p
+		if u.User != nil {
+			user = u.User.Username()
+			pass, _ = u.User.Password()
+		}
+		remark, _ = url.QueryUnescape(u.Fragment)
+		if remark == "" {
+			remark = host
+		}
+		return host, port, user, pass, remark, nil
+	}
+
+	// 尝试 host:port[:user:pass] 格式
+	parts := strings.Split(raw, ":")
+	if len(parts) >= 2 {
+		host = parts[0]
+		port, _ = strconv.Atoi(parts[1])
+		if len(parts) >= 4 {
+			user = parts[2]
+			pass = parts[3]
+		}
+		return host, port, user, pass, host, nil
+	}
+	return "", 0, "", "", "", fmt.Errorf("无法解析的 SOCKS5 格式")
+}
+
+// FetchSourceNodes 拉取并解析外部 SOCKS5 订阅源
+func FetchSourceNodes(sourceURL string, timeout time.Duration) ([]CustomNode, error) {
+	client := &http.Client{Timeout: timeout}
+	req, err := http.NewRequest(http.MethodGet, sourceURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; sout/1.0)")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("请求源链接失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("源响应状态码 %d", resp.StatusCode)
+	}
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	content := strings.TrimSpace(string(raw))
+	if dec, err := base64.StdEncoding.DecodeString(content); err == nil {
+		content = string(dec)
+	} else if dec, err := base64.URLEncoding.DecodeString(content); err == nil {
+		content = string(dec)
+	}
+
+	var nodes []CustomNode
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		h, p, u, pwd, remark, err := ParseSocksURL(line)
+		if err != nil || h == "" || p <= 0 {
+			continue
+		}
+		if remark == "" {
+			remark = fmt.Sprintf("节点-%d", i+1)
+		}
+		nodeID := fmt.Sprintf("cs-%s-%d", h, p)
+		nodes = append(nodes, CustomNode{
+			ID:          nodeID,
+			HostName:    nodeID,
+			Host:        h,
+			Port:        p,
+			User:        u,
+			Pass:        pwd,
+			Country:     "自定义",
+			CountryCode: "CUSTOM",
+			Remark:      remark,
+		})
+	}
+
+	if len(nodes) == 0 {
+		return nil, fmt.Errorf("未在该源中解析出有效 SOCKS5 节点")
+	}
+	return nodes, nil
+}

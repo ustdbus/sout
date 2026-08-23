@@ -134,6 +134,21 @@ const (
 )
 
 func (m *Manager) bringUpPersist(t *Tunnel, notify bool, persist bool) {
+	if t.Kind == "custom" {
+		if err := t.startCustom(); err != nil {
+			t.Status = "failed"
+			t.Err = err.Error()
+		} else {
+			t.Status = "up"
+			t.Err = ""
+			if notify {
+				m.notifyPanel()
+			}
+		}
+		_ = m.saveState()
+		return
+	}
+
 	backoff := reconnectBackoffMin
 	for {
 		if m.tryCandidates(t, notify) {
@@ -361,6 +376,73 @@ func (m *Manager) UpdateTunnelConfig(slot int, cred SocksCred, newPort int) (Soc
 	}
 	m.syncCred(t)
 	return cred, t.Port, nil
+}
+
+// AddCustomExit 为自定义 SOCKS5 节点创建并启动出口隧道
+func (m *Manager) AddCustomExit(node CustomNode) (*Tunnel, error) {
+	m.mu.Lock()
+	slot, err := m.freeSlot()
+	if err != nil {
+		m.mu.Unlock()
+		return nil, err
+	}
+	taken := map[int]bool{}
+	for _, other := range m.tunnels {
+		taken[other.Port] = true
+	}
+	port, err := freeRandomPort(taken)
+	if err != nil {
+		m.mu.Unlock()
+		return nil, err
+	}
+	cred, err := newSocksCred()
+	if err != nil {
+		m.mu.Unlock()
+		return nil, err
+	}
+	if node.HostName == "" {
+		node.HostName = fmt.Sprintf("custom-%s-%d", node.Host, node.Port)
+	}
+	if node.Country == "" {
+		node.Country = "自定义"
+	}
+	if node.CountryCode == "" {
+		node.CountryCode = "CUSTOM"
+	}
+	t := &Tunnel{
+		Slot:       slot,
+		Port:       port,
+		Kind:       "custom",
+		CustomHost: node.Host,
+		CustomPort: node.Port,
+		CustomUser: node.User,
+		CustomPass: node.Pass,
+		Status:     "starting",
+		Since:      time.Now(),
+		Cred:       cred,
+		ExitIP:     node.ExitIP,
+		Node: Node{
+			HostName:    node.HostName,
+			IP:          node.Host,
+			Country:     node.Country,
+			CountryCode: node.CountryCode,
+			Ping:        node.Ping,
+			SpeedMbps:   node.SpeedMbps,
+		},
+	}
+	m.tunnels[slot] = t
+	m.mu.Unlock()
+
+	if err := t.startCustom(); err != nil {
+		m.mu.Lock()
+		delete(m.tunnels, slot)
+		m.mu.Unlock()
+		return nil, err
+	}
+
+	_ = m.saveState()
+	m.notifyPanel()
+	return t, nil
 }
 
 func (m *Manager) ReconcileOutbounds() {

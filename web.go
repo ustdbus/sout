@@ -147,13 +147,21 @@ textarea{width:100%;min-height:280px;background:#0d1117;border:1px solid var(--l
   <div class="section-head">
     <h2>
       <svg viewBox="0 0 24 24" style="color:var(--ok)"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-      VPN Gate 出口隧道池
+      出口隧道池 (VPN Gate / 自定义 SOCKS5)
     </h2>
-    <span class="desc">在此拉取并运行各国家/地区公共家宽出口隧道（SOCKS5）</span>
+    <span class="desc">在此拉取并运行各公共家宽与自定义 SOCKS5 出口隧道</span>
     <span class="spacer"></span>
     <button class="primary" id="openNewExitModalBtn" style="box-shadow:0 2px 6px rgba(88,166,255,.3)">
       <svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
       新建国家/地区出口
+    </button>
+    <button id="openCustomExitModalBtn">
+      <svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+      添加自定义出口
+    </button>
+    <button id="openCustomSourceModalBtn">
+      <svg viewBox="0 0 24 24"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z"/><path d="M6 6h10"/><path d="M6 10h10"/></svg>
+      SOCKS5 订阅源
     </button>
     <button id="stopAllExitsBtn">全部停止</button>
   </div>
@@ -314,6 +322,69 @@ textarea{width:100%;min-height:280px;background:#0d1117;border:1px solid var(--l
   </div>
 </div>
 
+<!-- Modal 6: 添加自定义 SOCKS5 出口 -->
+<div class="modal" id="customExitModal">
+  <div class="sheet">
+    <div class="head">
+      <h2>添加自定义 SOCKS5 出口</h2>
+      <span class="spacer"></span>
+      <button class="icon" data-close="customExitModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="body">
+      <label class="f">
+        <span>快捷导入 (socks5:// 链接或 host:port:user:pass)</span>
+        <input type="text" id="csRawUrl" placeholder="如 socks5://user:pass@1.2.3.4:1080#香港家宽">
+      </label>
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-top:10px">
+        <label class="f"><span>服务器地址 (IP 或域名)</span><input type="text" id="csHost" placeholder="如 123.45.67.89"></label>
+        <label class="f"><span>端口</span><input type="text" id="csPort" inputmode="numeric" placeholder="如 1080"></label>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">
+        <label class="f"><span>用户名 (可选)</span><input type="text" id="csUser" placeholder="留空为无认证"></label>
+        <label class="f"><span>密码 (可选)</span><input type="password" id="csPass" placeholder="留空为无认证"></label>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">
+        <label class="f"><span>地区/国家标识</span><input type="text" id="csCountry" placeholder="如 香港 / 日本 / 美国 / 自定义"></label>
+        <label class="f"><span>节点备注名</span><input type="text" id="csRemark" placeholder="如 私人住宅S5"></label>
+      </div>
+      <div id="csTestResult" style="min-height:20px;font-size:12px;margin-top:8px"></div>
+    </div>
+    <div class="foot">
+      <button id="csTestBtn">测试连通性</button>
+      <span class="spacer"></span>
+      <button data-close="customExitModal">取消</button>
+      <button class="primary" id="saveCustomExitBtn">添加并启用</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal 7: SOCKS5 订阅源管理 -->
+<div class="modal" id="customSourceModal">
+  <div class="sheet" style="max-width:580px">
+    <div class="head">
+      <h2>SOCKS5 订阅源管理</h2>
+      <span class="spacer"></span>
+      <button class="icon" data-close="customSourceModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="body">
+      <div style="background:#181c23;border:1px solid var(--line);border-radius:6px;padding:12px;margin-bottom:16px">
+        <div style="font-weight:600;margin-bottom:8px;font-size:13px">添加新源</div>
+        <div style="display:grid;grid-template-columns:1fr 2fr auto;gap:8px">
+          <input type="text" id="srcName" placeholder="源名称 (如 我的代理池)">
+          <input type="text" id="srcURL" placeholder="订阅/API 链接 (http/https)">
+          <button class="primary" id="addSourceBtn">添加</button>
+        </div>
+      </div>
+      <div style="font-weight:600;font-size:13px;margin-bottom:8px">已添加的源列表</div>
+      <div id="sourcesContainer" style="display:flex;flex-direction:column;gap:8px"></div>
+    </div>
+    <div class="foot">
+      <span class="spacer"></span>
+      <button data-close="customSourceModal">关闭</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -389,19 +460,24 @@ function renderExits(){
     const label = e.exit_ip || (e.status === 'starting' ? '连接中…' : '—');
     const place = (e.country && e.country.toUpperCase() !== (e.region||'').toUpperCase())
       ? (e.region + ' ' + e.country) : (e.region || '—');
+    const kindBadge = e.kind === 'custom'
+      ? '<span style="background:#1f6feb;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600">自定义 S5</span>'
+      : '<span style="background:#238636;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600">VPN Gate</span>';
     const pingBadge = e.ping > 0 ? ('<span class="metric-tag ping" title="延迟">' + e.ping + ' ms</span>') : '';
     const speedBadge = e.speed_mbps > 0 ? ('<span class="metric-tag speed" title="带宽">' + e.speed_mbps.toFixed(0) + ' Mbps</span>') : '';
+    const swapBtn = e.kind === 'custom' ? '' : ('<button class="icon" data-swap="' + e.slot + '" title="换一个同国家/地区节点">' + ICON.redo + '</button>');
     return '<div class="exit-row">'
       + '<span class="dot ' + e.status + '" title="' + e.status + '"></span>'
       + '<span class="exit-ip">' + esc(label) + '</span>'
+      + kindBadge
       + '<div class="exit-meta">'
       +   '<span>' + esc(place) + ' · ' + esc(e.host) + '</span>'
       +   pingBadge
       +   speedBadge
-      +   '<button class="chip-btn" data-cred="' + e.slot + '" title="查看 SOCKS5 凭据">' + ICON.lock + ' SOCKS5 :' + e.port + '</button>'
+      +   '<button class="chip-btn" data-cred="' + e.slot + '" title="查看/修改 SOCKS5 凭据">' + ICON.lock + ' SOCKS5 :' + e.port + '</button>'
       + '</div>'
       + '<div class="branch-acts">'
-      +   '<button class="icon" data-swap="' + e.slot + '" title="换一个同国家/地区节点">' + ICON.redo + '</button>'
+      +   swapBtn
       +   '<button class="icon danger" data-stop="' + e.slot + '" title="停止此出口">' + ICON.trash + '</button>'
       + '</div>'
       + '</div>';
@@ -720,6 +796,186 @@ $('#saveSettingsBtn').onclick = async e => {
     closeModal('settingsModal');
   }catch(err){ toast(err.message, true); }
   e.target.disabled = false;
+};
+
+// ---- 自定义 SOCKS5 出口相关 ----
+$('#openCustomExitModalBtn').onclick = () => {
+  $('#csRawUrl').value = '';
+  $('#csHost').value = '';
+  $('#csPort').value = '';
+  $('#csUser').value = '';
+  $('#csPass').value = '';
+  $('#csCountry').value = '';
+  $('#csRemark').value = '';
+  $('#csTestResult').innerHTML = '';
+  openModal('customExitModal');
+};
+
+$('#csRawUrl').oninput = () => {
+  const raw = $('#csRawUrl').value.trim();
+  if(!raw) return;
+  try{
+    if(raw.startsWith('socks5://') || raw.startsWith('socks://')){
+      const u = new URL(raw);
+      $('#csHost').value = u.hostname;
+      $('#csPort').value = u.port || 1080;
+      $('#csUser').value = u.username || '';
+      $('#csPass').value = u.password || '';
+      if(u.hash){
+        $('#csRemark').value = decodeURIComponent(u.hash.replace(/^#/, ''));
+      }
+    } else {
+      const parts = raw.split(':');
+      if(parts.length >= 2){
+        $('#csHost').value = parts[0];
+        $('#csPort').value = parts[1];
+        if(parts.length >= 4){
+          $('#csUser').value = parts[2];
+          $('#csPass').value = parts[3];
+        }
+      }
+    }
+  }catch(e){}
+};
+
+$('#csTestBtn').onclick = async e => {
+  const host = $('#csHost').value.trim();
+  const port = parseInt($('#csPort').value.trim(), 10);
+  if(!host || !port){ toast('请填写地址和端口', true); return; }
+  e.target.disabled = true;
+  $('#csTestResult').innerHTML = '<span style="color:var(--dim)">正在连接并探测出口 IP...</span>';
+  try{
+    const res = await api('/api/custom/socks/test', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        host: host,
+        port: port,
+        user: $('#csUser').value.trim(),
+        pass: $('#csPass').value.trim(),
+      }),
+    });
+    $('#csTestResult').innerHTML = '<span style="color:var(--ok)">✓ 连通成功！出口 IP: ' + esc(res.exit_ip) + ' (' + res.ping + ' ms)</span>';
+  }catch(err){
+    $('#csTestResult').innerHTML = '<span style="color:var(--danger)">✗ 连接失败: ' + esc(err.message) + '</span>';
+  }
+  e.target.disabled = false;
+};
+
+$('#saveCustomExitBtn').onclick = async e => {
+  const host = $('#csHost').value.trim();
+  const port = parseInt($('#csPort').value.trim(), 10);
+  if(!host || !port){ toast('请填写服务器地址和端口', true); return; }
+  e.target.disabled = true;
+  try{
+    await api('/api/custom/socks/add', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        host: host,
+        port: port,
+        user: $('#csUser').value.trim(),
+        pass: $('#csPass').value.trim(),
+        country: $('#csCountry').value.trim() || '自定义',
+        country_code: 'CUSTOM',
+        remark: $('#csRemark').value.trim() || host,
+      }),
+    });
+    toast('自定义 SOCKS5 出口已添加并启用');
+    closeModal('customExitModal');
+    poll();
+  }catch(err){ toast(err.message, true); }
+  e.target.disabled = false;
+};
+
+// ---- SOCKS5 订阅源管理相关 ----
+async function loadSourcesList(){
+  const box = $('#sourcesContainer');
+  try{
+    const list = await api('/api/custom/source/list');
+    if(!list || !list.length){
+      box.innerHTML = '<div style="color:var(--dim);font-size:12px;text-align:center;padding:12px">暂无订阅源，请在上方添加</div>';
+      return;
+    }
+    box.innerHTML = list.map(s => {
+      return '<div style="background:#12151a;border:1px solid var(--line);border-radius:4px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between">'
+        + '<div>'
+        +   '<div style="font-weight:600;font-size:13px">' + esc(s.name) + ' <span style="font-size:11px;color:var(--ok);margin-left:6px">' + s.count + ' 个节点</span></div>'
+        +   '<div style="font-size:11px;color:var(--dim);margin-top:2px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(s.url) + '</div>'
+        + '</div>'
+        + '<div style="display:flex;gap:6px">'
+        +   '<button class="chip-btn" data-import-src="' + esc(s.id) + '" title="从该源导入节点并启用出口">启用出口</button>'
+        +   '<button class="icon" data-refresh-src="' + esc(s.id) + '" title="刷新源节点">' + ICON.redo + '</button>'
+        +   '<button class="icon danger" data-del-src="' + esc(s.id) + '" title="删除此源">' + ICON.trash + '</button>'
+        + '</div>'
+        + '</div>';
+    }).join('');
+  }catch(err){ box.innerHTML = '<div style="color:var(--danger)">加载失败: ' + esc(err.message) + '</div>'; }
+}
+
+$('#openCustomSourceModalBtn').onclick = () => {
+  $('#srcName').value = '';
+  $('#srcURL').value = '';
+  openModal('customSourceModal');
+  loadSourcesList();
+};
+
+$('#addSourceBtn').onclick = async e => {
+  const name = $('#srcName').value.trim();
+  const url = $('#srcURL').value.trim();
+  if(!name || !url){ toast('请填写源名称和 URL', true); return; }
+  e.target.disabled = true;
+  try{
+    const res = await api('/api/custom/source/add', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name: name, url: url}),
+    });
+    toast('源添加成功，已解析 ' + res.count + ' 个节点');
+    $('#srcName').value = '';
+    $('#srcURL').value = '';
+    loadSourcesList();
+  }catch(err){ toast(err.message, true); }
+  e.target.disabled = false;
+};
+
+$('#sourcesContainer').onclick = async e => {
+  const imp = e.target.closest('[data-import-src]');
+  if(imp){
+    const id = imp.dataset.importSrc;
+    imp.disabled = true;
+    try{
+      const res = await api('/api/custom/source/import?id=' + encodeURIComponent(id), {method:'POST'});
+      toast('已从源中启用出口: ' + esc(res.exit_ip));
+      closeModal('customSourceModal');
+      poll();
+    }catch(err){ toast(err.message, true); }
+    imp.disabled = false;
+    return;
+  }
+
+  const ref = e.target.closest('[data-refresh-src]');
+  if(ref){
+    const id = ref.dataset.refreshSrc;
+    try{
+      const res = await api('/api/custom/source/refresh?id=' + encodeURIComponent(id), {method:'POST'});
+      toast('源已更新，当前 ' + res.count + ' 个节点');
+      loadSourcesList();
+    }catch(err){ toast(err.message, true); }
+    return;
+  }
+
+  const del = e.target.closest('[data-del-src]');
+  if(del){
+    if(!confirm('确定删除此源？')) return;
+    const id = del.dataset.delSrc;
+    try{
+      await api('/api/custom/source/delete?id=' + encodeURIComponent(id), {method:'POST'});
+      toast('源已删除');
+      loadSourcesList();
+    }catch(err){ toast(err.message, true); }
+    return;
+  }
 };
 
 poll();
