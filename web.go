@@ -244,23 +244,25 @@ textarea{width:100%;min-height:280px;background:#0d1117;border:1px solid var(--l
   </div>
 </div>
 
-<!-- Modal 3: SOCKS5 凭据 -->
+<!-- Modal 3: SOCKS5 凭据与端口设置 -->
 <div class="modal" id="credModal">
   <div class="sheet">
     <div class="head">
-      <h2>SOCKS5 出口凭据</h2>
+      <h2>SOCKS5 出口凭据与配置</h2>
       <span class="spacer"></span>
       <button class="icon" data-close="credModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
     <div class="body">
       <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#0d1117;padding:10px;border-radius:6px;border:1px solid var(--line);word-break:break-all;margin-bottom:12px" id="credURL"></div>
-      <label class="f"><span>用户名</span><input id="crUser" type="text"></label>
-      <label class="f"><span>密码</span><input id="crPass" type="text"></label>
+      <label class="f"><span>用户名</span><input id="crUser" type="text" placeholder="输入用户名"></label>
+      <label class="f"><span>密码</span><input id="crPass" type="text" placeholder="输入密码"></label>
+      <label class="f"><span>SOCKS5 端口</span><input id="crPort" type="text" inputmode="numeric" placeholder="如 43440"></label>
     </div>
     <div class="foot">
       <button id="copyCredBtn">复制连接串</button>
       <span class="spacer"></span>
-      <button data-close="credModal">关闭</button>
+      <button data-close="credModal">取消</button>
+      <button class="primary" id="saveCredBtn">保存修改</button>
     </div>
   </div>
 </div>
@@ -528,6 +530,7 @@ document.addEventListener('click', async e => {
       $('#credURL').textContent = url;
       $('#crUser').value = ex.socks_user || '';
       $('#crPass').value = ex.socks_pass || '';
+      $('#crPort').value = ex.port || '';
       openModal('credModal');
     }
   }
@@ -629,7 +632,47 @@ $('#startProvisionBtn').onclick = async e => {
 
 $('#refreshNodesBtn').onclick = () => { toast('已刷新'); poll(); };
 
+const updateCredPreview = () => {
+  if(!curCred) return;
+  const host = viewData.public_ip || location.hostname;
+  const u = $('#crUser').value.trim();
+  const p = $('#crPass').value.trim();
+  const pt = $('#crPort').value.trim() || curCred.port;
+  const auth = (u || p) ? (u + ':' + p + '@') : '';
+  $('#credURL').textContent = 'socks5://' + auth + host + ':' + pt;
+};
+$('#crUser').oninput = updateCredPreview;
+$('#crPass').oninput = updateCredPreview;
+$('#crPort').oninput = updateCredPreview;
+
 $('#copyCredBtn').onclick = () => copy($('#credURL').textContent);
+
+$('#saveCredBtn').onclick = async e => {
+  if(!curCred) return;
+  e.target.disabled = true;
+  const user = $('#crUser').value.trim();
+  const pass = $('#crPass').value.trim();
+  const port = parseInt($('#crPort').value.trim(), 10);
+  if(!user || !pass){ toast('用户名和密码不能为空', true); e.target.disabled = false; return; }
+  if(!port || port < 1 || port > 65535){ toast('端口不合法 (1-65535)', true); e.target.disabled = false; return; }
+  
+  try{
+    await api('/api/cred', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        slot: curCred.slot,
+        user: user,
+        pass: pass,
+        port: port,
+      }),
+    });
+    toast('SOCKS5 凭据与端口已保存');
+    closeModal('credModal');
+    poll();
+  }catch(err){ toast(err.message, true); }
+  e.target.disabled = false;
+};
 
 $('#exportAll').onclick = () => {
   const subURL = new URL('sub', location.href).href;

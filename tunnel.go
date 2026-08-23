@@ -240,6 +240,43 @@ func (t *Tunnel) setCredential(c SocksCred) {
 	t.Cred = c
 }
 
+// switchPort 动态切换隧道 SOCKS5 监听端口
+func (t *Tunnel) switchPort(newPort int) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if newPort == t.Port && t.listener != nil {
+		return nil
+	}
+
+	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", newPort))
+	if err != nil {
+		return fmt.Errorf("无法监听端口 %d: %w", newPort, err)
+	}
+
+	oldLn := t.listener
+	t.listener = ln
+	t.Port = newPort
+
+	if oldLn != nil {
+		_ = oldLn.Close()
+	}
+
+	dial := dialerInNetns(t.nsName())
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			cred := t.credential()
+			go serveSocks(conn, &cred, dial)
+		}
+	}()
+
+	return nil
+}
+
 // probeExitIP 通过隧道查询出口 IP，用于确认这条隧道确实换了 IP。
 func (t *Tunnel) probeExitIP() (string, error) {
 	out, err := exec.Command("ip", "netns", "exec", t.nsName(),

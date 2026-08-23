@@ -314,22 +314,45 @@ func (m *Manager) StopAll() {
 }
 
 func (m *Manager) SetCred(slot int, cred SocksCred) (SocksCred, error) {
+	c, _, err := m.UpdateTunnelConfig(slot, cred, 0)
+	return c, err
+}
+
+func (m *Manager) UpdateTunnelConfig(slot int, cred SocksCred, newPort int) (SocksCred, int, error) {
 	m.mu.RLock()
 	t, ok := m.tunnels[slot]
 	m.mu.RUnlock()
 	if !ok {
-		return SocksCred{}, fmt.Errorf("槽位 %d 没有在运行", slot)
+		return SocksCred{}, 0, fmt.Errorf("槽位 %d 没有在运行", slot)
 	}
 
 	if cred.User == "" && cred.Pass == "" {
 		gen, err := newSocksCred()
 		if err != nil {
-			return SocksCred{}, err
+			return SocksCred{}, 0, err
 		}
 		cred = gen
 	}
 	if err := validateCred(cred); err != nil {
-		return SocksCred{}, err
+		return SocksCred{}, 0, err
+	}
+
+	if newPort > 0 && newPort != t.Port {
+		if newPort < 1 || newPort > 65535 {
+			return SocksCred{}, 0, fmt.Errorf("端口 %d 无效", newPort)
+		}
+		m.mu.RLock()
+		for s, ot := range m.tunnels {
+			if s != slot && ot.Port == newPort {
+				m.mu.RUnlock()
+				return SocksCred{}, 0, fmt.Errorf("端口 %d 已被槽位 %d 占用", newPort, s)
+			}
+		}
+		m.mu.RUnlock()
+
+		if err := t.switchPort(newPort); err != nil {
+			return SocksCred{}, 0, err
+		}
 	}
 
 	t.setCredential(cred)
@@ -337,7 +360,7 @@ func (m *Manager) SetCred(slot int, cred SocksCred) (SocksCred, error) {
 		log.Printf("保存状态失败: %v", err)
 	}
 	m.syncCred(t)
-	return cred, nil
+	return cred, t.Port, nil
 }
 
 func (m *Manager) ReconcileOutbounds() {

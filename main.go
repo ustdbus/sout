@@ -250,23 +250,61 @@ func apiRegions(m *Manager) http.HandlerFunc {
 
 func apiCred(m *Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		slot, err := strconv.Atoi(q.Get("slot"))
-		if err != nil {
+		var slot int
+		var user, pass string
+		var port int
+
+		if r.Method == http.MethodPost {
+			var body struct {
+				Slot int    `json:"slot"`
+				User string `json:"user"`
+				Pass string `json:"pass"`
+				Port int    `json:"port"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				_ = r.ParseForm()
+				slot, _ = strconv.Atoi(r.FormValue("slot"))
+				user = r.FormValue("user")
+				pass = r.FormValue("pass")
+				port, _ = strconv.Atoi(r.FormValue("port"))
+			} else {
+				slot = body.Slot
+				user = body.User
+				pass = body.Pass
+				port = body.Port
+			}
+		} else {
+			q := r.URL.Query()
+			var err error
+			slot, err = strconv.Atoi(q.Get("slot"))
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "slot 参数无效"})
+				return
+			}
+			user = q.Get("user")
+			pass = q.Get("pass")
+			port, _ = strconv.Atoi(q.Get("port"))
+		}
+
+		if slot <= 0 {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "slot 参数无效"})
 			return
 		}
-		cred, err := m.SetCred(slot, SocksCred{
-			User: strings.TrimSpace(q.Get("user")),
-			Pass: strings.TrimSpace(q.Get("pass")),
-		})
+
+		cred, finalPort, err := m.UpdateTunnelConfig(slot, SocksCred{
+			User: strings.TrimSpace(user),
+			Pass: strings.TrimSpace(pass),
+		}, port)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":   "已保存",
 			"user": cred.User,
 			"pass": cred.Pass,
+			"port": finalPort,
 		})
 	}
 }
