@@ -382,30 +382,20 @@ menu() {
     echo -e "   1) 启动服务          2) 停止服务"
     echo -e "   3) 重启服务          4) 查看运行日志"
     echo
-    echo -e "   5) 查看出口隧道      6) 查看连接信息"
-    echo
+    echo -e "   5) 开关开机自启      6) 查看出口隧道"
     echo -e "   7) 修改面板端口      8) 修改监听地址"
     echo -e "   9) 重置访问口令     10) 重置访问路径"
-    echo -e "  11) 面板 URL 设置"
-    echo
-    echo -e "  12) 开关开机自启     13) 彻底卸载 sout"
+    echo -e "  11) 面板 URL 设置    12) 彻底卸载 sout"
     echo -e "   0) 退出脚本"
     echo -e "${D}----------------------------------------${N}"
-    read -rp "  请选择 [0-13]: " choice
+    read -rp "  请选择 [0-12]: " choice
 
     case "$choice" in
       1) svc_start   && echo -e "\n  ${G}已启动${N}"; pause ;;
       2) svc_stop    && echo -e "\n  ${Y}已停止${N}"; pause ;;
       3) svc_restart && echo -e "\n  ${G}已重启${N}"; pause ;;
       4) echo; svc_logs 40; pause ;;
-      5) list_tunnels; pause ;;
-      6) show_info; pause ;;
-      7) change_port; pause ;;
-      8) change_listen_addr; pause ;;
-      9) reset_password; pause ;;
-      10) reset_basepath; pause ;;
-      11) change_panel_url; pause ;;
-      12)
+      5)
         if svc_is_enabled; then
           svc_disable
           echo -e "\n  ${Y}已关闭开机自启${N}"
@@ -414,7 +404,13 @@ menu() {
           echo -e "\n  ${G}已开启开机自启${N}"
         fi
         pause ;;
-      13) do_uninstall; pause ;;
+      6) list_tunnels; pause ;;
+      7) change_port; pause ;;
+      8) change_listen_addr; pause ;;
+      9) reset_password; pause ;;
+      10) reset_basepath; pause ;;
+      11) change_panel_url; pause ;;
+      12) do_uninstall; pause ;;
       0) exit 0 ;;
       *) ;;
     esac
