@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-const updateRepo = "byJoey/fanout"
+const updateRepo = "ustdbus/sout"
 
 // releaseInfo 是 GitHub Releases API 里我们关心的字段。
 type releaseInfo struct {
@@ -150,7 +150,7 @@ func applyUpdate() error {
 	}
 
 	arch := assetArch()
-	assetName := fmt.Sprintf("fanout-linux-%s.tar.gz", arch)
+	assetName := fmt.Sprintf("sout-linux-%s.tar.gz", arch)
 	var assetURL, sumsURL string
 	for _, a := range rel.Assets {
 		switch a.Name {
