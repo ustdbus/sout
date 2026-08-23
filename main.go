@@ -299,8 +299,10 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 				}
 			}
 			if in.PanelURL != nil {
+				u := strings.TrimSpace(*in.PanelURL)
+				u = strings.TrimRight(u, "/")
 				next := getWebSettings()
-				next.PanelURL = strings.TrimSpace(*in.PanelURL)
+				next.PanelURL = u
 				webSettingsMu.Lock()
 				webSettingsCur = next
 				webSettingsMu.Unlock()

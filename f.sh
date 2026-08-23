@@ -82,7 +82,7 @@ pause() {
 }
 
 show_info() {
-  local st la port bp pw pip purl
+  local st la port bp pw pip purl full_url
   st=$(svc_status)
   la=$(web_listen_addr)
   port=$(web_port)
@@ -90,6 +90,14 @@ show_info() {
   pw=$(web_password)
   pip=$(public_ip)
   purl=$(web_panel_url)
+
+  # 规范化路径与面板基础 URL
+  bp="/${bp#/}"
+  [[ "$bp" != */ ]] && bp="${bp}/"
+  if [[ -n "$purl" ]]; then
+    purl="${purl%/}"
+    full_url="${purl}${bp}"
+  fi
 
   echo
   if [[ "$st" == "active" ]]; then
@@ -101,16 +109,16 @@ show_info() {
   
   if [[ "$la" == "127.0.0.1" ]]; then
     echo -e "  监听地址:    ${Y}127.0.0.1 (本地反向代理模式)${N}"
-    if [[ -n "$purl" ]]; then
-      echo -e "  本地地址:    ${B}${purl}${N}"
+    if [[ -n "$full_url" ]]; then
+      echo -e "  本地地址:    ${B}${full_url}${N}"
     else
       echo -e "  本地地址:    ${B}http://127.0.0.1:${port}${bp}${N}"
       echo -e "  公网访问:    ${D}(仅能通过您配置的反向代理域名访问)${N}"
     fi
   else
     echo -e "  监听地址:    ${G}0.0.0.0 (所有公网网卡)${N}"
-    if [[ -n "$purl" ]]; then
-      echo -e "  管理面板:    ${B}${purl}${N}"
+    if [[ -n "$full_url" ]]; then
+      echo -e "  管理面板:    ${B}${full_url}${N}"
     else
       echo -e "  管理面板:    ${B}http://${pip}:${port}${bp}${N}"
     fi
@@ -218,8 +226,10 @@ change_panel_url() {
   cur=$(web_panel_url)
   echo
   echo -e "  当前面板 URL: ${B}${cur:-(未设置)}${N}"
-  read -rp "  请输入新面板 URL (如 https://example.com/xxxx/，留空清除): " new_url
+  read -rp "  请输入新面板 URL (如 https://example.com 或 https://example.com/，留空清除): " new_url
   new_url=$(echo "$new_url" | tr -d ' \r\n')
+  # 去除结尾所有斜杠
+  new_url=$(echo "$new_url" | sed -e 's:/*$::')
 
   python3 -c "
 import json, os
@@ -239,7 +249,7 @@ with open(path, 'w') as f:
 "
   svc_restart
   if [[ -n "$new_url" ]]; then
-    echo -e "  ${G}面板 URL 已更新为: ${new_url}${N}"
+    echo -e "  ${G}面板基础 URL 已更新为: ${new_url}${N}"
   else
     echo -e "  ${Y}已清除自定义面板 URL，恢复默认显示${N}"
   fi

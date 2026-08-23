@@ -301,8 +301,8 @@ textarea{width:100%;min-height:280px;background:#0d1117;border:1px solid var(--l
           <option value="127.0.0.1">127.0.0.1 (仅本地，用于 Nginx / 1Panel 等反向代理)</option>
         </select>
       </label>
-      <label class="f"><span>面板 URL (反代域名/完整地址)</span>
-        <input id="setPanelUrl" type="text" placeholder="如 https://example.com/xxxx/ 或留空"></label>
+      <label class="f"><span>面板 URL (如 https://example.com 或 https://example.com/，不带路径)</span>
+        <input id="setPanelUrl" type="text" placeholder="如 https://example.com 或 https://example.com/"></label>
     </div>
     <div class="foot">
       <span class="spacer"></span>
