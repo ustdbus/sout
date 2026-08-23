@@ -1189,12 +1189,12 @@ func apiCustomSourceRefresh(m *Manager) http.HandlerFunc {
 			return
 		}
 		if id == "builtin-vpngate" {
-			nodes, err := m.RefreshNodes()
+			count, err := m.RefreshNodes()
 			if err != nil {
 				writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("刷新官方源失败: %v", err)})
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(nodes)})
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": count})
 			return
 		}
 		if globalCustomStore == nil {
