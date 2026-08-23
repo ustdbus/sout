@@ -99,7 +99,14 @@ show_info() {
     full_url="${purl}${bp}"
   fi
 
+  local cur_ver="dev"
+  if [[ -x "$BIN" ]]; then
+    cur_ver=$("$BIN" -version 2>/dev/null | awk '{print $NF}' || echo "dev")
+  fi
+  [[ -z "$cur_ver" ]] && cur_ver="dev"
+
   echo
+  echo -e "  程序版本:    ${G}${cur_ver}${N}"
   if [[ "$st" == "active" ]]; then
     echo -e "  服务状态:    ${G}运行中 (active)${N}"
   else
@@ -381,6 +388,84 @@ do_uninstall() {
   exit 0
 }
 
+check_and_update() {
+  echo
+  echo -e "  ${B}正在连接 GitHub 检查最新版本...${N}"
+  local cur_ver="dev"
+  if [[ -x "$BIN" ]]; then
+    cur_ver=$("$BIN" -version 2>/dev/null | awk '{print $NF}' || echo "dev")
+  fi
+  [[ -z "$cur_ver" ]] && cur_ver="dev"
+
+  local rel_json tag_name html_url
+  rel_json=$(curl -fsSLm 8 "https://api.github.com/repos/ustdbus/sout/releases/latest" 2>/dev/null || true)
+  if [[ -z "$rel_json" ]]; then
+    echo -e "  ${R}检查更新失败，无法连接 GitHub API${N}"
+    return
+  fi
+
+  tag_name=$(echo "$rel_json" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | cut -d'"' -f4)
+  html_url=$(echo "$rel_json" | grep -oE '"html_url"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | cut -d'"' -f4)
+
+  if [[ -z "$tag_name" ]]; then
+    echo -e "  ${R}未能获取到最新版本信息${N}"
+    return
+  fi
+
+  echo -e "  当前安装版本: ${Y}${cur_ver}${N}"
+  echo -e "  GitHub 最新版: ${G}${tag_name}${N}"
+
+  if [[ "$cur_ver" == "$tag_name" && "$cur_ver" != "dev" ]]; then
+    echo -e "  ${G}当前已是最新版本！${N}"
+    read -rp "  是否仍要重新下载并覆盖安装此版本？[y/N]: " force_up
+    [[ ${force_up,,} == y ]] || return
+  else
+    echo -e "  ${G}发现新版本 ${tag_name}！${N}"
+    read -rp "  是否立即更新到最新版本？[Y/n]: " do_up
+    [[ ${do_up,,} == n ]] && return
+  fi
+
+  echo -e "  正在更新 sout 到 ${tag_name}..."
+  local arch uname_m
+  uname_m=$(uname -m)
+  case "$uname_m" in
+    x86_64|amd64) arch="amd64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    *) echo -e "  ${R}不支持的系统架构: $uname_m${N}"; return ;;
+  esac
+
+  local tar_url="https://github.com/ustdbus/sout/releases/download/${tag_name}/sout-linux-${arch}.tar.gz"
+  local tmp_dir
+  tmp_dir=$(mktemp -d)
+  trap 'rm -rf "$tmp_dir"' RETURN
+
+  echo -e "  正在下载: ${tar_url} ..."
+  if ! curl -fsSL "$tar_url" -o "$tmp_dir/sout.tar.gz"; then
+    echo -e "  ${R}下载发布包失败！${N}"
+    return
+  fi
+
+  tar -zxf "$tmp_dir/sout.tar.gz" -C "$tmp_dir"
+  if [[ -f "$tmp_dir/fanout" ]]; then
+    cp -f "$tmp_dir/fanout" "$BIN"
+    chmod +x "$BIN"
+    ln -sf "$BIN" /usr/local/bin/sout
+  elif [[ -f "$tmp_dir/sout" ]]; then
+    cp -f "$tmp_dir/sout" "$BIN"
+    chmod +x "$BIN"
+    ln -sf "$BIN" /usr/local/bin/sout
+  fi
+
+  if [[ -f "$tmp_dir/f.sh" ]]; then
+    cp -f "$tmp_dir/f.sh" /usr/local/bin/f
+    chmod +x /usr/local/bin/f
+    ln -sf /usr/local/bin/f /usr/local/bin/sout-cli 2>/dev/null || true
+  fi
+
+  svc_restart
+  echo -e "  ${G}恭喜！sout 已成功更新至 ${tag_name}，服务已自动重启生效。${N}"
+}
+
 menu() {
   while true; do
     clear
@@ -395,10 +480,11 @@ menu() {
     echo -e "   5) 开关开机自启      6) 查看出口隧道"
     echo -e "   7) 修改面板端口      8) 修改监听地址"
     echo -e "   9) 重置访问口令     10) 重置访问路径"
-    echo -e "  11) 面板 URL 设置    12) 彻底卸载 sout"
+    echo -e "  11) 面板 URL 设置    12) 检查/更新版本"
+    echo -e "  13) 彻底卸载 sout"
     echo -e "   0) 退出脚本"
     echo -e "${D}----------------------------------------${N}"
-    read -rp "  请选择 [0-12]: " choice
+    read -rp "  请选择 [0-13]: " choice
 
     case "$choice" in
       1) svc_start   && echo -e "\n  ${G}已启动${N}"; pause ;;
@@ -420,7 +506,8 @@ menu() {
       9) reset_password; pause ;;
       10) reset_basepath; pause ;;
       11) change_panel_url; pause ;;
-      12) do_uninstall; pause ;;
+      12) check_and_update; pause ;;
+      13) do_uninstall; pause ;;
       0) exit 0 ;;
       *) ;;
     esac
@@ -439,10 +526,12 @@ case "${1:-}" in
   list)      list_tunnels ;;
   listen)    change_listen_addr ;;
   url)       change_panel_url ;;
+  update)    check_and_update ;;
+  upgrade)   check_and_update ;;
   uninstall) do_uninstall ;;
   "")        menu ;;
   *)
-    echo "用法: sout [start|stop|restart|status|log|info|list|listen|url|uninstall]"
+    echo "用法: sout [start|stop|restart|status|log|info|list|listen|url|update|uninstall]"
     echo "直接在终端输入 sout 或 f 即可进入交互控制菜单"
     ;;
 esac

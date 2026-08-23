@@ -304,7 +304,8 @@ func extractBinary(tarGz, member, dst string) error {
 		if err != nil {
 			return err
 		}
-		if filepath.Base(hd.Name) != member {
+		base := filepath.Base(hd.Name)
+		if base != member && !(member == "fanout" && base == "sout") && !(member == "sout" && base == "fanout") {
 			continue
 		}
 		out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)

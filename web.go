@@ -313,6 +313,17 @@ textarea{width:100%;min-height:280px;background:#0d1117;border:1px solid var(--l
       </label>
       <label class="f"><span>面板 URL (如 https://example.com 或 https://example.com/，不带路径)</span>
         <input id="setPanelUrl" type="text" placeholder="如 https://example.com 或 https://example.com/"></label>
+
+      <div style="border-top:1px solid var(--line);margin-top:14px;padding-top:14px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div>
+            <div style="font-weight:600;font-size:13px">版本与系统更新</div>
+            <div id="updateCurVer" style="font-size:12px;color:var(--dim)">当前版本: 点击右侧按钮检查</div>
+          </div>
+          <button type="button" id="checkUpdateBtn" style="font-size:12px;padding:5px 10px">检查更新</button>
+        </div>
+        <div id="updateInfoBox" style="display:none;background:#12151a;border:1px solid var(--line);border-radius:4px;padding:10px;margin-top:8px;font-size:12px"></div>
+      </div>
     </div>
     <div class="foot">
       <span class="spacer"></span>
@@ -795,6 +806,40 @@ $('#saveSettingsBtn').onclick = async e => {
     toast('设置已保存');
     closeModal('settingsModal');
   }catch(err){ toast(err.message, true); }
+  e.target.disabled = false;
+};
+
+$('#checkUpdateBtn').onclick = async e => {
+  e.target.disabled = true;
+  const box = $('#updateInfoBox');
+  box.style.display = 'block';
+  box.innerHTML = '<span style="color:var(--dim)">正在连接 GitHub 检查最新版本...</span>';
+  try{
+    const st = await api('/api/update/check');
+    $('#updateCurVer').textContent = '当前版本: ' + (st.current || 'dev');
+    if(st.has_update){
+      box.innerHTML = '<div style="color:var(--ok);font-weight:600;margin-bottom:4px">发现新版本: ' + esc(st.latest) + '</div>'
+        + '<div style="color:var(--dim);margin-bottom:8px;max-height:80px;overflow-y:auto;white-space:pre-wrap">' + esc(st.notes || '暂无更新日志') + '</div>'
+        + '<button class="primary" id="applyUpdateBtn" style="font-size:12px;padding:4px 10px">立即一键更新</button>';
+      $('#applyUpdateBtn').onclick = async btn => {
+        btn.target.disabled = true;
+        btn.target.textContent = '正在下载与更新...';
+        try{
+          await api('/api/update/apply', {method:'POST'});
+          toast('更新成功，服务正在重启...');
+          setTimeout(() => location.reload(), 3000);
+        }catch(err){
+          toast('更新失败: ' + err.message, true);
+          btn.target.disabled = false;
+          btn.target.textContent = '立即一键更新';
+        }
+      };
+    } else {
+      box.innerHTML = '<span style="color:var(--ok)">✓ 当前已是最新版本 (' + esc(st.latest || st.current) + ')</span>';
+    }
+  }catch(err){
+    box.innerHTML = '<span style="color:var(--danger)">✗ 检查更新失败: ' + esc(err.message) + '</span>';
+  }
   e.target.disabled = false;
 };
 
