@@ -294,7 +294,7 @@ func (s *SUI) callAPI(method, endpoint string, form url.Values) ([]byte, error) 
 
 // cleanLegacyClonedInbounds 自动清理早期版本克隆的多端口入站与遗留规则
 func (s *SUI) cleanLegacyClonedInbounds() {
-	rawJSON, err := s.sqliteJSONQuery("SELECT id, tag FROM inbounds WHERE tag LIKE '%家宽%';")
+	rawJSON, err := s.sqliteJSONQuery("SELECT id, tag FROM inbounds WHERE tag LIKE '%家宽%' OR tag LIKE '%机房%';")
 	if err != nil || len(rawJSON) == 0 {
 		return
 	}
@@ -745,12 +745,16 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		}
 
 		cName := "海外"
+		poolName := "家宽"
 		if targetTunnel != nil {
 			cName = countryNameCN(targetTunnel.Node.CountryCode, targetTunnel.Node.Country)
+			if targetTunnel.IPType == "datacenter" {
+				poolName = "机房"
+			}
 		}
 
 		clientName := fmt.Sprintf("fanout-u-%d-%s", templateID, sanitizeTag(host))
-		clientRemark := fmt.Sprintf("%s家宽", cName)
+		clientRemark := fmt.Sprintf("%s%s", cName, poolName)
 
 		existingClientID := s.sqliteQuery(fmt.Sprintf("SELECT id FROM clients WHERE name='%s' LIMIT 1;", clientName))
 		if existingClientID == "" {

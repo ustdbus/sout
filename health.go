@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	healthInterval = 10 * time.Second
-	healthFailures = 2 // 连续失败几次才判定掉线，避免网络抖动误杀
-	healthTimeout  = 6 * time.Second
+	healthInterval = 15 * time.Second
+	healthFailures = 3 // 连续失败 3 次才判定掉线，避免网络抖动或公共 API 限流误杀
+	healthTimeout  = 8 * time.Second
 )
 
 // WatchHealth 周期检查每条隧道是否还能出网，掉线的自动换节点重连。
@@ -83,15 +83,23 @@ func (m *Manager) tunnelHealthy(t *Tunnel) bool {
 // 改过 t.Node（比如手动换节点），就要把改之前的名字传进来，
 // 否则 rebind 找不到旧绑定，入站会掉成孤儿。
 func (m *Manager) reconnect(t *Tunnel, oldHost string) {
+	t.mu.Lock()
 	t.Status = "starting"
 	t.Err = "正在换节点重连"
 	t.ExitIP = ""
+	if t.listener != nil && t.Kind == "custom" {
+		_ = t.listener.Close()
+		t.listener = nil
+	}
+	t.mu.Unlock()
 
 	if t.ovpn != nil && t.ovpn.Process != nil {
 		_ = t.ovpn.Process.Kill()
 		t.ovpn = nil
 	}
-	t.teardownNetns()
+	if t.Kind != "custom" {
+		t.teardownNetns()
+	}
 
 	go func() {
 		// 通知延后到 rebind/resync 之后：那两步会把入站改绑到新节点，
@@ -104,14 +112,14 @@ func (m *Manager) reconnect(t *Tunnel, oldHost string) {
 		// 否则面板里的路由会指向一个已经不存在的出站。
 		if t.Node.HostName != oldHost {
 			if err := m.rebind(oldHost, t); err != nil {
-				log.Printf("重连后同步 3x-ui 绑定失败: %v", err)
+				log.Printf("重连后同步 s-ui 绑定失败: %v", err)
 			}
 			return
 		}
 		// 节点名没变也要重写一次出站：出口 IP 可能变了，
 		// 而且上一轮换节点时留下的绑定需要重新指回来。
 		if err := m.resync(t); err != nil {
-			log.Printf("重连后重写 3x-ui 出站失败: %v", err)
+			log.Printf("重连后重写 s-ui 出站失败: %v", err)
 		}
 	}()
 }

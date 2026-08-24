@@ -321,12 +321,27 @@ func (m *Manager) Swap(slot int) error {
 	if poolType == "" {
 		poolType = "residential"
 	}
-	picks, err := m.pickNodes(t.Node.CountryCode, poolType, 1)
+	var region string
+	if t.Node.SourceID != "" {
+		region = "SRC:" + t.Node.SourceID
+	} else {
+		region = t.Node.CountryCode
+	}
+	picks, err := m.pickNodes(region, poolType, 1)
 	if err != nil {
-		return err
+		picks, err = m.pickNodes(t.Node.CountryCode, poolType, 1)
+		if err != nil {
+			return err
+		}
 	}
 	oldHost := t.Node.HostName
 	t.Node = picks[0]
+	if t.Kind == "custom" {
+		t.CustomHost = picks[0].IP
+		t.CustomPort = picks[0].Port
+		t.CustomUser = picks[0].User
+		t.CustomPass = picks[0].Pass
+	}
 	m.reconnect(t, oldHost)
 	return nil
 }

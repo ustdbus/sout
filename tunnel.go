@@ -249,6 +249,16 @@ func (t *Tunnel) setCredential(c SocksCred) {
 
 // startCustom 启动自定义 SOCKS5 转发隧道
 func (t *Tunnel) startCustom() error {
+	t.mu.Lock()
+	if t.listener != nil {
+		_ = t.listener.Close()
+		t.listener = nil
+	}
+	t.Status = "starting"
+	t.Err = "连接中..."
+	t.Since = time.Now()
+	t.mu.Unlock()
+
 	var ln net.Listener
 	var err error
 	for i := 0; i < 6; i++ {
@@ -256,22 +266,16 @@ func (t *Tunnel) startCustom() error {
 		if err == nil {
 			break
 		}
-		time.Sleep(time.Second)
+		time.Sleep(500 * time.Millisecond)
 	}
 	if err != nil {
-		port, perr := freeRandomPort(map[int]bool{t.Port: true})
-		if perr != nil {
-			return fmt.Errorf("监听 %d 失败: %w", t.Port, err)
-		}
-		ln, err = net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
-		if err != nil {
-			return fmt.Errorf("监听 %d 失败: %w", port, err)
-		}
-		t.Port = port
+		t.mu.Lock()
+		t.Status = "failed"
+		t.Err = fmt.Sprintf("监听端口 %d 失败: %v", t.Port, err)
+		t.mu.Unlock()
+		return fmt.Errorf("监听本地端口 %d 失败: %w", t.Port, err)
 	}
 	t.listener = ln
-	t.Status = "up"
-	t.Since = time.Now()
 
 	remoteAddr := fmt.Sprintf("%s:%d", t.CustomHost, t.CustomPort)
 	dial := func(network, targetAddr string) (net.Conn, error) {
@@ -289,16 +293,32 @@ func (t *Tunnel) startCustom() error {
 		}
 	}()
 
-	go func() {
-		if ip, ping, _, _, err := ProbeCustomSocks(remoteAddr, t.CustomUser, t.CustomPass, 10*time.Second); err == nil {
-			t.mu.Lock()
-			t.ExitIP = ip
-			if ping > 0 {
-				t.Node.Ping = ping
-			}
-			t.mu.Unlock()
-		}
-	}()
+	// 探测节点真实连通性与出口 IP
+	exitIP, ping, ipType, isp, err := ProbeCustomSocks(remoteAddr, t.CustomUser, t.CustomPass, 8*time.Second)
+	if err != nil {
+		t.mu.Lock()
+		t.Status = "failed"
+		t.Err = fmt.Sprintf("节点连接失败: %v", err)
+		t.mu.Unlock()
+		return err
+	}
+
+	t.mu.Lock()
+	t.Status = "up"
+	t.ExitIP = exitIP
+	t.Err = ""
+	if ping > 0 {
+		t.Node.Ping = ping
+	}
+	if ipType != "" {
+		t.IPType = ipType
+		t.Node.IPType = ipType
+	}
+	if isp != "" {
+		t.ISP = isp
+		t.Node.ISP = isp
+	}
+	t.mu.Unlock()
 
 	return nil
 }

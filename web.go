@@ -489,7 +489,7 @@ function renderExits(){
       : '<span class="pool-tag residential">🏠 家宽</span>';
     const pingBadge = e.ping > 0 ? ('<span class="metric-tag ping" title="延迟">' + e.ping + ' ms</span>') : '';
     const speedBadge = e.speed_mbps > 0 ? ('<span class="metric-tag speed" title="带宽">' + e.speed_mbps.toFixed(0) + ' Mbps</span>') : '';
-    const swapBtn = e.kind === 'custom' ? '' : ('<button class="icon" data-swap="' + e.slot + '" title="换一个同国家/地区节点">' + ICON.redo + '</button>');
+    const swapBtn = '<button class="icon" data-swap="' + e.slot + '" title="换一个同地区/同源节点">' + ICON.redo + '</button>';
     const ispText = e.isp ? (' (' + esc(e.isp) + ')') : '';
     return '<div class="exit-row">'
       + '<span class="dot ' + e.status + '" title="' + e.status + '"></span>'

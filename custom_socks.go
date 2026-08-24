@@ -114,89 +114,90 @@ func DetectIPType(ip string) (ipType, isp, country, countryCode string) {
 	return info.IPType, info.ISP, info.Country, info.CountryCode
 }
 
-// BatchDetectIPInfo 批量并发探测节点列表的真实属性
+// BatchDetectIPInfo 批量并发探测节点列表的真实属性（分批处理全部节点）
 func BatchDetectIPInfo(nodes []*CustomNode) {
 	if len(nodes) == 0 {
 		return
-	}
-	limit := len(nodes)
-	if limit > 100 {
-		limit = 100
 	}
 
 	type QueryItem struct {
 		Query string `json:"query"`
 	}
-	var queries []QueryItem
-	nodeIdxMap := make(map[string][]*CustomNode)
 
-	for i := 0; i < limit; i++ {
-		n := nodes[i]
-		ip := strings.TrimSpace(n.Host)
-		if net.ParseIP(ip) == nil {
-			n.IPType = "datacenter"
+	for start := 0; start < len(nodes); start += 100 {
+		end := start + 100
+		if end > len(nodes) {
+			end = len(nodes)
+		}
+		chunk := nodes[start:end]
+
+		var queries []QueryItem
+		nodeIdxMap := make(map[string][]*CustomNode)
+
+		for _, n := range chunk {
+			ip := strings.TrimSpace(n.Host)
+			if net.ParseIP(ip) == nil {
+				n.IPType = "datacenter"
+				continue
+			}
+			if _, seen := nodeIdxMap[ip]; !seen {
+				queries = append(queries, QueryItem{Query: ip})
+			}
+			nodeIdxMap[ip] = append(nodeIdxMap[ip], n)
+		}
+
+		if len(queries) == 0 {
 			continue
 		}
-		if _, seen := nodeIdxMap[ip]; !seen {
-			queries = append(queries, QueryItem{Query: ip})
-		}
-		nodeIdxMap[ip] = append(nodeIdxMap[ip], n)
-	}
 
-	if len(queries) == 0 {
-		return
-	}
-
-	payload, err := json.Marshal(queries)
-	if err != nil {
-		return
-	}
-
-	client := &http.Client{Timeout: 8 * time.Second}
-	resp, err := client.Post("http://ip-api.com/batch?fields=status,country,countryCode,isp,org,as,hosting,mobile,query", "application/json", strings.NewReader(string(payload)))
-	if err != nil {
-		for _, n := range nodes {
-			if n.IPType == "" {
-				n.IPType = "residential"
-			}
-		}
-		return
-	}
-	defer resp.Body.Close()
-
-	var results []struct {
-		Status      string `json:"status"`
-		Query       string `json:"query"`
-		Country     string `json:"country"`
-		CountryCode string `json:"countryCode"`
-		ISP         string `json:"isp"`
-		Hosting     bool   `json:"hosting"`
-		Mobile      bool   `json:"mobile"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
-		return
-	}
-
-	for _, item := range results {
-		if item.Status != "success" {
+		payload, err := json.Marshal(queries)
+		if err != nil {
 			continue
 		}
-		ipType := "residential"
-		if item.Hosting {
-			ipType = "datacenter"
+
+		client := &http.Client{Timeout: 8 * time.Second}
+		resp, err := client.Post("http://ip-api.com/batch?fields=status,country,countryCode,isp,org,as,hosting,mobile,query", "application/json", strings.NewReader(string(payload)))
+		if err != nil {
+			continue
 		}
-		for _, n := range nodeIdxMap[item.Query] {
-			n.IPType = ipType
-			n.ISP = item.ISP
-			if n.Country == "" || n.Country == "自定义" {
-				n.Country = item.Country
+
+		var results []struct {
+			Status      string `json:"status"`
+			Query       string `json:"query"`
+			Country     string `json:"country"`
+			CountryCode string `json:"countryCode"`
+			ISP         string `json:"isp"`
+			Hosting     bool   `json:"hosting"`
+			Mobile      bool   `json:"mobile"`
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+			resp.Body.Close()
+			continue
+		}
+		resp.Body.Close()
+
+		for _, item := range results {
+			if item.Status != "success" {
+				continue
 			}
-			if n.CountryCode == "" || n.CountryCode == "CUSTOM" {
-				n.CountryCode = item.CountryCode
+			ipType := "residential"
+			if item.Hosting {
+				ipType = "datacenter"
+			}
+			for _, n := range nodeIdxMap[item.Query] {
+				n.IPType = ipType
+				n.ISP = item.ISP
+				if n.Country == "" || n.Country == "自定义" {
+					n.Country = item.Country
+				}
+				if n.CountryCode == "" || n.CountryCode == "CUSTOM" {
+					n.CountryCode = item.CountryCode
+				}
 			}
 		}
 	}
+
 	for _, n := range nodes {
 		if n.IPType == "" {
 			n.IPType = "residential"
@@ -375,24 +376,39 @@ func ProbeCustomSocks(proxyAddr, user, pass string, timeout time.Duration) (exit
 	}
 	client := &http.Client{Transport: tr, Timeout: timeout}
 
-	resp, err := client.Get("http://api.ipify.org")
-	if err != nil {
-		return "", 0, "", "", fmt.Errorf("连接 SOCKS5 失败: %w", err)
+	endpoints := []string{
+		"http://api.ipify.org",
+		"http://icanhazip.com",
+		"http://ifconfig.me",
+		"http://checkip.amazonaws.com",
 	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", 0, "", "", fmt.Errorf("读取出口响应失败: %w", err)
+
+	for _, ep := range endpoints {
+		resp, err := client.Get(ep)
+		if err != nil {
+			continue
+		}
+		body, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			continue
+		}
+		ip := strings.TrimSpace(string(body))
+		if net.ParseIP(ip) != nil {
+			exitIP = ip
+			break
+		}
 	}
-	ip := strings.TrimSpace(string(body))
-	if net.ParseIP(ip) == nil {
-		return "", 0, "", "", fmt.Errorf("出口 IP 返回异常: %s", ip)
+
+	if exitIP == "" {
+		return "", 0, "", "", fmt.Errorf("连接 SOCKS5 代理超时或未获取到出口 IP")
 	}
+
 	ping = int(time.Since(start).Milliseconds())
 
 	// 查询 IP 属性
-	ipType, isp, _, _ = DetectIPType(ip)
-	return ip, ping, ipType, isp, nil
+	ipType, isp, _, _ = DetectIPType(exitIP)
+	return exitIP, ping, ipType, isp, nil
 }
 
 // ParseSocksURL 解析 socks5://user:pass@host:port#remark 格式或 host:port:user:pass 格式

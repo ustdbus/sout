@@ -106,7 +106,7 @@ func invalidateInbounds() {
 }
 
 func isResidentialBranch(tag string) bool {
-	return strings.Contains(tag, " (") && (strings.HasSuffix(tag, "家宽)") || strings.Contains(tag, "家宽-"))
+	return strings.Contains(tag, " (") && (strings.HasSuffix(tag, "家宽)") || strings.HasSuffix(tag, "机房)") || strings.Contains(tag, "家宽-") || strings.Contains(tag, "机房-"))
 }
 
 func getBaseTag(tag string) string {

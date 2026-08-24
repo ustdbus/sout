@@ -69,6 +69,7 @@ func (m *Manager) GetAllCandidateNodes(poolType string) []Node {
 					User:        node.User,
 					Pass:        node.Pass,
 					Remark:      node.Remark,
+					SourceID:    node.SourceID,
 				})
 			}
 		}
@@ -103,6 +104,15 @@ func (m *Manager) Provision(req ProvisionRequest) (*Job, error) {
 	where := req.Region
 	if where == "" || strings.EqualFold(where, "ALL") {
 		where = "最优"
+	} else if strings.HasPrefix(where, "SRC:") {
+		srcID := strings.TrimPrefix(where, "SRC:")
+		if globalCustomStore != nil {
+			globalCustomStore.mu.RLock()
+			if s, ok := globalCustomStore.Sources[srcID]; ok {
+				where = s.Name
+			}
+			globalCustomStore.mu.RUnlock()
+		}
 	}
 	poolLabel := ""
 	if poolType == "residential" {
@@ -139,6 +149,7 @@ func (m *Manager) runProvision(job *Job, picks []Node, templateID int) {
 				SpeedMbps:   node.SpeedMbps,
 				IPType:      node.IPType,
 				ISP:         node.ISP,
+				SourceID:    node.SourceID,
 			}
 			t, err = m.AddCustomExit(cNode)
 		} else {
@@ -225,7 +236,12 @@ func (m *Manager) pickNodes(region, poolType string, count int) ([]Node, error) 
 		if used[n.HostName] {
 			continue
 		}
-		if region != "" && !strings.EqualFold(region, "ALL") && !strings.EqualFold(n.CountryCode, region) {
+		if strings.HasPrefix(region, "SRC:") {
+			srcID := strings.TrimPrefix(region, "SRC:")
+			if n.SourceID != srcID {
+				continue
+			}
+		} else if region != "" && !strings.EqualFold(region, "ALL") && !strings.EqualFold(n.CountryCode, region) {
 			continue
 		}
 		out = append(out, n)
@@ -259,9 +275,10 @@ func (m *Manager) Regions(poolType string) []RegionStat {
 	}
 	m.mu.RUnlock()
 
+	// 1. 按具体国家/地区聚合 (忽略占位的 CUSTOM)
 	byCode := map[string]*RegionStat{}
 	for _, n := range candidateNodes {
-		if used[n.HostName] || n.CountryCode == "" {
+		if used[n.HostName] || n.CountryCode == "" || n.CountryCode == "CUSTOM" {
 			continue
 		}
 		s := byCode[n.CountryCode]
@@ -288,6 +305,43 @@ func (m *Manager) Regions(poolType string) []RegionStat {
 		}
 		return out[i].Code < out[j].Code
 	})
+
+	// 2. 按用户添加的自定义源生成专属选项卡片（如 hookzof (订阅源)）
+	if globalCustomStore != nil {
+		globalCustomStore.mu.RLock()
+		for _, src := range globalCustomStore.Sources {
+			if !src.Enabled {
+				continue
+			}
+			srcAvail := 0
+			bestPing := 0
+			bestSpeed := 0.0
+			for _, n := range candidateNodes {
+				if used[n.HostName] || n.SourceID != src.ID {
+					continue
+				}
+				srcAvail++
+				if n.SpeedMbps > bestSpeed {
+					bestSpeed = n.SpeedMbps
+				}
+				if n.Ping > 0 && (bestPing == 0 || n.Ping < bestPing) {
+					bestPing = n.Ping
+				}
+			}
+			if srcAvail > 0 {
+				srcStat := RegionStat{
+					Code:      "SRC:" + src.ID,
+					Name:      src.Name + " (订阅源)",
+					Available: srcAvail,
+					BestPing:  bestPing,
+					BestSpeed: bestSpeed,
+				}
+				out = append([]RegionStat{srcStat}, out...)
+			}
+		}
+		globalCustomStore.mu.RUnlock()
+	}
+
 	return out
 }
 

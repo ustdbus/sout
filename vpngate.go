@@ -53,6 +53,7 @@ type Node struct {
 	User        string  `json:"user,omitempty"`
 	Pass        string  `json:"pass,omitempty"`
 	Remark      string  `json:"remark,omitempty"`
+	SourceID    string  `json:"source_id,omitempty"`
 }
 
 // fetchNodes 拉取并解析 VPN Gate 的节点列表。
