@@ -272,10 +272,18 @@ func (m *Manager) candidatesFor(first Node) []Node {
 		used[t.Node.HostName] = true
 	}
 
-	allNodes := m.GetAllCandidateNodes("all")
+	poolType := first.IPType
+	if poolType == "" {
+		poolType = "all"
+	}
+	allNodes := m.GetAllCandidateNodes(poolType)
 	out := []Node{first}
 
-	// 1. 同源 / 同地区 候选查找
+	isSpecificCountry := first.CountryCode != "" && !strings.EqualFold(first.CountryCode, "ALL") && !strings.EqualFold(first.CountryCode, "CUSTOM")
+	isBuiltinVPNGate := first.SourceID == "builtin-vpngate" || (first.Kind == "vpngate" && first.SourceID == "")
+	isSpecificCustomSrc := first.SourceID != "" && first.SourceID != "builtin-vpngate"
+
+	// 1. 同源 / 同国家地区 严格候选查找
 	for _, n := range allNodes {
 		if len(out) >= maxTries {
 			break
@@ -283,32 +291,44 @@ func (m *Manager) candidatesFor(first Node) []Node {
 		if used[n.HostName] {
 			continue
 		}
-		// 如果指定了内置 VPN Gate 源
-		if first.SourceID == "builtin-vpngate" || (first.Kind == "vpngate" && first.SourceID == "") {
-			if n.Kind == "custom" || (n.SourceID != "" && n.SourceID != "builtin-vpngate") {
-				continue
-			}
-		} else if first.SourceID != "" {
-			// 如果指定了自定义源，严格限定在同一个源内轮询
-			if n.SourceID != first.SourceID {
-				continue
-			}
-		} else if first.CountryCode != "" && !strings.EqualFold(first.CountryCode, "ALL") && !strings.EqualFold(first.CountryCode, "CUSTOM") {
-			// 如果指定了具体国家，在相同国家内轮询
+
+		// A. 如果指定了具体国家代码 (如 US, JP, HK, FR 等)，必须严格限定在相同国家内！绝对不允许跨国漂移！
+		if isSpecificCountry {
 			if !strings.EqualFold(n.CountryCode, first.CountryCode) {
 				continue
 			}
 		}
+
+		// B. 如果指定了特定源
+		if isBuiltinVPNGate {
+			if n.Kind == "custom" || (n.SourceID != "" && n.SourceID != "builtin-vpngate") {
+				continue
+			}
+		} else if isSpecificCustomSrc {
+			// 如果指定了自定义订阅源，必须严格限定在同一订阅源内！绝对不允许跨源！
+			if n.SourceID != first.SourceID {
+				continue
+			}
+		}
+
+		// C. 如果指定了家宽/机房类型，严格匹配
+		if first.IPType != "" && n.IPType != "" && n.IPType != first.IPType {
+			continue
+		}
+
 		out = append(out, n)
 	}
 
-	// 2. 如果是不限地区/全部池，并且同源没填满，可继续将其他可用节点加入候选列表
-	if (first.CountryCode == "" || strings.EqualFold(first.CountryCode, "ALL") || strings.EqualFold(first.CountryCode, "CUSTOM")) && first.SourceID == "" {
+	// 2. 仅当用户明确选择「不限地区 (ALL)」且未指定任何特定源时，才允许从全局可用节点中补充候选
+	if !isSpecificCountry && !isBuiltinVPNGate && !isSpecificCustomSrc {
 		for _, n := range allNodes {
 			if len(out) >= maxTries {
 				break
 			}
 			if used[n.HostName] {
+				continue
+			}
+			if first.IPType != "" && n.IPType != "" && n.IPType != first.IPType {
 				continue
 			}
 			alreadyIn := false
