@@ -26,13 +26,13 @@ func (m *Manager) WatchHealth() {
 				continue
 			}
 
-			// 如果是已失效/离线（failed）状态的出口，定期（每 60 秒）自动尝试复活重连
+			// 如果是已失效/离线（failed）状态的出口，每 30 分钟进行一次周期性兜底重试
 			if t.Status == "failed" {
-				if last, ok := failedCooldown[t.Slot]; ok && time.Since(last) < 60*time.Second {
+				if last, ok := failedCooldown[t.Slot]; ok && time.Since(last) < 30*time.Minute {
 					continue
 				}
 				failedCooldown[t.Slot] = time.Now()
-				log.Printf("槽位 %d (%s) 处于离线状态，触发周期性自愈复活尝试...", t.Slot, t.Node.HostName)
+				log.Printf("槽位 %d (%s) 处于离线状态，触发 30 分钟周期性兜底自愈重试...", t.Slot, t.Node.HostName)
 				m.reconnect(t, t.Node.HostName)
 				continue
 			}
@@ -137,6 +137,20 @@ func (m *Manager) reconnect(t *Tunnel, oldHost string) {
 			// 而且上一轮换节点时留下的绑定需要重新指回来。
 			if err := m.resync(t); err != nil {
 				log.Printf("重连后重写 s-ui 出站失败: %v", err)
+			}
+		}
+	}()
+}
+
+// ReviveFailedTunnels 唤醒并重试处于离线状态（failed）的出口隧道（当订阅源更新或刷新时触发）
+func (m *Manager) ReviveFailedTunnels() {
+	go func() {
+		// 稍微等待 1 秒让新节点完全入库落盘
+		time.Sleep(1 * time.Second)
+		for _, t := range m.Tunnels() {
+			if t.Status == "failed" {
+				log.Printf("订阅源已完成更新，正在尝试复活离线出口 %d (%s)...", t.Slot, t.Node.HostName)
+				m.reconnect(t, t.Node.HostName)
 			}
 		}
 	}()

@@ -238,6 +238,7 @@ func apiRefresh(m *Manager) http.HandlerFunc {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 			return
 		}
+		m.ReviveFailedTunnels()
 		writeJSON(w, http.StatusOK, map[string]int{"count": n})
 	}
 }
@@ -1319,6 +1320,7 @@ func apiCustomSourceRefresh(m *Manager) http.HandlerFunc {
 				writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("刷新官方源失败: %v", err)})
 				return
 			}
+			m.ReviveFailedTunnels()
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": count})
 			return
 		}
@@ -1355,6 +1357,7 @@ func apiCustomSourceRefresh(m *Manager) http.HandlerFunc {
 		globalCustomStore.mu.Unlock()
 		_ = globalCustomStore.save()
 
+		m.ReviveFailedTunnels()
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(nodes)})
 	}
 }

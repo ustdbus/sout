@@ -286,6 +286,7 @@ func StartAutoUpdateWorker(m *Manager) {
 				if n, err := m.RefreshNodes(); err == nil {
 					lastVpngateUpdate = time.Now()
 					log.Printf("VPN Gate 官方全球源已完成自动定时更新，获取到 %d 个节点", n)
+					m.ReviveFailedTunnels()
 				}
 			}
 
@@ -304,6 +305,7 @@ func StartAutoUpdateWorker(m *Manager) {
 			}
 			globalCustomStore.mu.RUnlock()
 
+			customUpdated := false
 			for _, s := range toUpdate {
 				nodes, err := FetchSourceNodes(s.URL, 15*time.Second)
 				if err != nil {
@@ -336,6 +338,11 @@ func StartAutoUpdateWorker(m *Manager) {
 				}
 				globalCustomStore.mu.Unlock()
 				_ = globalCustomStore.save()
+				customUpdated = true
+			}
+
+			if customUpdated && m != nil {
+				m.ReviveFailedTunnels()
 			}
 		}
 	}()
