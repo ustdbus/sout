@@ -415,14 +415,27 @@ check_and_update() {
   echo -e "  当前安装版本: ${Y}${cur_ver}${N}"
   echo -e "  GitHub 最新版: ${G}${tag_name}${N}"
 
-  if [[ "$cur_ver" == "$tag_name" && "$cur_ver" != "dev" ]]; then
-    echo -e "  ${G}当前已是最新版本！${N}"
-    read -rp "  是否仍要重新下载并覆盖安装此版本？[y/N]: " force_up
-    [[ ${force_up,,} == y ]] || return
-  else
+  local is_newer=0
+  if python3 -c "
+import sys, re
+def p(v):
+    nums = re.findall(r'\d+', v)
+    return tuple(map(int, nums)) if nums else (0,)
+cur = p('${cur_ver}')
+latest = p('${tag_name}')
+sys.exit(0 if latest > cur else 1)
+" 2>/dev/null; then
+    is_newer=1
+  fi
+
+  if [[ "$is_newer" -eq 1 ]]; then
     echo -e "  ${G}发现新版本 ${tag_name}！${N}"
     read -rp "  是否立即更新到最新版本？[Y/n]: " do_up
     [[ ${do_up,,} == n ]] && return
+  else
+    echo -e "  ${G}当前已是最新版本 (${cur_ver})！${N}"
+    read -rp "  是否仍要重新下载并覆盖安装 ${tag_name}？[y/N]: " force_up
+    [[ ${force_up,,} == y ]] || return
   fi
 
   echo -e "  正在更新 sout 到 ${tag_name}..."
