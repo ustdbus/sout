@@ -115,6 +115,7 @@ func main() {
 	mux.HandleFunc("/api/panel/client/del", apiClientDelete(mgr))
 	mux.HandleFunc("/api/panel/client/reset", apiClientReset(mgr))
 	initCustomStore(*workDir)
+	StartAutoUpdateWorker()
 
 	mux.HandleFunc("/api/custom/socks/add", apiCustomSocksAdd(mgr))
 	mux.HandleFunc("/api/custom/socks/test", apiCustomSocksTest)
@@ -122,6 +123,7 @@ func main() {
 	mux.HandleFunc("/api/custom/source/list", apiCustomSourceList(mgr))
 	mux.HandleFunc("/api/custom/source/delete", apiCustomSourceDelete)
 	mux.HandleFunc("/api/custom/source/toggle", apiCustomSourceToggle)
+	mux.HandleFunc("/api/custom/source/settings", apiCustomSourceUpdateSettings)
 	mux.HandleFunc("/api/custom/source/refresh", apiCustomSourceRefresh(mgr))
 	mux.HandleFunc("/api/custom/source/import", apiCustomSourceImport(mgr))
 
@@ -1109,6 +1111,8 @@ func apiCustomSourceAdd(w http.ResponseWriter, r *http.Request) {
 		URL:              req.URL,
 		Count:            len(nodes),
 		Enabled:          true, // 默认添加时启用
+		AutoUpdate:       true, // 默认开启自动更新
+		UpdateIntervalM:  60,   // 默认 60 分钟 (1小时)
 		ResidentialCount: resCount,
 		DatacenterCount:  dchCount,
 		UpdatedAt:        time.Now(),
@@ -1159,6 +1163,45 @@ func apiCustomSourceToggle(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enabled": enabled})
 }
 
+func apiCustomSourceUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
+		return
+	}
+	var req struct {
+		ID              string `json:"id"`
+		AutoUpdate      bool   `json:"auto_update"`
+		UpdateIntervalM int    `json:"update_interval_m"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求参数无效"})
+		return
+	}
+	if globalCustomStore == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "存储未初始化"})
+		return
+	}
+	globalCustomStore.mu.Lock()
+	src, ok := globalCustomStore.Sources[req.ID]
+	if !ok {
+		globalCustomStore.mu.Unlock()
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "未找到该源"})
+		return
+	}
+	src.AutoUpdate = req.AutoUpdate
+	if req.UpdateIntervalM > 0 {
+		src.UpdateIntervalM = req.UpdateIntervalM
+	}
+	globalCustomStore.mu.Unlock()
+	_ = globalCustomStore.save()
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":                true,
+		"auto_update":       src.AutoUpdate,
+		"update_interval_m": src.UpdateIntervalM,
+	})
+}
+
 func apiCustomSourceList(m *Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		type SourceItem struct {
@@ -1167,6 +1210,8 @@ func apiCustomSourceList(m *Manager) http.HandlerFunc {
 			URL              string    `json:"url"`
 			Count            int       `json:"count"`
 			Enabled          bool      `json:"enabled"`
+			AutoUpdate       bool      `json:"auto_update"`
+			UpdateIntervalM  int       `json:"update_interval_m"`
 			ResidentialCount int       `json:"residential_count"`
 			DatacenterCount  int       `json:"datacenter_count"`
 			UpdatedAt        time.Time `json:"updated_at"`
@@ -1182,6 +1227,8 @@ func apiCustomSourceList(m *Manager) http.HandlerFunc {
 				URL:              "https://www.vpngate.net/api/iphone/",
 				Count:            len(nodes),
 				Enabled:          true,
+				AutoUpdate:       true,
+				UpdateIntervalM:  60,
 				ResidentialCount: len(nodes),
 				DatacenterCount:  0,
 				UpdatedAt:        fetched,
@@ -1212,6 +1259,8 @@ func apiCustomSourceList(m *Manager) http.HandlerFunc {
 					URL:              s.URL,
 					Count:            s.Count,
 					Enabled:          s.Enabled,
+					AutoUpdate:       s.AutoUpdate,
+					UpdateIntervalM:  s.UpdateIntervalM,
 					ResidentialCount: resCount,
 					DatacenterCount:  dchCount,
 					UpdatedAt:        s.UpdatedAt,

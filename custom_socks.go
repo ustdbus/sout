@@ -44,6 +44,8 @@ type CustomSource struct {
 	URL              string    `json:"url"`
 	Count            int       `json:"count"`
 	Enabled          bool      `json:"enabled"`
+	AutoUpdate       bool      `json:"auto_update"`       // 是否开启自动更新
+	UpdateIntervalM  int       `json:"update_interval_m"` // 自动更新周期（分钟），默认 60 分钟
 	ResidentialCount int       `json:"residential_count"`
 	DatacenterCount  int       `json:"datacenter_count"`
 	UpdatedAt        time.Time `json:"updated_at"`
@@ -240,6 +242,12 @@ func (cs *CustomStore) load() {
 	}
 	if err := json.Unmarshal(blob, &data); err == nil {
 		if data.Sources != nil {
+			for _, s := range data.Sources {
+				if s.UpdateIntervalM == 0 {
+					s.AutoUpdate = true
+					s.UpdateIntervalM = 60
+				}
+			}
 			cs.Sources = data.Sources
 		}
 		if data.Nodes != nil {
@@ -263,6 +271,64 @@ func (cs *CustomStore) save() error {
 		return err
 	}
 	return os.WriteFile(cs.savePath(), blob, 0600)
+}
+
+// StartAutoUpdateWorker 启动后台自动定时更新订阅源的 Worker
+func StartAutoUpdateWorker() {
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			if globalCustomStore == nil {
+				continue
+			}
+			var toUpdate []*CustomSource
+			globalCustomStore.mu.RLock()
+			for _, s := range globalCustomStore.Sources {
+				if s.Enabled && s.AutoUpdate && s.UpdateIntervalM > 0 {
+					interval := time.Duration(s.UpdateIntervalM) * time.Minute
+					if time.Since(s.UpdatedAt) >= interval {
+						toUpdate = append(toUpdate, s)
+					}
+				}
+			}
+			globalCustomStore.mu.RUnlock()
+
+			for _, s := range toUpdate {
+				nodes, err := FetchSourceNodes(s.URL, 15*time.Second)
+				if err != nil {
+					continue
+				}
+
+				resCount := 0
+				dchCount := 0
+				for _, n := range nodes {
+					if n.IPType == "datacenter" {
+						dchCount++
+					} else {
+						resCount++
+					}
+				}
+
+				globalCustomStore.mu.Lock()
+				s.Count = len(nodes)
+				s.ResidentialCount = resCount
+				s.DatacenterCount = dchCount
+				s.UpdatedAt = time.Now()
+				for k, n := range globalCustomStore.Nodes {
+					if n.SourceID == s.ID {
+						delete(globalCustomStore.Nodes, k)
+					}
+				}
+				for _, n := range nodes {
+					n.SourceID = s.ID
+					globalCustomStore.Nodes[n.ID] = &n
+				}
+				globalCustomStore.mu.Unlock()
+				_ = globalCustomStore.save()
+			}
+		}
+	}()
 }
 
 // dialSocks5 建立到远端上游 SOCKS5 代理的 TCP 隧道 (支持无认证与 RFC1929 用户名密码)

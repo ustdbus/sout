@@ -1002,26 +1002,42 @@ async function loadSourcesList(){
         ? '<button class="chip-btn danger" data-toggle-src="' + esc(s.id) + '" title="点击禁用此源（节点将从家宽/机房池移除）">禁用</button>'
         : '<button class="chip-btn" style="background:#238636;color:#fff" data-toggle-src="' + esc(s.id) + '" title="点击启用此源（节点将加入家宽/机房池）">启用</button>';
 
+      const autoSelect = s.is_builtin ? '' : (
+        '<div style="display:inline-flex;align-items:center;gap:4px;margin-right:2px">'
+        + '<span style="font-size:11px;color:var(--dim)">自动更新:</span>'
+        + '<select class="source-auto-select" data-src-id="' + esc(s.id) + '" style="padding:2px 6px;font-size:11px;background:#0d1117;border:1px solid var(--line);border-radius:4px;color:var(--text);cursor:pointer">'
+        +   '<option value="0"' + (!s.auto_update ? ' selected' : '') + '>关闭</option>'
+        +   '<option value="30"' + (s.auto_update && s.update_interval_m === 30 ? ' selected' : '') + '>每 30 分钟</option>'
+        +   '<option value="60"' + (s.auto_update && (s.update_interval_m === 60 || !s.update_interval_m) ? ' selected' : '') + '>每 1 小时 (默认)</option>'
+        +   '<option value="120"' + (s.auto_update && s.update_interval_m === 120 ? ' selected' : '') + '>每 2 小时</option>'
+        +   '<option value="360"' + (s.auto_update && s.update_interval_m === 360 ? ' selected' : '') + '>每 6 小时</option>'
+        +   '<option value="720"' + (s.auto_update && s.update_interval_m === 720 ? ' selected' : '') + '>每 12 小时</option>'
+        +   '<option value="1440"' + (s.auto_update && s.update_interval_m === 1440 ? ' selected' : '') + '>每 24 小时</option>'
+        + '</select>'
+        + '</div>'
+      );
+
       const actBtns = s.is_builtin
         ? ('<button class="chip-btn" data-refresh-src="' + esc(s.id) + '" title="立即刷新官方节点数据">' + ICON.redo + ' 刷新节点池</button>')
         : (toggleBtn
-           + '<button class="chip-btn" data-import-src="' + esc(s.id) + '" title="从该源立即连通并拉起出口">拉起出口</button>'
-           + '<button class="icon" data-refresh-src="' + esc(s.id) + '" title="刷新源节点">' + ICON.redo + '</button>'
+           + autoSelect
+           + '<button class="icon" data-refresh-src="' + esc(s.id) + '" title="立即手动拉取更新源节点">' + ICON.redo + '</button>'
            + '<button class="icon danger" data-del-src="' + esc(s.id) + '" title="删除此源">' + ICON.trash + '</button>');
 
+      const timeStr = s.updated_at ? (' · 上次更新: ' + new Date(s.updated_at).toLocaleTimeString()) : '';
       const nodeCounts = s.is_builtin
-        ? (s.count + ' 个节点 (全部为 🏠 家宽)')
-        : (s.count + ' 个节点 (🏠 家宽: ' + (s.residential_count || 0) + ' · 🏢 机房: ' + (s.datacenter_count || 0) + ')');
+        ? (s.count + ' 个节点 (全部为 🏠 家宽)' + timeStr)
+        : (s.count + ' 个节点 (🏠 家宽: ' + (s.residential_count || 0) + ' · 🏢 机房: ' + (s.datacenter_count || 0) + ')' + timeStr);
 
-      return '<div style="background:#12151a;border:1px solid var(--line);border-radius:4px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between">'
-        + '<div>'
+      return '<div style="background:#12151a;border:1px solid var(--line);border-radius:4px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:12px">'
+        + '<div style="min-width:0;flex:1">'
         +   '<div style="font-weight:600;font-size:13px;display:flex;align-items:center;gap:6px">' 
         +     esc(s.name) + ' ' + typeBadge + ' ' + statusBadge
         +   '</div>'
         +   '<div style="font-size:11px;color:var(--dim);margin-top:2px">' + esc(nodeCounts) + '</div>'
-        +   '<div style="font-size:11px;color:var(--dim);margin-top:2px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(s.url) + '</div>'
+        +   '<div style="font-size:11px;color:var(--dim);margin-top:2px;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(s.url) + '">' + esc(s.url) + '</div>'
         + '</div>'
-        + '<div style="display:flex;gap:6px;align-items:center">'
+        + '<div style="display:flex;gap:6px;align-items:center;flex-shrink:0">'
         +   actBtns
         + '</div>'
         + '</div>';
@@ -1047,12 +1063,30 @@ $('#addSourceBtn').onclick = async e => {
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({name: name, url: url}),
     });
-    toast('源添加成功并已默认启用，解析 ' + res.count + ' 个节点 (🏠 家宽: ' + (res.residential_count || 0) + ' · 🏢 机房: ' + (res.datacenter_count || 0) + ')');
+    toast('源添加成功（已默认启用并开启 1 小时自动更新），解析 ' + res.count + ' 个节点');
     $('#srcName').value = '';
     $('#srcURL').value = '';
     loadSourcesList();
   }catch(err){ toast(err.message, true); }
   e.target.disabled = false;
+};
+
+$('#sourcesContainer').onchange = async e => {
+  const sel = e.target.closest('.source-auto-select');
+  if(sel){
+    const id = sel.dataset.srcId;
+    const val = parseInt(sel.value, 10);
+    const autoUpdate = val > 0;
+    const interval = autoUpdate ? val : 60;
+    try{
+      await api('/api/custom/source/settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({id: id, auto_update: autoUpdate, update_interval_m: interval})
+      });
+      toast(autoUpdate ? ('已设置自动更新: ' + sel.options[sel.selectedIndex].text) : '已关闭该源自动更新');
+    }catch(err){ toast('设置失败: ' + err.message, true); }
+  }
 };
 
 $('#sourcesContainer').onclick = async e => {
@@ -1069,26 +1103,12 @@ $('#sourcesContainer').onclick = async e => {
     return;
   }
 
-  const imp = e.target.closest('[data-import-src]');
-  if(imp){
-    const id = imp.dataset.importSrc;
-    imp.disabled = true;
-    try{
-      const res = await api('/api/custom/source/import?id=' + encodeURIComponent(id), {method:'POST'});
-      toast('已从源中启用出口: ' + esc(res.exit_ip));
-      closeModal('customSourceModal');
-      poll();
-    }catch(err){ toast(err.message, true); }
-    imp.disabled = false;
-    return;
-  }
-
   const ref = e.target.closest('[data-refresh-src]');
   if(ref){
     const id = ref.dataset.refreshSrc;
     try{
       const res = await api('/api/custom/source/refresh?id=' + encodeURIComponent(id), {method:'POST'});
-      toast('源已更新，当前 ' + res.count + ' 个节点');
+      toast('源已手动拉取更新，当前 ' + res.count + ' 个节点');
       loadSourcesList();
     }catch(err){ toast(err.message, true); }
     return;
@@ -1100,7 +1120,7 @@ $('#sourcesContainer').onclick = async e => {
     const id = del.dataset.delSrc;
     try{
       await api('/api/custom/source/delete?id=' + encodeURIComponent(id), {method:'POST'});
-      toast('源已删除');
+      toast('已删除该源');
       loadSourcesList();
     }catch(err){ toast(err.message, true); }
     return;
