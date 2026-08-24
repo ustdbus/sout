@@ -1369,7 +1369,7 @@ func apiCustomSourceImport(m *Manager) http.HandlerFunc {
 				defer func() { <-sem }()
 
 				remoteAddr := fmt.Sprintf("%s:%d", n.Host, n.Port)
-				ip, ping, err := ProbeCustomSocks(remoteAddr, n.User, n.Pass, 3500*time.Millisecond)
+				ip, ping, _, _, err := ProbeCustomSocks(remoteAddr, n.User, n.Pass, 3500*time.Millisecond)
 				if err == nil && ip != "" {
 					select {
 					case resCh <- probeResult{node: n, exitIP: ip, ping: ping}:

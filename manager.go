@@ -317,11 +317,11 @@ func (m *Manager) Swap(slot int) error {
 	if !ok {
 		return fmt.Errorf("槽位 %d 没有在运行", slot)
 	}
-	if t.Status == "starting" {
-		return fmt.Errorf("正在连接中，请稍候")
+	poolType := t.IPType
+	if poolType == "" {
+		poolType = "residential"
 	}
-
-	picks, err := m.pickNodes(t.Node.CountryCode, 1)
+	picks, err := m.pickNodes(t.Node.CountryCode, poolType, 1)
 	if err != nil {
 		return err
 	}

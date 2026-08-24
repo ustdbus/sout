@@ -290,7 +290,7 @@ func (t *Tunnel) startCustom() error {
 	}()
 
 	go func() {
-		if ip, ping, err := ProbeCustomSocks(remoteAddr, t.CustomUser, t.CustomPass, 10*time.Second); err == nil {
+		if ip, ping, _, _, err := ProbeCustomSocks(remoteAddr, t.CustomUser, t.CustomPass, 10*time.Second); err == nil {
 			t.mu.Lock()
 			t.ExitIP = ip
 			if ping > 0 {
@@ -353,7 +353,7 @@ func (t *Tunnel) switchPort(newPort int) error {
 func (t *Tunnel) probeExitIP() (string, error) {
 	if t.Kind == "custom" {
 		remoteAddr := fmt.Sprintf("%s:%d", t.CustomHost, t.CustomPort)
-		ip, _, err := ProbeCustomSocks(remoteAddr, t.CustomUser, t.CustomPass, 10*time.Second)
+		ip, _, _, _, err := ProbeCustomSocks(remoteAddr, t.CustomUser, t.CustomPass, 10*time.Second)
 		return ip, err
 	}
 	out, err := exec.Command("ip", "netns", "exec", t.nsName(),

@@ -51,7 +51,7 @@ func (m *Manager) WatchHealth() {
 func (m *Manager) tunnelHealthy(t *Tunnel) bool {
 	if t.Kind == "custom" {
 		remoteAddr := fmt.Sprintf("%s:%d", t.CustomHost, t.CustomPort)
-		ip, _, err := ProbeCustomSocks(remoteAddr, t.CustomUser, t.CustomPass, healthTimeout)
+		ip, _, _, _, err := ProbeCustomSocks(remoteAddr, t.CustomUser, t.CustomPass, healthTimeout)
 		if err != nil {
 			return false
 		}
