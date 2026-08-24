@@ -292,7 +292,6 @@ func (m *Manager) candidatesFor(first Node) []Node {
 }
 
 func (m *Manager) Stop(slot int) error {
-	invalidateInbounds()
 	m.mu.Lock()
 	t, ok := m.tunnels[slot]
 	if ok {
@@ -306,6 +305,9 @@ func (m *Manager) Stop(slot int) error {
 	if err := m.saveState(); err != nil {
 		log.Printf("保存状态失败: %v", err)
 	}
+	// 级联清理绑定在此出口上的所有分流分支
+	m.cleanupBoundBranches(t.Node.HostName)
+	invalidateInbounds()
 	m.notifyPanel()
 	return nil
 }
@@ -558,6 +560,17 @@ func (m *Manager) resync(t *Tunnel) error {
 		return nil
 	}
 	return x.ResyncOutbound(t, m.Tunnels())
+}
+
+func (m *Manager) cleanupBoundBranches(host string) {
+	if host == "" {
+		return
+	}
+	p, err := openPanel()
+	if err != nil {
+		return
+	}
+	_ = p.DeleteBranchesByHost(host, m.Tunnels())
 }
 
 func (m *Manager) notifyPanel() {

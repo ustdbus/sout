@@ -876,13 +876,46 @@ func (s *SUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
 		return err
 	}
 	oldHostTag := sanitizeTag(oldHost)
+
+	cName := countryNameCN(target.Node.CountryCode, target.Node.Country)
+	poolName := "家宽"
+	if target.IPType == "datacenter" {
+		poolName = "机房"
+	}
+	newRemark := fmt.Sprintf("%s%s", cName, poolName)
+
 	for userName, host := range boundMap {
 		if host == oldHost || host == oldHostTag {
 			if err := s.BindUserRoute(userName, target.Node.HostName, tunnels); err != nil {
 				return err
 			}
+			// 同步更新 SQLite 中 client 的 remark，使 tag 变成新的「国家+机房/家宽」
+			_ = s.sqliteQuery(fmt.Sprintf("UPDATE clients SET remark = '%s' WHERE name = '%s';", newRemark, userName))
 		}
 	}
+	s.syncSUIDatabaseLinks(hostPublicIP())
+	invalidateInbounds()
+	return nil
+}
+
+// DeleteBranchesByHost 当出口隧道被删除/停止时，级联删除绑定到该出口上的所有分流分支客户端及路由规则
+func (s *SUI) DeleteBranchesByHost(host string, tunnels []*Tunnel) error {
+	if host == "" {
+		return nil
+	}
+	boundMap, err := s.getBoundUserRoutes()
+	if err != nil {
+		return err
+	}
+	oldHostTag := sanitizeTag(host)
+	for userName, boundHost := range boundMap {
+		if boundHost == host || boundHost == oldHostTag {
+			_ = s.sqliteQuery(fmt.Sprintf("DELETE FROM clients WHERE name = '%s';", userName))
+			_ = s.BindUserRoute(userName, "", tunnels)
+		}
+	}
+	s.syncSUIDatabaseLinks(hostPublicIP())
+	invalidateInbounds()
 	return nil
 }
 

@@ -1209,6 +1209,25 @@ func (x *XUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
 	return nil
 }
 
+// DeleteBranchesByHost 当出口隧道被删除/停止时，级联删除 3x-ui 中绑定到该出口上的所有分流分支
+func (x *XUI) DeleteBranchesByHost(host string, tunnels []*Tunnel) error {
+	list, err := x.Inbounds(nil)
+	if err != nil {
+		return err
+	}
+	oldTag := sanitizeTag(host)
+	var toDel []int
+	for _, ib := range list {
+		if (ib.BoundTo == host || ib.BoundTo == oldTag) && !ib.IsBase {
+			toDel = append(toDel, ib.ID)
+		}
+	}
+	if len(toDel) > 0 {
+		return x.DeleteInbounds(toDel, tunnels)
+	}
+	return nil
+}
+
 // renameExitSuffix 把备注末尾的出口标签换成新的。
 // 备注形如 "线路A-KR-248"，只替换最后两段；认不出格式时原样返回。
 func renameExitSuffix(remark, newLabel string) string {

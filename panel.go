@@ -26,6 +26,7 @@ type Panel interface {
 
 	CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) ([]int, error)
 	DeleteInbounds(ids []int, tunnels []*Tunnel) error
+	DeleteBranchesByHost(host string, tunnels []*Tunnel) error
 
 	CreateInbound(spec NewInboundSpec, tunnels []*Tunnel) (*CreatedInbound, error)
 	UpdateInbound(id int, patch InboundPatch, tunnels []*Tunnel) error
