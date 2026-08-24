@@ -35,13 +35,28 @@ type Tunnel struct {
 	ISP        string    `json:"isp,omitempty"`
 	CustomHost string    `json:"custom_host,omitempty"`
 	CustomPort int       `json:"custom_port,omitempty"`
-	CustomUser string    `json:"custom_user,omitempty"`
-	CustomPass string    `json:"custom_pass,omitempty"`
+	CustomUser   string    `json:"custom_user,omitempty"`
+	CustomPass   string    `json:"custom_pass,omitempty"`
+	HistoryHosts []string  `json:"history_hosts,omitempty"`
 
 	ns       string
 	listener net.Listener
 	ovpn     *exec.Cmd
 	mu       sync.Mutex
+}
+
+func (t *Tunnel) recordHost(oldHost string) {
+	if oldHost == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, h := range t.HistoryHosts {
+		if h == oldHost {
+			return
+		}
+	}
+	t.HistoryHosts = append(t.HistoryHosts, oldHost)
 }
 
 func (t *Tunnel) nsName() string { return fmt.Sprintf("fo%d", t.Slot) }

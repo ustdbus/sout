@@ -914,6 +914,8 @@ func (s *SUI) DeleteBranchesByHost(host string, tunnels []*Tunnel) error {
 			_ = s.BindUserRoute(userName, "", tunnels)
 		}
 	}
+	// 双重保障：清理 SQLite 中以该 hostTag 结尾的所有 fanout client
+	_ = s.sqliteQuery(fmt.Sprintf("DELETE FROM clients WHERE name LIKE 'fanout-u-%%-%s';", oldHostTag))
 	s.syncSUIDatabaseLinks(hostPublicIP())
 	invalidateInbounds()
 	return nil
@@ -948,6 +950,7 @@ func (s *SUI) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
 	}
 
 	s.syncSUIDatabaseLinks(hostPublicIP())
+	invalidateInbounds()
 	return nil
 }
 

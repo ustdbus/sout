@@ -305,8 +305,9 @@ func (m *Manager) Stop(slot int) error {
 	if err := m.saveState(); err != nil {
 		log.Printf("保存状态失败: %v", err)
 	}
-	// 级联清理绑定在此出口上的所有分流分支
-	m.cleanupBoundBranches(t.Node.HostName)
+	// 级联清理绑定在此出口上的所有分流分支（包括当前节点与所有历史更换过的节点）
+	allHosts := append([]string{t.Node.HostName}, t.HistoryHosts...)
+	m.cleanupBoundBranches(allHosts...)
 	invalidateInbounds()
 	m.notifyPanel()
 	return nil
@@ -337,6 +338,7 @@ func (m *Manager) Swap(slot int) error {
 		}
 	}
 	oldHost := t.Node.HostName
+	t.recordHost(oldHost)
 	t.Node = picks[0]
 	if t.Kind == "custom" {
 		t.CustomHost = picks[0].IP
@@ -562,15 +564,19 @@ func (m *Manager) resync(t *Tunnel) error {
 	return x.ResyncOutbound(t, m.Tunnels())
 }
 
-func (m *Manager) cleanupBoundBranches(host string) {
-	if host == "" {
+func (m *Manager) cleanupBoundBranches(hosts ...string) {
+	if len(hosts) == 0 {
 		return
 	}
 	p, err := openPanel()
 	if err != nil {
 		return
 	}
-	_ = p.DeleteBranchesByHost(host, m.Tunnels())
+	for _, h := range hosts {
+		if h != "" {
+			_ = p.DeleteBranchesByHost(h, m.Tunnels())
+		}
+	}
 }
 
 func (m *Manager) notifyPanel() {
