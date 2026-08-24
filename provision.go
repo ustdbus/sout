@@ -103,7 +103,9 @@ func (m *Manager) Provision(req ProvisionRequest) (*Job, error) {
 
 	where := req.Region
 	if where == "" || strings.EqualFold(where, "ALL") {
-		where = "最优"
+		where = "不限地区"
+	} else if where == "SRC:builtin-vpngate" {
+		where = "VPN Gate 官方源"
 	} else if strings.HasPrefix(where, "SRC:") {
 		srcID := strings.TrimPrefix(where, "SRC:")
 		if globalCustomStore != nil {
@@ -236,7 +238,11 @@ func (m *Manager) pickNodes(region, poolType string, count int) ([]Node, error) 
 		if used[n.HostName] {
 			continue
 		}
-		if strings.HasPrefix(region, "SRC:") {
+		if region == "SRC:builtin-vpngate" {
+			if n.Kind == "custom" || (n.SourceID != "" && n.SourceID != "builtin-vpngate") {
+				continue
+			}
+		} else if strings.HasPrefix(region, "SRC:") {
 			srcID := strings.TrimPrefix(region, "SRC:")
 			if n.SourceID != srcID {
 				continue
@@ -306,7 +312,9 @@ func (m *Manager) Regions(poolType string) []RegionStat {
 		return out[i].Code < out[j].Code
 	})
 
-	// 2. 按用户添加的自定义源生成专属选项卡片（如 hookzof (订阅源)）
+	var sourceStats []RegionStat
+
+	// 2. 按用户添加的自定义源生成专属选项卡片（如 hookzof、proxifly 等）
 	if globalCustomStore != nil {
 		globalCustomStore.mu.RLock()
 		for _, src := range globalCustomStore.Sources {
@@ -336,13 +344,41 @@ func (m *Manager) Regions(poolType string) []RegionStat {
 					BestPing:  bestPing,
 					BestSpeed: bestSpeed,
 				}
-				out = append([]RegionStat{srcStat}, out...)
+				sourceStats = append(sourceStats, srcStat)
 			}
 		}
 		globalCustomStore.mu.RUnlock()
 	}
 
-	return out
+	// 3. 官方内置源：VPN Gate 官方全球家宽源
+	vpngateAvail := 0
+	vpngateBestPing := 0
+	vpngateBestSpeed := 0.0
+	for _, n := range candidateNodes {
+		if used[n.HostName] || n.Kind == "custom" || (n.SourceID != "" && n.SourceID != "builtin-vpngate") {
+			continue
+		}
+		vpngateAvail++
+		if n.SpeedMbps > vpngateBestSpeed {
+			vpngateBestSpeed = n.SpeedMbps
+		}
+		if n.Ping > 0 && (vpngateBestPing == 0 || n.Ping < vpngateBestPing) {
+			vpngateBestPing = n.Ping
+		}
+	}
+	if vpngateAvail > 0 {
+		srcStat := RegionStat{
+			Code:      "SRC:builtin-vpngate",
+			Name:      "VPN Gate (官方源)",
+			Available: vpngateAvail,
+			BestPing:  vpngateBestPing,
+			BestSpeed: vpngateBestSpeed,
+		}
+		sourceStats = append([]RegionStat{srcStat}, sourceStats...)
+	}
+
+	// 将所有订阅源排在具体国家卡片的前面
+	return append(sourceStats, out...)
 }
 
 func regionLabel(n Node) string {

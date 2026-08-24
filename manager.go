@@ -283,8 +283,13 @@ func (m *Manager) candidatesFor(first Node) []Node {
 		if used[n.HostName] {
 			continue
 		}
-		// 如果指定了自定义源，严格限定在同一个源内轮询
-		if first.SourceID != "" {
+		// 如果指定了内置 VPN Gate 源
+		if first.SourceID == "builtin-vpngate" || (first.Kind == "vpngate" && first.SourceID == "") {
+			if n.Kind == "custom" || (n.SourceID != "" && n.SourceID != "builtin-vpngate") {
+				continue
+			}
+		} else if first.SourceID != "" {
+			// 如果指定了自定义源，严格限定在同一个源内轮询
 			if n.SourceID != first.SourceID {
 				continue
 			}
