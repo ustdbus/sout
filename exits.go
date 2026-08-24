@@ -164,7 +164,7 @@ func (m *Manager) ExitsOf() ExitsView {
 					sourceName = s.Name
 				}
 				globalCustomStore.mu.RUnlock()
-			} else if t.Node.Remark != "" && t.Node.Remark != t.Node.Host {
+			} else if t.Node.Remark != "" && t.Node.Remark != t.Node.IP {
 				sourceName = t.Node.Remark
 			}
 		}
