@@ -56,10 +56,12 @@ main{padding:20px;max-width:1120px;margin:0 auto}
 
 /* VPN 出口隧道池 */
 .exits-box{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.2)}
-.exit-row{display:grid;grid-template-columns:14px 150px 1fr auto auto;align-items:center;gap:12px;padding:11px 16px;border-bottom:1px solid #21262d}
+.exit-row{display:grid;grid-template-columns:14px 140px auto 1fr auto;align-items:center;gap:12px;padding:11px 16px;border-bottom:1px solid #21262d}
 .exit-row:last-child{border-bottom:none}
 .exit-ip{font-weight:700;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text)}
-.exit-meta{color:var(--dim);font-size:12px;display:flex;align-items:center;gap:8px}
+.exit-meta{color:var(--dim);font-size:12px;display:flex;align-items:center;gap:8px;min-width:0;overflow:hidden}
+.exit-place-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:320px;display:inline-block;vertical-align:middle}
+.source-tag{font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;white-space:nowrap;max-width:100px;overflow:hidden;text-overflow:ellipsis;display:inline-block;vertical-align:middle}
 .socks-tag{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#0d1117;border:1px solid var(--line);padding:1px 6px;border-radius:4px;color:var(--dim);font-size:11px}
 .metric-tag{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;padding:2px 6px;border-radius:4px;font-weight:600}
 .metric-tag.speed{color:#3fb950;border:1px solid rgba(63,185,80,.3);background:rgba(63,185,80,.1)}
@@ -111,7 +113,7 @@ select:focus,input:focus{outline:none;border-color:var(--accent)}
 .rg{border:1px solid var(--line);background:#0d1117;border-radius:6px;padding:7px 9px;cursor:pointer;text-align:left;display:block;width:100%}
 .rg:hover{border-color:var(--accent)}
 .rg.sel{border-color:var(--accent);background:rgba(88,166,255,.12)}
-.rg b{font-weight:600;font-size:12px;display:block}
+.rg b{font-weight:600;font-size:12px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rg em{display:block;font-style:normal;color:var(--dim);font-size:11px;margin-top:2px}
 
 .stepper{display:flex;align-items:center;width:fit-content;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:#0d1117}
@@ -481,22 +483,24 @@ function renderExits(){
     const label = e.exit_ip || (e.status === 'starting' ? '连接中…' : '—');
     const place = (e.country && e.country.toUpperCase() !== (e.region||'').toUpperCase())
       ? (e.region + ' ' + e.country) : (e.region || '—');
+    const srcName = e.source_name || (e.kind === 'custom' ? '自定义' : 'VPN Gate');
     const kindBadge = e.kind === 'custom'
-      ? '<span style="background:#1f6feb;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600">自定义 S5</span>'
-      : '<span style="background:#238636;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600">VPN Gate</span>';
+      ? '<span class="source-tag" style="background:#1f6feb;color:#fff" title="' + esc(srcName) + '">' + esc(srcName) + '</span>'
+      : '<span class="source-tag" style="background:#238636;color:#fff">VPN Gate</span>';
     const poolBadge = e.ip_type === 'datacenter'
       ? '<span class="pool-tag datacenter">🏢 机房</span>'
       : '<span class="pool-tag residential">🏠 家宽</span>';
     const pingBadge = e.ping > 0 ? ('<span class="metric-tag ping" title="延迟">' + e.ping + ' ms</span>') : '';
     const speedBadge = e.speed_mbps > 0 ? ('<span class="metric-tag speed" title="带宽">' + e.speed_mbps.toFixed(0) + ' Mbps</span>') : '';
     const swapBtn = '<button class="icon" data-swap="' + e.slot + '" title="换一个同地区/同源节点">' + ICON.redo + '</button>';
-    const ispText = e.isp ? (' (' + esc(e.isp) + ')') : '';
+    const hostClean = (e.host || '').replace(/^(custom-|cs-)/, '');
+    const fullMeta = place + (e.isp ? ' (' + e.isp + ')' : '') + ' · ' + (e.host || '');
     return '<div class="exit-row">'
       + '<span class="dot ' + e.status + '" title="' + e.status + '"></span>'
       + '<span class="exit-ip">' + esc(label) + '</span>'
-      + '<div style="display:flex;gap:4px;align-items:center">' + kindBadge + poolBadge + '</div>'
+      + '<div style="display:flex;gap:4px;align-items:center;flex-shrink:0">' + kindBadge + poolBadge + '</div>'
       + '<div class="exit-meta">'
-      +   '<span>' + esc(place) + ispText + ' · ' + esc(e.host) + '</span>'
+      +   '<span class="exit-place-text" title="' + esc(fullMeta) + '">' + esc(place) + ' · ' + esc(hostClean) + '</span>'
       +   pingBadge
       +   speedBadge
       +   '<button class="chip-btn" data-cred="' + e.slot + '" title="查看/修改 SOCKS5 凭据">' + ICON.lock + ' SOCKS5 :' + e.port + '</button>'
@@ -722,11 +726,20 @@ function renderRegionList(){
 
   const fullList = [allItem, ...regionList];
   const filtered = fullList.filter(r => !kw || r.code.toLowerCase().includes(kw) || r.name.toLowerCase().includes(kw));
-  $('#rgList').innerHTML = filtered.map(r =>
-    '<button class="rg' + (selectedRegion === r.code ? ' sel' : '') + '" data-rgcode="' + esc(r.code) + '">'
-    + '<b>' + (r.code === 'ALL' ? '🌐 ' + esc(r.name) : (esc(r.code) + ' ' + esc(r.name))) + '</b>'
-    + '<em>' + r.available + ' 个可用 · ' + r.best_speed_mbps.toFixed(0) + ' Mbps</em>'
-    + '</button>').join('');
+  $('#rgList').innerHTML = filtered.map(r => {
+    let title = '';
+    if(r.code === 'ALL'){
+      title = '🌐 ' + esc(r.name);
+    } else if(r.code.startsWith('SRC:')){
+      title = '📦 ' + esc(r.name);
+    } else {
+      title = esc(r.code) + ' ' + esc(r.name);
+    }
+    return '<button class="rg' + (selectedRegion === r.code ? ' sel' : '') + '" data-rgcode="' + esc(r.code) + '" title="' + esc(r.name) + '">'
+      + '<b class="rg-title">' + title + '</b>'
+      + '<em>' + r.available + ' 个可用 · ' + r.best_speed_mbps.toFixed(0) + ' Mbps</em>'
+      + '</button>';
+  }).join('');
 }
 $('#rgFilter').oninput = renderRegionList;
 
@@ -734,7 +747,13 @@ $('#startProvisionBtn').onclick = async e => {
   if(!selectedRegion){ toast('请选择目标地区', true); return; }
   const count = Math.max(1, Math.min(20, parseInt($('#exitCountInput').value, 10) || 1));
   e.target.disabled = true;
-  const label = selectedRegion === 'ALL' ? '全球最高速' : selectedRegion;
+  let label = selectedRegion;
+  if(selectedRegion === 'ALL'){
+    label = '全球最高速';
+  } else if(selectedRegion.startsWith('SRC:')){
+    const match = regionList.find(r => r.code === selectedRegion);
+    label = match ? match.name : '自定义源';
+  }
   try{
     await api('/api/provision?count=' + count + '&region=' + encodeURIComponent(selectedRegion) + '&type=' + encodeURIComponent(currentPoolType), {method:'POST'});
     toast('正在拉取 ' + count + ' 条「' + label + '」出口隧道...');

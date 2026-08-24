@@ -331,7 +331,7 @@ func (m *Manager) Regions(poolType string) []RegionStat {
 			if srcAvail > 0 {
 				srcStat := RegionStat{
 					Code:      "SRC:" + src.ID,
-					Name:      src.Name + " (订阅源)",
+					Name:      src.Name,
 					Available: srcAvail,
 					BestPing:  bestPing,
 					BestSpeed: bestSpeed,

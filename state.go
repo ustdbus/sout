@@ -27,6 +27,7 @@ type persistedTunnel struct {
 	CustomPort int    `json:"custom_port,omitempty"`
 	CustomUser string `json:"custom_user,omitempty"`
 	CustomPass string `json:"custom_pass,omitempty"`
+	SourceID   string `json:"source_id,omitempty"`
 }
 
 type persistedState struct {
@@ -60,6 +61,7 @@ func (m *Manager) saveState() error {
 			CustomPort:  t.CustomPort,
 			CustomUser:  t.CustomUser,
 			CustomPass:  t.CustomPass,
+			SourceID:    t.Node.SourceID,
 		})
 	}
 
@@ -103,6 +105,7 @@ func (m *Manager) restoreState() (int, error) {
 				Country:     p.Country,
 				Ping:        p.Ping,
 				SpeedMbps:   p.SpeedMbps,
+				SourceID:    p.SourceID,
 			}
 		} else {
 			if node.Ping == 0 && p.Ping > 0 {
@@ -110,6 +113,9 @@ func (m *Manager) restoreState() (int, error) {
 			}
 			if node.SpeedMbps == 0 && p.SpeedMbps > 0 {
 				node.SpeedMbps = p.SpeedMbps
+			}
+			if node.SourceID == "" && p.SourceID != "" {
+				node.SourceID = p.SourceID
 			}
 		}
 		node.Config = p.Config

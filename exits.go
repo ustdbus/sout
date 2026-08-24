@@ -33,9 +33,10 @@ type Exit struct {
 	SocksUser string        `json:"socks_user"`
 	SocksPass string        `json:"socks_pass"`
 	Inbounds  []ExitInbound `json:"inbounds"`
-	Kind      string        `json:"kind,omitempty"` // "vpngate" | "custom"
-	IPType    string        `json:"ip_type,omitempty"` // "residential" | "datacenter"
-	ISP       string        `json:"isp,omitempty"`
+	Kind       string        `json:"kind,omitempty"` // "vpngate" | "custom"
+	IPType     string        `json:"ip_type,omitempty"` // "residential" | "datacenter"
+	ISP        string        `json:"isp,omitempty"`
+	SourceName string        `json:"source_name,omitempty"`
 }
 
 // NodeBranch 是某个节点下的一个分流分支（如直连分支、日本家宽分支等）
@@ -152,10 +153,19 @@ func (m *Manager) ExitsOf() ExitsView {
 		cred := t.credential()
 		ipType := t.IPType
 		if ipType == "" {
-			if t.Kind == "custom" {
-				ipType = "residential"
-			} else {
-				ipType = "residential"
+			ipType = "residential"
+		}
+		sourceName := "VPN Gate"
+		if t.Kind == "custom" {
+			sourceName = "自定义 S5"
+			if t.Node.SourceID != "" && globalCustomStore != nil {
+				globalCustomStore.mu.RLock()
+				if s, ok := globalCustomStore.Sources[t.Node.SourceID]; ok && s.Name != "" {
+					sourceName = s.Name
+				}
+				globalCustomStore.mu.RUnlock()
+			} else if t.Node.Remark != "" && t.Node.Remark != t.Node.Host {
+				sourceName = t.Node.Remark
 			}
 		}
 		view.Exits = append(view.Exits, Exit{
@@ -164,9 +174,10 @@ func (m *Manager) ExitsOf() ExitsView {
 			Ping: t.Node.Ping, SpeedMbps: t.Node.SpeedMbps,
 			ExitIP: t.ExitIP, Status: t.Status, Err: t.Err, Since: t.Since,
 			SocksUser: cred.User, SocksPass: cred.Pass,
-			Kind:   t.Kind,
-			IPType: ipType,
-			ISP:    t.ISP,
+			Kind:       t.Kind,
+			IPType:     ipType,
+			ISP:        t.ISP,
+			SourceName: sourceName,
 		})
 	}
 

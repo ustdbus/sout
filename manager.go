@@ -461,6 +461,7 @@ func (m *Manager) AddCustomExit(node CustomNode) (*Tunnel, error) {
 			IPType:      ipType,
 			ISP:         node.ISP,
 			Kind:        "custom",
+			SourceID:    node.SourceID,
 		},
 	}
 	m.tunnels[slot] = t
