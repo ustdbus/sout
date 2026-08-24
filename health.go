@@ -15,16 +15,32 @@ const (
 	healthTimeout  = 8 * time.Second
 )
 
-// WatchHealth 周期检查每条隧道是否还能出网，掉线的自动换节点重连。
-// VPN Gate 是志愿者节点，运行中掉线很常见。
+// WatchHealth 周期检查每条隧道是否还能出网，掉线的自动换节点重连；离线的自动尝试复活。
 func (m *Manager) WatchHealth() {
 	fails := map[int]int{}
+	failedCooldown := map[int]time.Time{}
 
 	for range time.Tick(healthInterval) {
 		for _, t := range m.Tunnels() {
+			if t.Status == "stopped" {
+				continue
+			}
+
+			// 如果是已失效/离线（failed）状态的出口，定期（每 60 秒）自动尝试复活重连
+			if t.Status == "failed" {
+				if last, ok := failedCooldown[t.Slot]; ok && time.Since(last) < 60*time.Second {
+					continue
+				}
+				failedCooldown[t.Slot] = time.Now()
+				log.Printf("槽位 %d (%s) 处于离线状态，触发周期性自愈复活尝试...", t.Slot, t.Node.HostName)
+				m.reconnect(t, t.Node.HostName)
+				continue
+			}
+
 			if t.Status != "up" {
 				continue
 			}
+
 			if m.tunnelHealthy(t) {
 				fails[t.Slot] = 0
 				continue

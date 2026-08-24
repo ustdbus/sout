@@ -273,12 +273,21 @@ func (cs *CustomStore) save() error {
 	return os.WriteFile(cs.savePath(), blob, 0600)
 }
 
-// StartAutoUpdateWorker 启动后台自动定时更新订阅源的 Worker
-func StartAutoUpdateWorker() {
+// StartAutoUpdateWorker 启动后台自动定时更新订阅源的 Worker（包括 VPN Gate 和自定义订阅源）
+func StartAutoUpdateWorker(m *Manager) {
 	go func() {
+		lastVpngateUpdate := time.Now()
 		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
+			// 1. VPN Gate 官方源自动定时拉取（默认每 60 分钟自动更新一次）
+			if m != nil && time.Since(lastVpngateUpdate) >= 60*time.Minute {
+				if n, err := m.RefreshNodes(); err == nil {
+					lastVpngateUpdate = time.Now()
+					log.Printf("VPN Gate 官方全球源已完成自动定时更新，获取到 %d 个节点", n)
+				}
+			}
+
 			if globalCustomStore == nil {
 				continue
 			}

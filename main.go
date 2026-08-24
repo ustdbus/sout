@@ -115,7 +115,7 @@ func main() {
 	mux.HandleFunc("/api/panel/client/del", apiClientDelete(mgr))
 	mux.HandleFunc("/api/panel/client/reset", apiClientReset(mgr))
 	initCustomStore(*workDir)
-	StartAutoUpdateWorker()
+	StartAutoUpdateWorker(mgr)
 
 	mux.HandleFunc("/api/custom/socks/add", apiCustomSocksAdd(mgr))
 	mux.HandleFunc("/api/custom/socks/test", apiCustomSocksTest)
