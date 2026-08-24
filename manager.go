@@ -143,21 +143,6 @@ const (
 )
 
 func (m *Manager) bringUpPersist(t *Tunnel, notify bool, persist bool) {
-	if t.Kind == "custom" {
-		if err := t.startCustom(); err != nil {
-			t.Status = "failed"
-			t.Err = err.Error()
-		} else {
-			t.Status = "up"
-			t.Err = ""
-			if notify {
-				m.notifyPanel()
-			}
-		}
-		_ = m.saveState()
-		return
-	}
-
 	backoff := reconnectBackoffMin
 	for {
 		if m.tryCandidates(t, notify) {
@@ -202,16 +187,28 @@ func (m *Manager) tryCandidates(t *Tunnel, notify bool) bool {
 		if i > 0 && m.nodeInUse(node.HostName, t.Slot) {
 			continue
 		}
+		oldHost := t.Node.HostName
 		t.Node = node
+		t.Kind = node.Kind
+		if t.Kind == "custom" {
+			t.CustomHost = node.IP
+			t.CustomPort = node.Port
+			t.CustomUser = node.User
+			t.CustomPass = node.Pass
+		}
 		t.Status = "starting"
 		if i > 0 {
-			t.Err = fmt.Sprintf("已切换第 %d 个候选节点", i+1)
+			t.Err = fmt.Sprintf("正在尝试第 %d/%d 个候选节点 (%s)...", i+1, len(candidates), node.IP)
 		}
 
 		err := m.tryNode(t)
 		if err == nil {
 			t.Status = "up"
 			t.Err = ""
+			if t.Node.HostName != oldHost {
+				t.recordHost(oldHost)
+				_ = m.rebind(oldHost, t)
+			}
 			if serr := m.saveState(); serr != nil {
 				log.Printf("保存状态失败: %v", serr)
 			}
@@ -220,7 +217,9 @@ func (m *Manager) tryCandidates(t *Tunnel, notify bool) bool {
 			}
 			return true
 		}
-		t.teardownNetns()
+		if t.Kind != "custom" {
+			t.teardownNetns()
+		}
 	}
 	return false
 }
@@ -236,6 +235,13 @@ func (m *Manager) tunnelActive(t *Tunnel) bool {
 }
 
 func (m *Manager) tryNode(t *Tunnel) error {
+	if t.Kind == "custom" {
+		t.CustomHost = t.Node.IP
+		t.CustomPort = t.Node.Port
+		t.CustomUser = t.Node.User
+		t.CustomPass = t.Node.Pass
+		return t.startCustom()
+	}
 	if err := t.setupNetns(); err != nil {
 		return err
 	}
@@ -256,7 +262,7 @@ func (m *Manager) tryNode(t *Tunnel) error {
 }
 
 func (m *Manager) candidatesFor(first Node) []Node {
-	const maxTries = 6
+	const maxTries = 30
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -265,29 +271,53 @@ func (m *Manager) candidatesFor(first Node) []Node {
 		used[t.Node.HostName] = true
 	}
 
-	region := first.CountryCode
-	if region == "" {
-		for _, n := range m.nodes {
-			if n.HostName == first.HostName {
-				region = n.CountryCode
-				break
-			}
-		}
-	}
-
+	allNodes := m.GetAllCandidateNodes("all")
 	out := []Node{first}
-	for _, n := range m.nodes {
+
+	// 1. 同源 / 同地区 候选查找
+	for _, n := range allNodes {
 		if len(out) >= maxTries {
 			break
 		}
 		if used[n.HostName] {
 			continue
 		}
-		if region != "" && n.CountryCode != region {
-			continue
+		// 如果指定了自定义源，严格限定在同一个源内轮询
+		if first.SourceID != "" {
+			if n.SourceID != first.SourceID {
+				continue
+			}
+		} else if first.CountryCode != "" && !strings.EqualFold(first.CountryCode, "ALL") && !strings.EqualFold(first.CountryCode, "CUSTOM") {
+			// 如果指定了具体国家，在相同国家内轮询
+			if !strings.EqualFold(n.CountryCode, first.CountryCode) {
+				continue
+			}
 		}
 		out = append(out, n)
 	}
+
+	// 2. 如果是不限地区/全部池，并且同源没填满，可继续将其他可用节点加入候选列表
+	if (first.CountryCode == "" || strings.EqualFold(first.CountryCode, "ALL") || strings.EqualFold(first.CountryCode, "CUSTOM")) && first.SourceID == "" {
+		for _, n := range allNodes {
+			if len(out) >= maxTries {
+				break
+			}
+			if used[n.HostName] {
+				continue
+			}
+			alreadyIn := false
+			for _, o := range out {
+				if o.HostName == n.HostName {
+					alreadyIn = true
+					break
+				}
+			}
+			if !alreadyIn {
+				out = append(out, n)
+			}
+		}
+	}
+
 	return out
 }
 
@@ -471,15 +501,7 @@ func (m *Manager) AddCustomExit(node CustomNode) (*Tunnel, error) {
 	m.tunnels[slot] = t
 	m.mu.Unlock()
 
-	if err := t.startCustom(); err != nil {
-		m.mu.Lock()
-		delete(m.tunnels, slot)
-		m.mu.Unlock()
-		return nil, err
-	}
-
-	_ = m.saveState()
-	m.notifyPanel()
+	go m.bringUp(t, true)
 	return t, nil
 }
 
