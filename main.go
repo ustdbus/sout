@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -1259,35 +1261,76 @@ func apiCustomSourceImport(m *Manager) http.HandlerFunc {
 			return
 		}
 
-		var lastErr error
-		for _, node := range candidateNodes {
-			remoteAddr := fmt.Sprintf("%s:%d", node.Host, node.Port)
-			ip, ping, err := ProbeCustomSocks(remoteAddr, node.User, node.Pass, 8*time.Second)
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			node.ExitIP = ip
-			node.Ping = ping
-			t, err := m.AddCustomExit(node)
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			writeJSON(w, http.StatusOK, map[string]any{
-				"ok":      true,
-				"slot":    t.Slot,
-				"port":    t.Port,
-				"exit_ip": ip,
-				"remark":  node.Remark,
-			})
+		type probeResult struct {
+			node   CustomNode
+			exitIP string
+			ping   int
+		}
+
+		resCh := make(chan probeResult, 1)
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+
+		maxCandidates := 25
+		if len(candidateNodes) < maxCandidates {
+			maxCandidates = len(candidateNodes)
+		}
+
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, 6)
+		found := make(chan struct{})
+
+		for i := 0; i < maxCandidates; i++ {
+			node := candidateNodes[i]
+			wg.Add(1)
+			go func(n CustomNode) {
+				defer wg.Done()
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					return
+				case <-found:
+					return
+				}
+				defer func() { <-sem }()
+
+				remoteAddr := fmt.Sprintf("%s:%d", n.Host, n.Port)
+				ip, ping, err := ProbeCustomSocks(remoteAddr, n.User, n.Pass, 3500*time.Millisecond)
+				if err == nil && ip != "" {
+					select {
+					case resCh <- probeResult{node: n, exitIP: ip, ping: ping}:
+						close(found)
+					default:
+					}
+				}
+			}(node)
+		}
+
+		go func() {
+			wg.Wait()
+			close(resCh)
+		}()
+
+		res, ok := <-resCh
+		if !ok || res.exitIP == "" {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "该源前 25 个候选节点均超时或离线，请尝试刷新源"})
 			return
 		}
-		if lastErr != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("测试可用节点失败: %v", lastErr)})
+
+		res.node.ExitIP = res.exitIP
+		res.node.Ping = res.ping
+		t, err := m.AddCustomExit(res.node)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "无可用节点"})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":      true,
+			"slot":    t.Slot,
+			"port":    t.Port,
+			"exit_ip": res.exitIP,
+			"remark":  res.node.Remark,
+		})
 	}
 }
 
