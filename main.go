@@ -121,6 +121,7 @@ func main() {
 	mux.HandleFunc("/api/custom/source/add", apiCustomSourceAdd)
 	mux.HandleFunc("/api/custom/source/list", apiCustomSourceList(mgr))
 	mux.HandleFunc("/api/custom/source/delete", apiCustomSourceDelete)
+	mux.HandleFunc("/api/custom/source/toggle", apiCustomSourceToggle)
 	mux.HandleFunc("/api/custom/source/refresh", apiCustomSourceRefresh(mgr))
 	mux.HandleFunc("/api/custom/source/import", apiCustomSourceImport(mgr))
 
@@ -256,7 +257,8 @@ func apiSwap(m *Manager) http.HandlerFunc {
 
 func apiRegions(m *Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, m.Regions())
+		poolType := r.URL.Query().Get("type")
+		writeJSON(w, http.StatusOK, m.Regions(poolType))
 	}
 }
 
@@ -440,8 +442,12 @@ func apiProvision(m *Manager) http.HandlerFunc {
 				return
 			}
 		}
+		poolType := q.Get("type")
+		if poolType == "" {
+			poolType = "all"
+		}
 		job, err := m.Provision(ProvisionRequest{
-			Region: q.Get("region"), Count: count, TemplateID: tpl,
+			Region: q.Get("region"), Count: count, TemplateID: tpl, PoolType: poolType,
 		})
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -953,7 +959,7 @@ func apiCustomSocksTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	remoteAddr := fmt.Sprintf("%s:%d", h, p)
-	exitIP, ping, err := ProbeCustomSocks(remoteAddr, u, pwd, 8*time.Second)
+	exitIP, ping, ipType, isp, err := ProbeCustomSocks(remoteAddr, u, pwd, 8*time.Second)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("连通性测试失败: %v", err)})
 		return
@@ -962,6 +968,8 @@ func apiCustomSocksTest(w http.ResponseWriter, r *http.Request) {
 		"ok":      true,
 		"exit_ip": exitIP,
 		"ping":    ping,
+		"ip_type": ipType,
+		"isp":     isp,
 		"host":    h,
 		"port":    p,
 		"user":    u,
@@ -1009,7 +1017,7 @@ func apiCustomSocksAdd(m *Manager) http.HandlerFunc {
 			remark = h
 		}
 		remoteAddr := fmt.Sprintf("%s:%d", h, p)
-		exitIP, ping, err := ProbeCustomSocks(remoteAddr, u, pwd, 10*time.Second)
+		exitIP, ping, ipType, isp, err := ProbeCustomSocks(remoteAddr, u, pwd, 10*time.Second)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("连接 SOCKS5 代理失败: %v", err)})
 			return
@@ -1038,6 +1046,8 @@ func apiCustomSocksAdd(m *Manager) http.HandlerFunc {
 			Ping:        ping,
 			SpeedMbps:   100.0,
 			ExitIP:      exitIP,
+			IPType:      ipType,
+			ISP:         isp,
 		}
 
 		t, err := m.AddCustomExit(node)
@@ -1050,6 +1060,8 @@ func apiCustomSocksAdd(m *Manager) http.HandlerFunc {
 			"slot":    t.Slot,
 			"port":    t.Port,
 			"exit_ip": exitIP,
+			"ip_type": ipType,
+			"isp":     isp,
 		})
 	}
 }
@@ -1080,13 +1092,26 @@ func apiCustomSourceAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	resCount := 0
+	dchCount := 0
+	for _, n := range nodes {
+		if n.IPType == "datacenter" {
+			dchCount++
+		} else {
+			resCount++
+		}
+	}
+
 	id := fmt.Sprintf("src-%d", time.Now().Unix())
 	src := &CustomSource{
-		ID:        id,
-		Name:      req.Name,
-		URL:       req.URL,
-		Count:     len(nodes),
-		UpdatedAt: time.Now(),
+		ID:               id,
+		Name:             req.Name,
+		URL:              req.URL,
+		Count:            len(nodes),
+		Enabled:          true, // 默认添加时启用
+		ResidentialCount: resCount,
+		DatacenterCount:  dchCount,
+		UpdatedAt:        time.Now(),
 	}
 
 	if globalCustomStore != nil {
@@ -1101,48 +1126,97 @@ func apiCustomSourceAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":    true,
-		"id":    id,
-		"count": len(nodes),
+		"ok":                true,
+		"id":                id,
+		"count":             len(nodes),
+		"residential_count": resCount,
+		"datacenter_count":  dchCount,
 	})
+}
+
+func apiCustomSourceToggle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
+		return
+	}
+	id := r.URL.Query().Get("id")
+	if id == "" || globalCustomStore == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id 不能为空"})
+		return
+	}
+	globalCustomStore.mu.Lock()
+	src, ok := globalCustomStore.Sources[id]
+	if !ok {
+		globalCustomStore.mu.Unlock()
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "未找到该源"})
+		return
+	}
+	src.Enabled = !src.Enabled
+	enabled := src.Enabled
+	globalCustomStore.mu.Unlock()
+	_ = globalCustomStore.save()
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enabled": enabled})
 }
 
 func apiCustomSourceList(m *Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		type SourceItem struct {
-			ID        string    `json:"id"`
-			Name      string    `json:"name"`
-			URL       string    `json:"url"`
-			Count     int       `json:"count"`
-			UpdatedAt time.Time `json:"updated_at"`
-			IsBuiltin bool      `json:"is_builtin"`
-			Type      string    `json:"type"`
+			ID               string    `json:"id"`
+			Name             string    `json:"name"`
+			URL              string    `json:"url"`
+			Count            int       `json:"count"`
+			Enabled          bool      `json:"enabled"`
+			ResidentialCount int       `json:"residential_count"`
+			DatacenterCount  int       `json:"datacenter_count"`
+			UpdatedAt        time.Time `json:"updated_at"`
+			IsBuiltin        bool      `json:"is_builtin"`
+			Type             string    `json:"type"`
 		}
 
 		nodes, fetched := m.Nodes()
 		list := []SourceItem{
 			{
-				ID:        "builtin-vpngate",
-				Name:      "VPN Gate 官方全球家宽源",
-				URL:       "https://www.vpngate.net/api/iphone/",
-				Count:     len(nodes),
-				UpdatedAt: fetched,
-				IsBuiltin: true,
-				Type:      "vpngate",
+				ID:               "builtin-vpngate",
+				Name:             "VPN Gate 官方全球家宽源",
+				URL:              "https://www.vpngate.net/api/iphone/",
+				Count:            len(nodes),
+				Enabled:          true,
+				ResidentialCount: len(nodes),
+				DatacenterCount:  0,
+				UpdatedAt:        fetched,
+				IsBuiltin:        true,
+				Type:             "vpngate",
 			},
 		}
 
 		if globalCustomStore != nil {
 			globalCustomStore.mu.RLock()
 			for _, s := range globalCustomStore.Sources {
+				resCount := 0
+				dchCount := 0
+				for _, n := range globalCustomStore.Nodes {
+					if n.SourceID == s.ID {
+						if n.IPType == "datacenter" {
+							dchCount++
+						} else {
+							resCount++
+						}
+					}
+				}
+				s.ResidentialCount = resCount
+				s.DatacenterCount = dchCount
 				list = append(list, SourceItem{
-					ID:        s.ID,
-					Name:      s.Name,
-					URL:       s.URL,
-					Count:     s.Count,
-					UpdatedAt: s.UpdatedAt,
-					IsBuiltin: false,
-					Type:      "socks5",
+					ID:               s.ID,
+					Name:             s.Name,
+					URL:              s.URL,
+					Count:            s.Count,
+					Enabled:          s.Enabled,
+					ResidentialCount: resCount,
+					DatacenterCount:  dchCount,
+					UpdatedAt:        s.UpdatedAt,
+					IsBuiltin:        false,
+					Type:             "socks5",
 				})
 			}
 			globalCustomStore.mu.RUnlock()

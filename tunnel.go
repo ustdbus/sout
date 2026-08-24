@@ -31,6 +31,8 @@ type Tunnel struct {
 	Since      time.Time `json:"since"`
 	Cred       SocksCred `json:"cred"`
 	Kind       string    `json:"kind,omitempty"` // "vpngate" | "custom"
+	IPType     string    `json:"ip_type,omitempty"` // "residential" | "datacenter"
+	ISP        string    `json:"isp,omitempty"`
 	CustomHost string    `json:"custom_host,omitempty"`
 	CustomPort int       `json:"custom_port,omitempty"`
 	CustomUser string    `json:"custom_user,omitempty"`

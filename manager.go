@@ -113,9 +113,18 @@ func (m *Manager) Start(node Node) (*Tunnel, error) {
 		Slot:   slot,
 		Port:   port,
 		Node:   node,
+		Kind:   node.Kind,
+		IPType: node.IPType,
+		ISP:    node.ISP,
 		Status: "starting",
 		Since:  time.Now(),
 		Cred:   cred,
+	}
+	if t.Kind == "" {
+		t.Kind = "vpngate"
+	}
+	if t.IPType == "" {
+		t.IPType = "residential"
 	}
 	m.tunnels[slot] = t
 	m.mu.Unlock()
@@ -409,10 +418,16 @@ func (m *Manager) AddCustomExit(node CustomNode) (*Tunnel, error) {
 	if node.CountryCode == "" {
 		node.CountryCode = "CUSTOM"
 	}
+	ipType := node.IPType
+	if ipType == "" {
+		ipType = "residential"
+	}
 	t := &Tunnel{
 		Slot:       slot,
 		Port:       port,
 		Kind:       "custom",
+		IPType:     ipType,
+		ISP:        node.ISP,
 		CustomHost: node.Host,
 		CustomPort: node.Port,
 		CustomUser: node.User,
@@ -428,6 +443,9 @@ func (m *Manager) AddCustomExit(node CustomNode) (*Tunnel, error) {
 			CountryCode: node.CountryCode,
 			Ping:        node.Ping,
 			SpeedMbps:   node.SpeedMbps,
+			IPType:      ipType,
+			ISP:         node.ISP,
+			Kind:        "custom",
 		},
 	}
 	m.tunnels[slot] = t

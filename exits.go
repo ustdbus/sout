@@ -34,6 +34,8 @@ type Exit struct {
 	SocksPass string        `json:"socks_pass"`
 	Inbounds  []ExitInbound `json:"inbounds"`
 	Kind      string        `json:"kind,omitempty"` // "vpngate" | "custom"
+	IPType    string        `json:"ip_type,omitempty"` // "residential" | "datacenter"
+	ISP       string        `json:"isp,omitempty"`
 }
 
 // NodeBranch 是某个节点下的一个分流分支（如直连分支、日本家宽分支等）
@@ -148,13 +150,23 @@ func (m *Manager) ExitsOf() ExitsView {
 		byHost[sTag] = i
 		hostToTunnel[sTag] = t
 		cred := t.credential()
+		ipType := t.IPType
+		if ipType == "" {
+			if t.Kind == "custom" {
+				ipType = "residential"
+			} else {
+				ipType = "residential"
+			}
+		}
 		view.Exits = append(view.Exits, Exit{
 			Slot: t.Slot, Port: t.Port, Host: t.Node.HostName,
 			Region: t.Node.CountryCode, Country: t.Node.Country,
 			Ping: t.Node.Ping, SpeedMbps: t.Node.SpeedMbps,
 			ExitIP: t.ExitIP, Status: t.Status, Err: t.Err, Since: t.Since,
 			SocksUser: cred.User, SocksPass: cred.Pass,
-			Kind: t.Kind,
+			Kind:   t.Kind,
+			IPType: ipType,
+			ISP:    t.ISP,
 		})
 	}
 

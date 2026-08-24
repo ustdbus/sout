@@ -46,6 +46,13 @@ type Node struct {
 	SpeedMbps   float64 `json:"speed_mbps"`
 	Sessions    int     `json:"sessions"`
 	Config      string  `json:"-"` // 解码后的 .ovpn 内容
+	IPType      string  `json:"ip_type,omitempty"` // "residential" | "datacenter"
+	ISP         string  `json:"isp,omitempty"`
+	Kind        string  `json:"kind,omitempty"` // "vpngate" | "custom"
+	Port        int     `json:"port,omitempty"`
+	User        string  `json:"user,omitempty"`
+	Pass        string  `json:"pass,omitempty"`
+	Remark      string  `json:"remark,omitempty"`
 }
 
 // fetchNodes 拉取并解析 VPN Gate 的节点列表。
@@ -159,6 +166,8 @@ func parseNodeCSV(body string) ([]Node, error) {
 			SpeedMbps:   speed / 1e6,
 			Sessions:    sessions,
 			Config:      string(cfg),
+			IPType:      "residential",
+			Kind:        "vpngate",
 		})
 	}
 	if len(nodes) == 0 {

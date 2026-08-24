@@ -21,6 +21,8 @@ type persistedTunnel struct {
 	SocksUser  string `json:"socks_user,omitempty"`
 	SocksPass  string `json:"socks_pass,omitempty"`
 	Kind       string `json:"kind,omitempty"`
+	IPType     string `json:"ip_type,omitempty"`
+	ISP        string `json:"isp,omitempty"`
 	CustomHost string `json:"custom_host,omitempty"`
 	CustomPort int    `json:"custom_port,omitempty"`
 	CustomUser string `json:"custom_user,omitempty"`
@@ -52,6 +54,8 @@ func (m *Manager) saveState() error {
 			SocksUser:   t.Cred.User,
 			SocksPass:   t.Cred.Pass,
 			Kind:        t.Kind,
+			IPType:      t.IPType,
+			ISP:         t.ISP,
 			CustomHost:  t.CustomHost,
 			CustomPort:  t.CustomPort,
 			CustomUser:  t.CustomUser,
@@ -124,6 +128,8 @@ func (m *Manager) restoreState() (int, error) {
 			Status:     "starting",
 			Cred:       cred,
 			Kind:       p.Kind,
+			IPType:     p.IPType,
+			ISP:        p.ISP,
 			CustomHost: p.CustomHost,
 			CustomPort: p.CustomPort,
 			CustomUser: p.CustomUser,

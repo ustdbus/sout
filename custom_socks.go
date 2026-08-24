@@ -32,16 +32,176 @@ type CustomNode struct {
 	Ping        int     `json:"ping"`
 	SpeedMbps   float64 `json:"speed_mbps"`
 	ExitIP      string  `json:"exit_ip"`
+	IPType      string  `json:"ip_type"` // "residential" | "datacenter"
+	ISP         string  `json:"isp,omitempty"`
 	SourceID    string  `json:"source_id,omitempty"`
 }
 
 // CustomSource 记录一个第三方的 SOCKS5 订阅/API 节点源
 type CustomSource struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	URL       string    `json:"url"`
-	Count     int       `json:"count"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	URL              string    `json:"url"`
+	Count            int       `json:"count"`
+	Enabled          bool      `json:"enabled"`
+	ResidentialCount int       `json:"residential_count"`
+	DatacenterCount  int       `json:"datacenter_count"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+type IPInfo struct {
+	IPType      string    `json:"ip_type"`
+	ISP         string    `json:"isp"`
+	Country     string    `json:"country"`
+	CountryCode string    `json:"country_code"`
+	CachedAt    time.Time `json:"cached_at"`
+}
+
+var (
+	ipCacheMu sync.RWMutex
+	ipCache   = make(map[string]IPInfo)
+)
+
+// DetectIPType 查询单个 IP 的属性（家宽/机房、运营商、国家）
+func DetectIPType(ip string) (ipType, isp, country, countryCode string) {
+	ip = strings.TrimSpace(ip)
+	if ip == "" {
+		return "datacenter", "", "", ""
+	}
+	ipCacheMu.RLock()
+	if info, ok := ipCache[ip]; ok && time.Since(info.CachedAt) < 24*time.Hour {
+		ipCacheMu.RUnlock()
+		return info.IPType, info.ISP, info.Country, info.CountryCode
+	}
+	ipCacheMu.RUnlock()
+
+	client := &http.Client{Timeout: 4 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("http://ip-api.com/json/%s?fields=status,country,countryCode,isp,org,as,hosting,mobile,query", ip))
+	if err != nil {
+		return "datacenter", "", "", ""
+	}
+	defer resp.Body.Close()
+
+	var data struct {
+		Status      string `json:"status"`
+		Country     string `json:"country"`
+		CountryCode string `json:"countryCode"`
+		ISP         string `json:"isp"`
+		Hosting     bool   `json:"hosting"`
+		Mobile      bool   `json:"mobile"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil || data.Status != "success" {
+		return "datacenter", "", "", ""
+	}
+
+	ipType = "residential"
+	if data.Hosting {
+		ipType = "datacenter"
+	}
+
+	info := IPInfo{
+		IPType:      ipType,
+		ISP:         data.ISP,
+		Country:     data.Country,
+		CountryCode: data.CountryCode,
+		CachedAt:    time.Now(),
+	}
+
+	ipCacheMu.Lock()
+	ipCache[ip] = info
+	ipCacheMu.Unlock()
+
+	return info.IPType, info.ISP, info.Country, info.CountryCode
+}
+
+// BatchDetectIPInfo 批量并发探测节点列表的真实属性
+func BatchDetectIPInfo(nodes []*CustomNode) {
+	if len(nodes) == 0 {
+		return
+	}
+	limit := len(nodes)
+	if limit > 100 {
+		limit = 100
+	}
+
+	type QueryItem struct {
+		Query string `json:"query"`
+	}
+	var queries []QueryItem
+	nodeIdxMap := make(map[string][]*CustomNode)
+
+	for i := 0; i < limit; i++ {
+		n := nodes[i]
+		ip := strings.TrimSpace(n.Host)
+		if net.ParseIP(ip) == nil {
+			n.IPType = "datacenter"
+			continue
+		}
+		if _, seen := nodeIdxMap[ip]; !seen {
+			queries = append(queries, QueryItem{Query: ip})
+		}
+		nodeIdxMap[ip] = append(nodeIdxMap[ip], n)
+	}
+
+	if len(queries) == 0 {
+		return
+	}
+
+	payload, err := json.Marshal(queries)
+	if err != nil {
+		return
+	}
+
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Post("http://ip-api.com/batch?fields=status,country,countryCode,isp,org,as,hosting,mobile,query", "application/json", strings.NewReader(string(payload)))
+	if err != nil {
+		for _, n := range nodes {
+			if n.IPType == "" {
+				n.IPType = "residential"
+			}
+		}
+		return
+	}
+	defer resp.Body.Close()
+
+	var results []struct {
+		Status      string `json:"status"`
+		Query       string `json:"query"`
+		Country     string `json:"country"`
+		CountryCode string `json:"countryCode"`
+		ISP         string `json:"isp"`
+		Hosting     bool   `json:"hosting"`
+		Mobile      bool   `json:"mobile"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+		return
+	}
+
+	for _, item := range results {
+		if item.Status != "success" {
+			continue
+		}
+		ipType := "residential"
+		if item.Hosting {
+			ipType = "datacenter"
+		}
+		for _, n := range nodeIdxMap[item.Query] {
+			n.IPType = ipType
+			n.ISP = item.ISP
+			if n.Country == "" || n.Country == "自定义" {
+				n.Country = item.Country
+			}
+			if n.CountryCode == "" || n.CountryCode == "CUSTOM" {
+				n.CountryCode = item.CountryCode
+			}
+		}
+	}
+	for _, n := range nodes {
+		if n.IPType == "" {
+			n.IPType = "residential"
+		}
+	}
 }
 
 type CustomStore struct {
@@ -203,8 +363,8 @@ func dialSocks5(proxyAddr, user, pass, targetAddr string, timeout time.Duration)
 	return conn, nil
 }
 
-// ProbeCustomSocks 探测自定义 SOCKS5 代理的真实出口 IP 和延迟
-func ProbeCustomSocks(proxyAddr, user, pass string, timeout time.Duration) (string, int, error) {
+// ProbeCustomSocks 探测自定义 SOCKS5 代理的真实出口 IP、延迟及家宽/机房属性
+func ProbeCustomSocks(proxyAddr, user, pass string, timeout time.Duration) (exitIP string, ping int, ipType string, isp string, err error) {
 	start := time.Now()
 	dialer := func(ctx context.Context, network, addr string) (net.Conn, error) {
 		return dialSocks5(proxyAddr, user, pass, addr, timeout)
@@ -217,19 +377,22 @@ func ProbeCustomSocks(proxyAddr, user, pass string, timeout time.Duration) (stri
 
 	resp, err := client.Get("http://api.ipify.org")
 	if err != nil {
-		return "", 0, fmt.Errorf("连接 SOCKS5 失败: %w", err)
+		return "", 0, "", "", fmt.Errorf("连接 SOCKS5 失败: %w", err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", 0, fmt.Errorf("读取出口响应失败: %w", err)
+		return "", 0, "", "", fmt.Errorf("读取出口响应失败: %w", err)
 	}
 	ip := strings.TrimSpace(string(body))
 	if net.ParseIP(ip) == nil {
-		return "", 0, fmt.Errorf("出口 IP 返回异常: %s", ip)
+		return "", 0, "", "", fmt.Errorf("出口 IP 返回异常: %s", ip)
 	}
-	ping := int(time.Since(start).Milliseconds())
-	return ip, ping, nil
+	ping = int(time.Since(start).Milliseconds())
+
+	// 查询 IP 属性
+	ipType, isp, _, _ = DetectIPType(ip)
+	return ip, ping, ipType, isp, nil
 }
 
 // ParseSocksURL 解析 socks5://user:pass@host:port#remark 格式或 host:port:user:pass 格式
@@ -327,11 +490,20 @@ func FetchSourceNodes(sourceURL string, timeout time.Duration) ([]CustomNode, er
 			Country:     "自定义",
 			CountryCode: "CUSTOM",
 			Remark:      remark,
+			IPType:      "residential", // 初始默认
 		})
 	}
 
 	if len(nodes) == 0 {
 		return nil, fmt.Errorf("未在该源中解析出有效 SOCKS5 节点")
 	}
+
+	// 批量探测 IP 属性与家宽/机房分类
+	ptrs := make([]*CustomNode, len(nodes))
+	for i := range nodes {
+		ptrs[i] = &nodes[i]
+	}
+	BatchDetectIPInfo(ptrs)
+
 	return nodes, nil
 }

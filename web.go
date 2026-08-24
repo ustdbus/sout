@@ -122,7 +122,12 @@ select:focus,input:focus{outline:none;border-color:var(--accent)}
 .toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#1f242c;border:1px solid var(--line);border-radius:6px;padding:9px 16px;font-size:13px;z-index:80;opacity:0;pointer-events:none;transition:opacity .18s;box-shadow:0 4px 12px rgba(0,0,0,.4)}
 .toast.show{opacity:1}
 .toast.bad{border-color:rgba(248,81,73,.5);color:var(--bad)}
-textarea{width:100%;min-height:280px;background:#0d1117;border:1px solid var(--line);color:var(--text);border-radius:6px;font:12px/1.8 ui-monospace,SFMono-Regular,Menlo,monospace;padding:12px;resize:vertical}
+.tab-pill{background:#161b22;border:1px solid var(--line);color:var(--dim);font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;cursor:pointer;transition:all .15s}
+.tab-pill:hover{border-color:var(--accent);color:var(--text)}
+.tab-pill.active{background:rgba(88,166,255,.15);border-color:var(--accent);color:var(--accent)}
+.pool-tag{font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;display:inline-flex;align-items:center;gap:3px}
+.pool-tag.residential{background:rgba(63,185,80,.15);color:#3fb950;border:1px solid rgba(63,185,80,.3)}
+.pool-tag.datacenter{background:rgba(88,166,255,.15);color:#58a6ff;border:1px solid rgba(88,166,255,.3)}
 </style>
 </head>
 <body>
@@ -189,11 +194,16 @@ textarea{width:100%;min-height:280px;background:#0d1117;border:1px solid var(--l
 <div class="modal" id="newExitModal">
   <div class="sheet">
     <div class="head">
-      <h2>新建 VPN Gate 国家/地区出口</h2>
+      <h2>新建国家/地区出口</h2>
       <span class="spacer"></span>
       <button class="icon" data-close="newExitModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
     <div class="body">
+      <div style="display:flex;gap:6px;margin-bottom:14px" id="poolTabs">
+        <button type="button" class="tab-pill active" data-pool="all">全部节点</button>
+        <button type="button" class="tab-pill" data-pool="residential">🏠 家宽池</button>
+        <button type="button" class="tab-pill" data-pool="datacenter">🏢 机房池</button>
+      </div>
       <label class="f">
         <span>选择目标国家/地区</span>
         <input type="search" id="rgFilter" placeholder="搜索地区，如 JP、美国、日本、韩国...">
@@ -474,15 +484,19 @@ function renderExits(){
     const kindBadge = e.kind === 'custom'
       ? '<span style="background:#1f6feb;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600">自定义 S5</span>'
       : '<span style="background:#238636;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600">VPN Gate</span>';
+    const poolBadge = e.ip_type === 'datacenter'
+      ? '<span class="pool-tag datacenter">🏢 机房</span>'
+      : '<span class="pool-tag residential">🏠 家宽</span>';
     const pingBadge = e.ping > 0 ? ('<span class="metric-tag ping" title="延迟">' + e.ping + ' ms</span>') : '';
     const speedBadge = e.speed_mbps > 0 ? ('<span class="metric-tag speed" title="带宽">' + e.speed_mbps.toFixed(0) + ' Mbps</span>') : '';
     const swapBtn = e.kind === 'custom' ? '' : ('<button class="icon" data-swap="' + e.slot + '" title="换一个同国家/地区节点">' + ICON.redo + '</button>');
+    const ispText = e.isp ? (' (' + esc(e.isp) + ')') : '';
     return '<div class="exit-row">'
       + '<span class="dot ' + e.status + '" title="' + e.status + '"></span>'
       + '<span class="exit-ip">' + esc(label) + '</span>'
-      + kindBadge
+      + '<div style="display:flex;gap:4px;align-items:center">' + kindBadge + poolBadge + '</div>'
       + '<div class="exit-meta">'
-      +   '<span>' + esc(place) + ' · ' + esc(e.host) + '</span>'
+      +   '<span>' + esc(place) + ispText + ' · ' + esc(e.host) + '</span>'
       +   pingBadge
       +   speedBadge
       +   '<button class="chip-btn" data-cred="' + e.slot + '" title="查看/修改 SOCKS5 凭据">' + ICON.lock + ' SOCKS5 :' + e.port + '</button>'
@@ -665,14 +679,27 @@ $('#stepIncBtn').onclick = () => {
   }
 };
 
+let currentPoolType = 'all';
+
+$('#poolTabs').onclick = async e => {
+  const btn = e.target.closest('[data-pool]');
+  if(btn){
+    document.querySelectorAll('#poolTabs .tab-pill').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentPoolType = btn.dataset.pool;
+    try{
+      regionList = await api('/api/regions?type=' + encodeURIComponent(currentPoolType)) || [];
+    }catch(err){ regionList = []; }
+    renderRegionList();
+  }
+};
+
 $('#openNewExitModalBtn').onclick = async () => {
   exitCount = 1;
   $('#exitCountInput').value = exitCount;
-  if(!regionList.length){
-    try{
-      regionList = await api('/api/regions') || [];
-    }catch(e){}
-  }
+  try{
+    regionList = await api('/api/regions?type=' + encodeURIComponent(currentPoolType)) || [];
+  }catch(e){}
   renderRegionList();
   openModal('newExitModal');
 };
@@ -709,7 +736,7 @@ $('#startProvisionBtn').onclick = async e => {
   e.target.disabled = true;
   const label = selectedRegion === 'ALL' ? '全球最高速' : selectedRegion;
   try{
-    await api('/api/provision?count=' + count + '&region=' + encodeURIComponent(selectedRegion), {method:'POST'});
+    await api('/api/provision?count=' + count + '&region=' + encodeURIComponent(selectedRegion) + '&type=' + encodeURIComponent(currentPoolType), {method:'POST'});
     toast('正在拉取 ' + count + ' 条「' + label + '」出口隧道...');
     closeModal('newExitModal');
     poll();
@@ -947,19 +974,33 @@ async function loadSourcesList(){
         ? '<span style="background:#238636;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600">系统内置</span>'
         : '<span style="background:#1f6feb;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600">自定义源</span>';
       
+      const isEn = s.enabled !== false;
+      const statusBadge = isEn
+        ? '<span style="background:rgba(63,185,80,.15);color:#3fb950;border:1px solid rgba(63,185,80,.3);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600">已启用</span>'
+        : '<span style="background:rgba(248,81,73,.15);color:#f85149;border:1px solid rgba(248,81,73,.3);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600">已禁用</span>';
+
+      const toggleBtn = isEn
+        ? '<button class="chip-btn danger" data-toggle-src="' + esc(s.id) + '" title="点击禁用此源（节点将从家宽/机房池移除）">禁用</button>'
+        : '<button class="chip-btn" style="background:#238636;color:#fff" data-toggle-src="' + esc(s.id) + '" title="点击启用此源（节点将加入家宽/机房池）">启用</button>';
+
       const actBtns = s.is_builtin
         ? ('<button class="chip-btn" data-refresh-src="' + esc(s.id) + '" title="立即刷新官方节点数据">' + ICON.redo + ' 刷新节点池</button>')
-        : ('<button class="chip-btn" data-import-src="' + esc(s.id) + '" title="从该源导入节点并启用出口">启用出口</button>'
+        : (toggleBtn
+           + '<button class="chip-btn" data-import-src="' + esc(s.id) + '" title="从该源立即连通并拉起出口">拉起出口</button>'
            + '<button class="icon" data-refresh-src="' + esc(s.id) + '" title="刷新源节点">' + ICON.redo + '</button>'
            + '<button class="icon danger" data-del-src="' + esc(s.id) + '" title="删除此源">' + ICON.trash + '</button>');
+
+      const nodeCounts = s.is_builtin
+        ? (s.count + ' 个节点 (全部为 🏠 家宽)')
+        : (s.count + ' 个节点 (🏠 家宽: ' + (s.residential_count || 0) + ' · 🏢 机房: ' + (s.datacenter_count || 0) + ')');
 
       return '<div style="background:#12151a;border:1px solid var(--line);border-radius:4px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between">'
         + '<div>'
         +   '<div style="font-weight:600;font-size:13px;display:flex;align-items:center;gap:6px">' 
-        +     esc(s.name) + ' ' + typeBadge 
-        +     '<span style="font-size:11px;color:var(--ok);font-weight:normal">' + s.count + ' 个节点</span>'
+        +     esc(s.name) + ' ' + typeBadge + ' ' + statusBadge
         +   '</div>'
-        +   '<div style="font-size:11px;color:var(--dim);margin-top:2px;max-width:330px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(s.url) + '</div>'
+        +   '<div style="font-size:11px;color:var(--dim);margin-top:2px">' + esc(nodeCounts) + '</div>'
+        +   '<div style="font-size:11px;color:var(--dim);margin-top:2px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(s.url) + '</div>'
         + '</div>'
         + '<div style="display:flex;gap:6px;align-items:center">'
         +   actBtns
@@ -987,7 +1028,7 @@ $('#addSourceBtn').onclick = async e => {
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({name: name, url: url}),
     });
-    toast('源添加成功，已解析 ' + res.count + ' 个节点');
+    toast('源添加成功并已默认启用，解析 ' + res.count + ' 个节点 (🏠 家宽: ' + (res.residential_count || 0) + ' · 🏢 机房: ' + (res.datacenter_count || 0) + ')');
     $('#srcName').value = '';
     $('#srcURL').value = '';
     loadSourcesList();
@@ -996,6 +1037,19 @@ $('#addSourceBtn').onclick = async e => {
 };
 
 $('#sourcesContainer').onclick = async e => {
+  const tog = e.target.closest('[data-toggle-src]');
+  if(tog){
+    const id = tog.dataset.toggleSrc;
+    tog.disabled = true;
+    try{
+      const res = await api('/api/custom/source/toggle?id=' + encodeURIComponent(id), {method:'POST'});
+      toast(res.enabled ? '已启用该源，节点已分类加入家宽/机房池' : '已禁用该源，节点已从池中移出');
+      loadSourcesList();
+    }catch(err){ toast(err.message, true); }
+    tog.disabled = false;
+    return;
+  }
+
   const imp = e.target.closest('[data-import-src]');
   if(imp){
     const id = imp.dataset.importSrc;

@@ -12,7 +12,70 @@ import (
 type ProvisionRequest struct {
 	Region     string // 地区代码，留空或 "ALL" 表示不限地区
 	Count      int
-	TemplateID int // 模板入站 ID；0 表示仅建出站
+	TemplateID int    // 模板入站 ID；0 表示仅建出站
+	PoolType   string // "all" | "residential" | "datacenter"
+}
+
+// GetAllCandidateNodes 获取指定池下的全部候选可用节点 (VPN Gate + 已启用的 SOCKS5 订阅源)
+func (m *Manager) GetAllCandidateNodes(poolType string) []Node {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var nodes []Node
+
+	// 1. VPN Gate 官方节点（全部属于家宽池）
+	if poolType == "" || poolType == "all" || poolType == "residential" {
+		for _, n := range m.nodes {
+			n.Kind = "vpngate"
+			n.IPType = "residential"
+			nodes = append(nodes, n)
+		}
+	}
+
+	// 2. 自定义 SOCKS5 订阅源中已启用的节点
+	if globalCustomStore != nil {
+		globalCustomStore.mu.RLock()
+		for _, node := range globalCustomStore.Nodes {
+			if node.SourceID != "" {
+				src, ok := globalCustomStore.Sources[node.SourceID]
+				if !ok || !src.Enabled {
+					continue
+				}
+			}
+			ipType := node.IPType
+			if ipType == "" {
+				ipType = "residential"
+			}
+			if poolType == "" || poolType == "all" || poolType == ipType {
+				cCode := node.CountryCode
+				if cCode == "" {
+					cCode = "CUSTOM"
+				}
+				cName := node.Country
+				if cName == "" {
+					cName = "自定义S5"
+				}
+				nodes = append(nodes, Node{
+					HostName:    node.HostName,
+					IP:          node.Host,
+					Country:     cName,
+					CountryCode: cCode,
+					Ping:        node.Ping,
+					SpeedMbps:   node.SpeedMbps,
+					IPType:      ipType,
+					ISP:         node.ISP,
+					Kind:        "custom",
+					Port:        node.Port,
+					User:        node.User,
+					Pass:        node.Pass,
+					Remark:      node.Remark,
+				})
+			}
+		}
+		globalCustomStore.mu.RUnlock()
+	}
+
+	return nodes
 }
 
 // Provision 异步执行一组出站拉取，返回 Job 供前端查询进度
@@ -20,7 +83,11 @@ func (m *Manager) Provision(req ProvisionRequest) (*Job, error) {
 	if req.Count < 1 {
 		return nil, fmt.Errorf("拉取数量至少为 1")
 	}
-	picks, err := m.pickNodes(req.Region, req.Count)
+	poolType := req.PoolType
+	if poolType == "" {
+		poolType = "all"
+	}
+	picks, err := m.pickNodes(req.Region, poolType, req.Count)
 	if err != nil {
 		return nil, err
 	}
@@ -35,9 +102,15 @@ func (m *Manager) Provision(req ProvisionRequest) (*Job, error) {
 
 	where := req.Region
 	if where == "" || strings.EqualFold(where, "ALL") {
-		where = "全球最优"
+		where = "最优"
 	}
-	job := m.jobs.New(fmt.Sprintf("拉取 %d 条 %s 出口", len(picks), where), labels)
+	poolLabel := ""
+	if poolType == "residential" {
+		poolLabel = " (家宽池)"
+	} else if poolType == "datacenter" {
+		poolLabel = " (机房池)"
+	}
+	job := m.jobs.New(fmt.Sprintf("拉取 %d 条 %s 出口%s", len(picks), where, poolLabel), labels)
 
 	go m.runProvision(job, picks, req.TemplateID)
 	return job, nil
@@ -50,7 +123,28 @@ func (m *Manager) runProvision(job *Job, picks []Node, templateID int) {
 	started := make([]*Tunnel, len(picks))
 
 	for i, node := range picks {
-		t, err := m.Start(node)
+		var t *Tunnel
+		var err error
+		if node.Kind == "custom" {
+			cNode := CustomNode{
+				HostName:    node.HostName,
+				Host:        node.IP,
+				Port:        node.Port,
+				User:        node.User,
+				Pass:        node.Pass,
+				Country:     node.Country,
+				CountryCode: node.CountryCode,
+				Remark:      node.Remark,
+				Ping:        node.Ping,
+				SpeedMbps:   node.SpeedMbps,
+				IPType:      node.IPType,
+				ISP:         node.ISP,
+			}
+			t, err = m.AddCustomExit(cNode)
+		} else {
+			t, err = m.Start(node)
+		}
+
 		if err != nil {
 			job.Set(i, "failed", err.Error())
 			continue
@@ -112,18 +206,19 @@ func (m *Manager) waitUp(t *Tunnel) {
 	}
 }
 
-// pickNodes 挑选 count 个未被占用的节点，按速度降序选取
-func (m *Manager) pickNodes(region string, count int) ([]Node, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+// pickNodes 挑选 count 个未被占用的节点，按速度与质量降序选取
+func (m *Manager) pickNodes(region, poolType string, count int) ([]Node, error) {
+	candidateNodes := m.GetAllCandidateNodes(poolType)
 
+	m.mu.RLock()
 	used := map[string]bool{}
 	for _, t := range m.tunnels {
 		used[t.Node.HostName] = true
 	}
+	m.mu.RUnlock()
 
 	var out []Node
-	for _, n := range m.nodes {
+	for _, n := range candidateNodes {
 		if len(out) >= count {
 			break
 		}
@@ -153,18 +248,19 @@ type RegionStat struct {
 	BestSpeed float64 `json:"best_speed_mbps"`
 }
 
-// Regions 返回当前所有可用地区的聚合统计，按可用数降序
-func (m *Manager) Regions() []RegionStat {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+// Regions 返回当前指定节点池下所有可用地区的聚合统计，按可用数降序
+func (m *Manager) Regions(poolType string) []RegionStat {
+	candidateNodes := m.GetAllCandidateNodes(poolType)
 
+	m.mu.RLock()
 	used := map[string]bool{}
 	for _, t := range m.tunnels {
 		used[t.Node.HostName] = true
 	}
+	m.mu.RUnlock()
 
 	byCode := map[string]*RegionStat{}
-	for _, n := range m.nodes {
+	for _, n := range candidateNodes {
 		if used[n.HostName] || n.CountryCode == "" {
 			continue
 		}
