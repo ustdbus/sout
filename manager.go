@@ -111,21 +111,27 @@ func (m *Manager) Start(node Node) (*Tunnel, error) {
 		return nil, err
 	}
 	t := &Tunnel{
-		Slot:   slot,
-		Port:   port,
-		Node:   node,
-		Kind:   node.Kind,
-		IPType: node.IPType,
-		ISP:    node.ISP,
-		Status: "starting",
-		Since:  time.Now(),
-		Cred:   cred,
+		Slot:           slot,
+		Port:           port,
+		Node:           node,
+		Kind:           node.Kind,
+		IPType:         node.IPType,
+		TargetPoolType: node.IPType,
+		TargetRegion:   node.CountryCode,
+		TargetSourceID: node.SourceID,
+		ISP:            node.ISP,
+		Status:         "starting",
+		Since:          time.Now(),
+		Cred:           cred,
 	}
 	if t.Kind == "" {
 		t.Kind = "vpngate"
 	}
 	if t.IPType == "" {
 		t.IPType = "residential"
+	}
+	if t.TargetPoolType == "" {
+		t.TargetPoolType = t.IPType
 	}
 	m.tunnels[slot] = t
 	m.mu.Unlock()
@@ -180,7 +186,7 @@ func (m *Manager) bringUpPersist(t *Tunnel, notify bool, persist bool) {
 }
 
 func (m *Manager) tryCandidates(t *Tunnel, notify bool) bool {
-	candidates := m.candidatesFor(t.Node)
+	candidates := m.candidatesFor(t)
 	for i, node := range candidates {
 		if !m.tunnelActive(t) {
 			return false
@@ -262,26 +268,39 @@ func (m *Manager) tryNode(t *Tunnel) error {
 	return nil
 }
 
-func (m *Manager) candidatesFor(first Node) []Node {
+func (m *Manager) candidatesFor(t *Tunnel) []Node {
 	const maxTries = 30
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	first := t.Node
 	used := map[string]bool{first.HostName: true}
-	for _, t := range m.tunnels {
-		used[t.Node.HostName] = true
+	for _, other := range m.tunnels {
+		used[other.Node.HostName] = true
 	}
 
-	poolType := first.IPType
+	poolType := t.TargetPoolType
+	if poolType == "" {
+		poolType = first.IPType
+	}
 	if poolType == "" {
 		poolType = "all"
 	}
 	allNodes := m.GetAllCandidateNodes(poolType)
 	out := []Node{first}
 
-	isSpecificCountry := first.CountryCode != "" && !strings.EqualFold(first.CountryCode, "ALL") && !strings.EqualFold(first.CountryCode, "CUSTOM")
-	isBuiltinVPNGate := first.SourceID == "builtin-vpngate" || (first.Kind == "vpngate" && first.SourceID == "")
-	isSpecificCustomSrc := first.SourceID != "" && first.SourceID != "builtin-vpngate"
+	targetRegion := t.TargetRegion
+	if targetRegion == "" {
+		targetRegion = first.CountryCode
+	}
+	targetSourceID := t.TargetSourceID
+	if targetSourceID == "" {
+		targetSourceID = first.SourceID
+	}
+
+	isSpecificCountry := targetRegion != "" && !strings.EqualFold(targetRegion, "ALL") && !strings.EqualFold(targetRegion, "CUSTOM") && !strings.HasPrefix(targetRegion, "SRC:")
+	isBuiltinVPNGate := targetSourceID == "builtin-vpngate" || targetRegion == "SRC:builtin-vpngate" || (first.Kind == "vpngate" && targetSourceID == "")
+	isSpecificCustomSrc := targetSourceID != "" && targetSourceID != "builtin-vpngate"
 
 	// 1. 同源 / 同国家地区 严格候选查找
 	for _, n := range allNodes {
@@ -292,34 +311,33 @@ func (m *Manager) candidatesFor(first Node) []Node {
 			continue
 		}
 
-		// A. 如果指定了具体国家代码 (如 US, JP, HK, FR 等)，必须严格限定在相同国家内！绝对不允许跨国漂移！
+		// A. 国家代码严格锁定：绝对不能跨国
 		if isSpecificCountry {
-			if !strings.EqualFold(n.CountryCode, first.CountryCode) {
+			if !strings.EqualFold(n.CountryCode, targetRegion) {
 				continue
 			}
 		}
 
-		// B. 如果指定了特定源
+		// B. 订阅源严格锁定：绝对不能跨源
 		if isBuiltinVPNGate {
 			if n.Kind == "custom" || (n.SourceID != "" && n.SourceID != "builtin-vpngate") {
 				continue
 			}
 		} else if isSpecificCustomSrc {
-			// 如果指定了自定义订阅源，必须严格限定在同一订阅源内！绝对不允许跨源！
-			if n.SourceID != first.SourceID {
+			if n.SourceID != targetSourceID {
 				continue
 			}
 		}
 
-		// C. 如果指定了家宽/机房类型，严格匹配
-		if first.IPType != "" && n.IPType != "" && n.IPType != first.IPType {
+		// C. 家宽/机房严格锁定：如果指定了池类型，绝对不能跨池
+		if poolType != "all" && n.IPType != "" && n.IPType != poolType {
 			continue
 		}
 
 		out = append(out, n)
 	}
 
-	// 2. 仅当用户明确选择「不限地区 (ALL)」且未指定任何特定源时，才允许从全局可用节点中补充候选
+	// 2. 仅当用户明确选择「不限地区 (ALL)」且未指定任何特定源时，才允许从全局可用节点中补充候选（但仍需遵守 poolType）
 	if !isSpecificCountry && !isBuiltinVPNGate && !isSpecificCustomSrc {
 		for _, n := range allNodes {
 			if len(out) >= maxTries {
@@ -328,7 +346,7 @@ func (m *Manager) candidatesFor(first Node) []Node {
 			if used[n.HostName] {
 				continue
 			}
-			if first.IPType != "" && n.IPType != "" && n.IPType != first.IPType {
+			if poolType != "all" && n.IPType != "" && n.IPType != poolType {
 				continue
 			}
 			alreadyIn := false
@@ -361,11 +379,12 @@ func (m *Manager) Stop(slot int) error {
 	if err := m.saveState(); err != nil {
 		log.Printf("保存状态失败: %v", err)
 	}
-	// 级联清理绑定在此出口上的所有分流分支（包括当前节点与所有历史更换过的节点）
-	allHosts := append([]string{t.Node.HostName}, t.HistoryHosts...)
-	m.cleanupBoundBranches(allHosts...)
-	invalidateInbounds()
 	m.notifyPanel()
+
+	// 级联清理：提取该隧道当前节点及所有历史绑定过的节点，全量清理分流管理中的分支与路由规则
+	hosts := append([]string{t.Node.HostName}, t.HistoryHosts...)
+	go m.cleanupBoundBranches(hosts...)
+
 	return nil
 }
 
@@ -376,22 +395,24 @@ func (m *Manager) Swap(slot int) error {
 	if !ok {
 		return fmt.Errorf("槽位 %d 没有在运行", slot)
 	}
-	poolType := t.IPType
+	poolType := t.TargetPoolType
 	if poolType == "" {
-		poolType = "residential"
+		poolType = t.IPType
 	}
-	var region string
-	if t.Node.SourceID != "" {
-		region = "SRC:" + t.Node.SourceID
-	} else {
-		region = t.Node.CountryCode
+	if poolType == "" {
+		poolType = "all"
+	}
+	region := t.TargetRegion
+	if region == "" {
+		if t.TargetSourceID != "" {
+			region = "SRC:" + t.TargetSourceID
+		} else {
+			region = t.Node.CountryCode
+		}
 	}
 	picks, err := m.pickNodes(region, poolType, 1)
 	if err != nil {
-		picks, err = m.pickNodes(t.Node.CountryCode, poolType, 1)
-		if err != nil {
-			return err
-		}
+		return err
 	}
 	oldHost := t.Node.HostName
 	t.recordHost(oldHost)
@@ -498,19 +519,22 @@ func (m *Manager) AddCustomExit(node CustomNode) (*Tunnel, error) {
 		ipType = "residential"
 	}
 	t := &Tunnel{
-		Slot:       slot,
-		Port:       port,
-		Kind:       "custom",
-		IPType:     ipType,
-		ISP:        node.ISP,
-		CustomHost: node.Host,
-		CustomPort: node.Port,
-		CustomUser: node.User,
-		CustomPass: node.Pass,
-		Status:     "starting",
-		Since:      time.Now(),
-		Cred:       cred,
-		ExitIP:     node.ExitIP,
+		Slot:           slot,
+		Port:           port,
+		Kind:           "custom",
+		IPType:         ipType,
+		TargetPoolType: ipType,
+		TargetRegion:   node.CountryCode,
+		TargetSourceID: node.SourceID,
+		ISP:            node.ISP,
+		CustomHost:     node.Host,
+		CustomPort:     node.Port,
+		CustomUser:     node.User,
+		CustomPass:     node.Pass,
+		Status:         "starting",
+		Since:          time.Now(),
+		Cred:           cred,
+		ExitIP:         node.ExitIP,
 		Node: Node{
 			HostName:    node.HostName,
 			IP:          node.Host,

@@ -124,11 +124,11 @@ func (m *Manager) Provision(req ProvisionRequest) (*Job, error) {
 	}
 	job := m.jobs.New(fmt.Sprintf("拉取 %d 条 %s 出口%s", len(picks), where, poolLabel), labels)
 
-	go m.runProvision(job, picks, req.TemplateID)
+	go m.runProvision(job, picks, req.Region, poolType, req.TemplateID)
 	return job, nil
 }
 
-func (m *Manager) runProvision(job *Job, picks []Node, templateID int) {
+func (m *Manager) runProvision(job *Job, picks []Node, region, poolType string, templateID int) {
 	defer job.Finish()
 
 	var wg sync.WaitGroup
@@ -161,6 +161,11 @@ func (m *Manager) runProvision(job *Job, picks []Node, templateID int) {
 		if err != nil {
 			job.Set(i, "failed", err.Error())
 			continue
+		}
+		t.TargetPoolType = poolType
+		t.TargetRegion = region
+		if strings.HasPrefix(region, "SRC:") {
+			t.TargetSourceID = strings.TrimPrefix(region, "SRC:")
 		}
 		started[i] = t
 		job.Set(i, "running", "连接 "+node.HostName)

@@ -37,7 +37,10 @@ type Tunnel struct {
 	CustomPort int       `json:"custom_port,omitempty"`
 	CustomUser   string    `json:"custom_user,omitempty"`
 	CustomPass   string    `json:"custom_pass,omitempty"`
-	HistoryHosts []string  `json:"history_hosts,omitempty"`
+	TargetPoolType string    `json:"target_pool_type,omitempty"` // 用户指定的 "residential" | "datacenter" | "all"
+	TargetRegion   string    `json:"target_region,omitempty"`    // 用户指定的国家代码或源 (如 "US", "SRC:hookzof", "ALL")
+	TargetSourceID string    `json:"target_source_id,omitempty"` // 用户指定的源 ID (如 "builtin-vpngate", "src-xxx")
+	HistoryHosts   []string  `json:"history_hosts,omitempty"`
 
 	ns       string
 	listener net.Listener
@@ -316,6 +319,22 @@ func (t *Tunnel) startCustom() error {
 		t.Err = fmt.Sprintf("节点连接失败: %v", err)
 		t.mu.Unlock()
 		return err
+	}
+
+	// 严格属性二验：如果用户明确指定了家宽或机房池，但实测结果不符，则判定失败并触发下一个候选节点
+	if t.TargetPoolType == "residential" && ipType == "datacenter" {
+		t.mu.Lock()
+		t.Status = "failed"
+		t.Err = "节点实测为机房 IP (与目标家宽池不符)"
+		t.mu.Unlock()
+		return fmt.Errorf("节点实测为机房 IP (与目标家宽池不符): %s", exitIP)
+	}
+	if t.TargetPoolType == "datacenter" && ipType == "residential" {
+		t.mu.Lock()
+		t.Status = "failed"
+		t.Err = "节点实测为家宽 IP (与目标机房池不符)"
+		t.mu.Unlock()
+		return fmt.Errorf("节点实测为家宽 IP (与目标机房池不符): %s", exitIP)
 	}
 
 	t.mu.Lock()

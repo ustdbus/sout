@@ -21,13 +21,16 @@ type persistedTunnel struct {
 	SocksUser  string `json:"socks_user,omitempty"`
 	SocksPass  string `json:"socks_pass,omitempty"`
 	Kind       string `json:"kind,omitempty"`
-	IPType     string `json:"ip_type,omitempty"`
-	ISP        string `json:"isp,omitempty"`
-	CustomHost string `json:"custom_host,omitempty"`
-	CustomPort int    `json:"custom_port,omitempty"`
-	CustomUser string `json:"custom_user,omitempty"`
-	CustomPass string `json:"custom_pass,omitempty"`
-	SourceID   string `json:"source_id,omitempty"`
+	IPType         string `json:"ip_type,omitempty"`
+	TargetPoolType string `json:"target_pool_type,omitempty"`
+	TargetRegion   string `json:"target_region,omitempty"`
+	TargetSourceID string `json:"target_source_id,omitempty"`
+	ISP            string `json:"isp,omitempty"`
+	CustomHost     string `json:"custom_host,omitempty"`
+	CustomPort     int    `json:"custom_port,omitempty"`
+	CustomUser     string `json:"custom_user,omitempty"`
+	CustomPass     string `json:"custom_pass,omitempty"`
+	SourceID       string `json:"source_id,omitempty"`
 }
 
 type persistedState struct {
@@ -44,24 +47,27 @@ func (m *Manager) saveState() error {
 			continue
 		}
 		st.Tunnels = append(st.Tunnels, persistedTunnel{
-			Slot:        t.Slot,
-			Port:        t.Port,
-			HostName:    t.Node.HostName,
-			CountryCode: t.Node.CountryCode,
-			Country:     t.Node.Country,
-			Ping:        t.Node.Ping,
-			SpeedMbps:   t.Node.SpeedMbps,
-			Config:      t.Node.Config,
-			SocksUser:   t.Cred.User,
-			SocksPass:   t.Cred.Pass,
-			Kind:        t.Kind,
-			IPType:      t.IPType,
-			ISP:         t.ISP,
-			CustomHost:  t.CustomHost,
-			CustomPort:  t.CustomPort,
-			CustomUser:  t.CustomUser,
-			CustomPass:  t.CustomPass,
-			SourceID:    t.Node.SourceID,
+			Slot:           t.Slot,
+			Port:           t.Port,
+			HostName:       t.Node.HostName,
+			CountryCode:    t.Node.CountryCode,
+			Country:        t.Node.Country,
+			Ping:           t.Node.Ping,
+			SpeedMbps:      t.Node.SpeedMbps,
+			Config:         t.Node.Config,
+			SocksUser:      t.Cred.User,
+			SocksPass:      t.Cred.Pass,
+			Kind:           t.Kind,
+			IPType:         t.IPType,
+			TargetPoolType: t.TargetPoolType,
+			TargetRegion:   t.TargetRegion,
+			TargetSourceID: t.TargetSourceID,
+			ISP:            t.ISP,
+			CustomHost:     t.CustomHost,
+			CustomPort:     t.CustomPort,
+			CustomUser:     t.CustomUser,
+			CustomPass:     t.CustomPass,
+			SourceID:       t.Node.SourceID,
 		})
 	}
 
@@ -128,18 +134,21 @@ func (m *Manager) restoreState() (int, error) {
 			cred = gen
 		}
 		t := &Tunnel{
-			Slot:       p.Slot,
-			Port:       p.Port,
-			Node:       node,
-			Status:     "starting",
-			Cred:       cred,
-			Kind:       p.Kind,
-			IPType:     p.IPType,
-			ISP:        p.ISP,
-			CustomHost: p.CustomHost,
-			CustomPort: p.CustomPort,
-			CustomUser: p.CustomUser,
-			CustomPass: p.CustomPass,
+			Slot:           p.Slot,
+			Port:           p.Port,
+			Node:           node,
+			Status:         "starting",
+			Cred:           cred,
+			Kind:           p.Kind,
+			IPType:         p.IPType,
+			TargetPoolType: p.TargetPoolType,
+			TargetRegion:   p.TargetRegion,
+			TargetSourceID: p.TargetSourceID,
+			ISP:            p.ISP,
+			CustomHost:     p.CustomHost,
+			CustomPort:     p.CustomPort,
+			CustomUser:     p.CustomUser,
+			CustomPass:     p.CustomPass,
 		}
 		m.mu.Lock()
 		m.tunnels[p.Slot] = t
