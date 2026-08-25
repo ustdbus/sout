@@ -348,6 +348,7 @@ type suiDBClient struct {
 	Remark   string          `json:"remark"`
 	Enable   any             `json:"enable"`
 	Inbounds json.RawMessage `json:"inbounds"`
+	Links    json.RawMessage `json:"links"`
 	Config   json.RawMessage `json:"config"`
 }
 
@@ -438,7 +439,7 @@ func (s *SUI) Inbounds(live map[string]bool) ([]Inbound, error) {
 		return nil, fmt.Errorf("解析入站列表失败: %w", err)
 	}
 
-	clientRowsJSON, _ := s.sqliteJSONQuery("SELECT id, name, remark, enable, inbounds, config FROM clients;")
+	clientRowsJSON, _ := s.sqliteJSONQuery("SELECT id, name, remark, enable, inbounds, links, config FROM clients;")
 	var allClients []suiDBClient
 	_ = json.Unmarshal(clientRowsJSON, &allClients)
 
@@ -853,21 +854,9 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 	return createdPorts, nil
 }
 
-// syncSUIDatabaseLinks 深度同步 s-ui 数据库中的 inbounds.out_json 与 clients.links
+// syncSUIDatabaseLinks 为 sout 创建的分流客户端同步生成基于原生模版的 clients.links
 func (s *SUI) syncSUIDatabaseLinks(publicHost string) {
-	if publicHost == "" {
-		publicHost = hostPublicIP()
-	}
-	if publicHost == "" {
-		return
-	}
-
-	_ = s.sqliteQuery(fmt.Sprintf(
-		"UPDATE inbounds SET out_json = replace(out_json, '\"server\": \"127.0.0.1\"', '\"server\": \"%s\"') WHERE out_json LIKE '%%\"server\": \"127.0.0.1\"%%';",
-		publicHost,
-	))
-
-	clientRowsJSON, _ := s.sqliteJSONQuery("SELECT id, name, remark, enable, inbounds, config FROM clients WHERE enable=1;")
+	clientRowsJSON, _ := s.sqliteJSONQuery("SELECT id, name, remark, enable, inbounds, links, config FROM clients WHERE enable=1;")
 	var clients []suiDBClient
 	_ = json.Unmarshal(clientRowsJSON, &clients)
 
@@ -878,20 +867,20 @@ func (s *SUI) syncSUIDatabaseLinks(publicHost string) {
 	}
 
 	for _, client := range clients {
+		isSplitClient := strings.HasPrefix(client.Name, "sout-u-") || strings.HasPrefix(client.Name, "fanout-u-")
+		if !isSplitClient {
+			// 严格保留原生主客户端由 s-ui 自身生成的权威 links，不进行任何重写覆盖
+			continue
+		}
+
 		inboundIDs := s.getDBInboundIDs(client.Inbounds)
 		var clientLinks []SUIClientLink
 		for _, inbID := range inboundIDs {
-			outJSON := s.sqliteQuery(fmt.Sprintf("SELECT out_json FROM inbounds WHERE id = %d;", inbID))
-			addrsJSON := s.sqliteQuery(fmt.Sprintf("SELECT addrs FROM inbounds WHERE id = %d;", inbID))
-			tag := s.sqliteQuery(fmt.Sprintf("SELECT tag FROM inbounds WHERE id = %d;", inbID))
-			if outJSON == "" {
-				continue
-			}
-			branchRemark := tag
+			branchRemark := s.sqliteQuery(fmt.Sprintf("SELECT tag FROM inbounds WHERE id = %d;", inbID))
 			if client.Remark != "" {
-				branchRemark = fmt.Sprintf("%s (%s)", tag, client.Remark)
+				branchRemark = fmt.Sprintf("%s (%s)", branchRemark, client.Remark)
 			}
-			links := s.buildLinksFromInbound([]byte(outJSON), []byte(addrsJSON), client.Config, publicHost, branchRemark)
+			links := s.InboundBranchLinks(inbID, client.ID, branchRemark, publicHost)
 			for _, linkURI := range links {
 				if linkURI != "" {
 					clientLinks = append(clientLinks, SUIClientLink{
@@ -1299,23 +1288,172 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 	return links
 }
 
+func getCfgVal(cfg map[string]map[string]any, section, key string) string {
+	if cfg == nil {
+		return ""
+	}
+	if sec, ok := cfg[section]; ok {
+		if v, ok := sec[key].(string); ok {
+			return v
+		}
+	}
+	for _, sec := range cfg {
+		if v, ok := sec[key].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func replaceLinkCredential(uri string, proto string, oldClientCfg, newClientCfg map[string]map[string]any) string {
+	proto = strings.ToLower(proto)
+	switch proto {
+	case "vless", "vmess", "tuic":
+		oldUUID := getCfgVal(oldClientCfg, proto, "uuid")
+		newUUID := getCfgVal(newClientCfg, proto, "uuid")
+		if oldUUID != "" && newUUID != "" && strings.Contains(uri, oldUUID) {
+			return strings.ReplaceAll(uri, oldUUID, newUUID)
+		}
+	case "trojan", "hysteria2", "hy2":
+		oldPass := getCfgVal(oldClientCfg, proto, "password")
+		newPass := getCfgVal(newClientCfg, proto, "password")
+		if oldPass != "" && newPass != "" && strings.Contains(uri, oldPass) {
+			return strings.ReplaceAll(uri, oldPass, newPass)
+		}
+	case "socks", "socks5", "http", "mixed":
+		oldUser := getCfgVal(oldClientCfg, proto, "username")
+		oldPass := getCfgVal(oldClientCfg, proto, "password")
+		newUser := getCfgVal(newClientCfg, proto, "username")
+		newPass := getCfgVal(newClientCfg, proto, "password")
+		if oldUser != "" && newUser != "" {
+			oldAuth := fmt.Sprintf("%s:%s@", oldUser, oldPass)
+			newAuth := fmt.Sprintf("%s:%s@", newUser, newPass)
+			if strings.Contains(uri, oldAuth) {
+				return strings.ReplaceAll(uri, oldAuth, newAuth)
+			}
+		}
+	case "shadowsocks", "ss":
+		oldPass := getCfgVal(oldClientCfg, "shadowsocks", "password")
+		oldMethod := getCfgVal(oldClientCfg, "shadowsocks", "method")
+		newPass := getCfgVal(newClientCfg, "shadowsocks", "password")
+		newMethod := getCfgVal(newClientCfg, "shadowsocks", "method")
+		if newMethod == "" {
+			newMethod = oldMethod
+		}
+		if newMethod == "" {
+			newMethod = "2022-blake3-aes-128-gcm"
+		}
+		if oldPass != "" && newPass != "" {
+			oldAuth := base64.URLEncoding.EncodeToString([]byte(oldMethod + ":" + oldPass))
+			newAuth := base64.URLEncoding.EncodeToString([]byte(newMethod + ":" + newPass))
+			if strings.Contains(uri, oldAuth) {
+				return strings.ReplaceAll(uri, oldAuth, newAuth)
+			}
+		}
+	}
+	return uri
+}
+
 func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, publicHost string) []string {
+	inbTag := s.sqliteQuery(fmt.Sprintf("SELECT tag FROM inbounds WHERE id = %d;", inboundID))
+	inbType := strings.ToLower(s.sqliteQuery(fmt.Sprintf("SELECT type FROM inbounds WHERE id = %d;", inboundID)))
+	baseInbTag := getBaseTag(inbTag)
+
+	type SUIClientLink struct {
+		Remark string `json:"remark"`
+		Type   string `json:"type"`
+		URI    string `json:"uri"`
+	}
+
+	var matchedURIs []string
+
+	// 1. 如果指定了 clientID，优先查询当前 client
+	var client suiDBClient
+	if clientID > 0 {
+		clientJSON, _ := s.sqliteJSONQuery(fmt.Sprintf("SELECT id, name, remark, enable, inbounds, links, config FROM clients WHERE id = %d LIMIT 1;", clientID))
+		var arr []suiDBClient
+		_ = json.Unmarshal(clientJSON, &arr)
+		if len(arr) > 0 {
+			client = arr[0]
+		}
+	} else {
+		clientJSON, _ := s.sqliteJSONQuery(fmt.Sprintf("SELECT id, name, remark, enable, inbounds, links, config FROM clients WHERE enable=1 AND %d IN (SELECT json_each.value FROM json_each(clients.inbounds)) LIMIT 1;", inboundID))
+		var arr []suiDBClient
+		_ = json.Unmarshal(clientJSON, &arr)
+		if len(arr) > 0 {
+			client = arr[0]
+		}
+	}
+
+	isSplitClient := strings.HasPrefix(client.Name, "sout-u-") || strings.HasPrefix(client.Name, "fanout-u-")
+
+	// 2. 如果不是 split client，且自身 links 字段包含有效链接，直接取用 s-ui 权威生成的 links
+	if !isSplitClient && len(client.Links) > 0 {
+		var linksArr []SUIClientLink
+		if err := json.Unmarshal(client.Links, &linksArr); err == nil {
+			for _, item := range linksArr {
+				if item.Remark == inbTag || item.Remark == baseInbTag || getBaseTag(item.Remark) == baseInbTag {
+					if item.URI != "" {
+						matchedURIs = append(matchedURIs, item.URI)
+					}
+				}
+			}
+		}
+	}
+
+	// 3. 如果是 split client 或者当前 client 尚未生成 links，寻找该入站的主原生 client 作为模版派生
+	if len(matchedURIs) == 0 {
+		query := fmt.Sprintf("SELECT id, name, remark, enable, inbounds, links, config FROM clients WHERE id != %d AND (name NOT LIKE 'sout-u-%%' AND name NOT LIKE 'fanout-u-%%') AND links IS NOT NULL AND links != '' LIMIT 1;", client.ID)
+		if client.ID == 0 {
+			query = "SELECT id, name, remark, enable, inbounds, links, config FROM clients WHERE (name NOT LIKE 'sout-u-%%' AND name NOT LIKE 'fanout-u-%%') AND links IS NOT NULL AND links != '' LIMIT 1;"
+		}
+		templateJSON, _ := s.sqliteJSONQuery(query)
+		var templates []suiDBClient
+		_ = json.Unmarshal(templateJSON, &templates)
+		if len(templates) > 0 {
+			tmpl := templates[0]
+			var tmplLinks []SUIClientLink
+			_ = json.Unmarshal(tmpl.Links, &tmplLinks)
+
+			var tmplCfg, clientCfg map[string]map[string]any
+			_ = json.Unmarshal(tmpl.Config, &tmplCfg)
+			_ = json.Unmarshal(client.Config, &clientCfg)
+
+			for _, item := range tmplLinks {
+				if item.Remark == inbTag || item.Remark == baseInbTag || getBaseTag(item.Remark) == baseInbTag {
+					if item.URI != "" {
+						derivedURI := replaceLinkCredential(item.URI, inbType, tmplCfg, clientCfg)
+						matchedURIs = append(matchedURIs, derivedURI)
+					}
+				}
+			}
+		}
+	}
+
+	// 4. 替换 fragment 为指定的 branchTag
+	if len(matchedURIs) > 0 {
+		var finalLinks []string
+		tagToUse := branchTag
+		if tagToUse == "" {
+			tagToUse = inbTag
+		}
+		for _, uri := range matchedURIs {
+			basePart := uri
+			if idx := strings.Index(uri, "#"); idx != -1 {
+				basePart = uri[:idx]
+			}
+			finalLinks = append(finalLinks, fmt.Sprintf("%s#%s", basePart, url.PathEscape(tagToUse)))
+		}
+		return finalLinks
+	}
+
+	// 5. 兜底方案：从 inbounds 表构建
 	outJSON := s.sqliteQuery(fmt.Sprintf("SELECT out_json FROM inbounds WHERE id = %d;", inboundID))
 	addrsJSON := s.sqliteQuery(fmt.Sprintf("SELECT addrs FROM inbounds WHERE id = %d;", inboundID))
 	if outJSON == "" {
 		return nil
 	}
-
-	var clientConfigBytes []byte
-	if clientID > 0 {
-		raw := s.sqliteQuery(fmt.Sprintf("SELECT config FROM clients WHERE id = %d LIMIT 1;", clientID))
-		clientConfigBytes = []byte(raw)
-	} else {
-		raw := s.sqliteQuery(fmt.Sprintf("SELECT config FROM clients WHERE enable=1 AND %d IN (SELECT json_each.value FROM json_each(clients.inbounds)) LIMIT 1;", inboundID))
-		clientConfigBytes = []byte(raw)
-	}
-
-	return s.buildLinksFromInbound([]byte(outJSON), []byte(addrsJSON), clientConfigBytes, publicHost, branchTag)
+	return s.buildLinksFromInbound([]byte(outJSON), []byte(addrsJSON), client.Config, publicHost, branchTag)
 }
 
 func (s *SUI) InboundLinks(ids []int, publicHost string) ([]string, error) {
