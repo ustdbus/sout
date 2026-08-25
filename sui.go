@@ -860,12 +860,6 @@ func (s *SUI) syncSUIDatabaseLinks(publicHost string) {
 	var clients []suiDBClient
 	_ = json.Unmarshal(clientRowsJSON, &clients)
 
-	type SUIClientLink struct {
-		Remark string `json:"remark"`
-		Type   string `json:"type"`
-		URI    string `json:"uri"`
-	}
-
 	for _, client := range clients {
 		isSplitClient := strings.HasPrefix(client.Name, "sout-u-") || strings.HasPrefix(client.Name, "fanout-u-")
 		if !isSplitClient {
