@@ -49,6 +49,7 @@ type NodeBranch struct {
 	BoundTo    string   `json:"bound_to"`
 	BoundLabel string   `json:"bound_label"`
 	IsBase     bool     `json:"is_base"`
+	Enabled    bool     `json:"enabled"`
 	Links      []string `json:"links"`
 }
 
@@ -276,6 +277,10 @@ func (m *Manager) ExitsOf() ExitsView {
 		if !isBase && isResidentialBranch(ib.Tag) {
 			isBase = false
 		}
+		enabled := isBranchEnabled(ib.Tag, ib.Port)
+		if !enabled {
+			links = nil
+		}
 		branch := NodeBranch{
 			ID:         targetID,
 			Tag:        ib.Tag,
@@ -285,6 +290,7 @@ func (m *Manager) ExitsOf() ExitsView {
 			BoundTo:    ib.BoundTo,
 			BoundLabel: boundLabel,
 			IsBase:     isBase,
+			Enabled:    enabled,
 			Links:      links,
 		}
 

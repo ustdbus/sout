@@ -132,8 +132,10 @@ func main() {
 	mux.HandleFunc("/api/panel/client/del", apiClientDelete(mgr))
 	mux.HandleFunc("/api/panel/client/reset", apiClientReset(mgr))
 	initCustomStore(*workDir)
+	initBranchToggle(*workDir)
 	StartAutoUpdateWorker(mgr)
 
+	mux.HandleFunc("/api/branch/toggle", apiBranchToggle(mgr))
 	mux.HandleFunc("/api/custom/socks/add", apiCustomSocksAdd(mgr))
 	mux.HandleFunc("/api/custom/socks/test", apiCustomSocksTest)
 	mux.HandleFunc("/api/custom/source/add", apiCustomSourceAdd)
@@ -756,6 +758,43 @@ func apiXUILinks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"links": links})
+}
+
+func apiBranchToggle(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
+			return
+		}
+		var req struct {
+			Tag     string `json:"tag"`
+			Port    int    `json:"port"`
+			Enabled *bool  `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			_ = r.ParseForm()
+			req.Tag = r.FormValue("tag")
+			req.Port, _ = strconv.Atoi(r.FormValue("port"))
+			if enStr := r.FormValue("enabled"); enStr != "" {
+				val := enStr == "1" || strings.EqualFold(enStr, "true")
+				req.Enabled = &val
+			}
+		}
+		if req.Tag == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少 tag 参数"})
+			return
+		}
+		enabled := true
+		if req.Enabled != nil {
+			enabled = *req.Enabled
+		}
+		if err := setBranchEnabled(req.Tag, req.Port, enabled); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		invalidateInbounds()
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enabled": enabled, "tag": req.Tag, "port": req.Port})
+	}
 }
 
 func apiXUIDelete(m *Manager) http.HandlerFunc {

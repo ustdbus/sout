@@ -88,6 +88,14 @@ main{padding:20px;max-width:1120px;margin:0 auto}
 .branch-tag{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--dim);background:#0e1117;padding:1px 6px;border-radius:3px;border:1px solid var(--line)}
 .branch-port{color:var(--accent);font-weight:600;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
 .branch-acts{display:flex;align-items:center;gap:8px}
+.toggle-switch{position:relative;display:inline-block;width:32px;height:18px;flex-shrink:0;vertical-align:middle}
+.toggle-switch input{opacity:0;width:0;height:0;position:absolute}
+.toggle-slider{position:absolute;cursor:pointer;inset:0;background-color:#30363d;transition:.2s;border-radius:18px;border:1px solid rgba(255,255,255,.08)}
+.toggle-slider:before{position:absolute;content:"";height:12px;width:12px;left:2px;bottom:2px;background-color:#8b949e;transition:.2s;border-radius:50%}
+.toggle-switch input:checked + .toggle-slider{background-color:#238636;border-color:rgba(63,185,80,.4)}
+.toggle-switch input:checked + .toggle-slider:before{transform:translateX(14px);background-color:#fff}
+.branch-row.disabled{opacity:.6}
+.branch-row.disabled .branch-name{color:var(--dim)}
 
 .dot{width:8px;height:8px;border-radius:50%;background:var(--dim);flex-shrink:0}
 .dot.up{background:var(--ok)}
@@ -537,16 +545,21 @@ function renderNodes(){
       + '</div>'
       + '<div class="branch-table">'
       +   branches.map(b => {
-            const hasLink = b.links && b.links.length;
+            const isEn = b.enabled !== false;
+            const hasLink = isEn && b.links && b.links.length;
             const firstLink = hasLink ? b.links[0] : '';
-            return '<div class="branch-row">'
+            return '<div class="branch-row' + (isEn ? '' : ' disabled') + '">'
               + '<div class="branch-info">'
-              +   '<span class="dot up" title="已就绪"></span>'
+              +   '<span class="dot ' + (isEn ? 'up' : '') + '" title="' + (isEn ? '已就绪' : '已停用') + '"></span>'
               +   '<span class="branch-name">' + esc(b.bound_label) + '</span>'
               +   '<span class="branch-tag">' + esc(b.tag) + '</span>'
               +   '<span class="branch-port">:' + b.port + '</span>'
               + '</div>'
               + '<div class="branch-acts">'
+              +   '<label class="toggle-switch" title="' + (isEn ? '已启用 - 点击停用此节点链接生成' : '已停用 - 点击启用此节点链接生成') + '">'
+              +     '<input type="checkbox" class="branch-toggle" data-tag="' + esc(b.tag) + '" data-port="' + b.port + '"' + (isEn ? ' checked' : '') + '>'
+              +     '<span class="toggle-slider"></span>'
+              +   '</label>'
               +   (hasLink ? '<button class="chip-btn" data-copy="' + esc(firstLink) + '">' + ICON.copy + ' 复制链接</button>' : '')
               +   (!b.is_base ? '<button class="icon danger" data-delone="' + b.id + '" data-name="' + esc(b.tag) + '" title="删除此出口分流">' + ICON.trash + '</button>' : '<span style="font-size:11px;color:var(--dim);margin-right:6px">基础直连</span>')
               + '</div>'
@@ -593,6 +606,33 @@ document.addEventListener('click', async e => {
   // 复制链接
   const cp = e.target.closest('[data-copy]');
   if(cp) copy(cp.dataset.copy);
+});
+
+// 分支启用/停用开关
+document.addEventListener('change', async e => {
+  const toggle = e.target.closest('.branch-toggle');
+  if(toggle){
+    const tag = toggle.dataset.tag;
+    const port = parseInt(toggle.dataset.port, 10);
+    const enabled = toggle.checked;
+    toggle.disabled = true;
+    try {
+      await api('/api/branch/toggle', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ tag, port, enabled })
+      });
+      toast(enabled ? '已启用该节点链接' : '已停用该节点链接');
+      poll();
+    } catch(err) {
+      toast(err.message, true);
+      toggle.checked = !enabled;
+      toggle.disabled = false;
+    }
+  }
+});
+
+document.addEventListener('click', async e => {
 
   // 删除分流节点
   const del = e.target.closest('[data-delone]');
