@@ -314,6 +314,11 @@ if ! iptables -C FORWARD -d 10.99.0.0/16 -j ACCEPT 2>/dev/null; then
 fi
 command -v netfilter-persistent >/dev/null && netfilter-persistent save >/dev/null 2>&1 || true
 
+# 解除 Ubuntu/Debian AppArmor 对 openvpn 访问工作目录配置的限制
+if command -v apparmor_parser >/dev/null 2>&1 && [[ -f /etc/apparmor.d/openvpn ]]; then
+  aa-disable openvpn 2>/dev/null || (mkdir -p /etc/apparmor.d/disable && ln -sf /etc/apparmor.d/openvpn /etc/apparmor.d/disable/ && apparmor_parser -R /etc/apparmor.d/openvpn 2>/dev/null) || true
+fi
+
 echo "[5/6] 部署服务与终端管理命令..."
 if [[ -f f.sh ]]; then
   install -m 755 f.sh /usr/local/bin/f
