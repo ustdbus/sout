@@ -1354,16 +1354,44 @@ func replaceLinkCredential(uri string, proto string, oldClientCfg, newClientCfg 
 	return uri
 }
 
+type SUIClientLink struct {
+	Remark string `json:"remark"`
+	Type   string `json:"type"`
+	URI    string `json:"uri"`
+}
+
+func parseSUIClientLinks(linksRaw json.RawMessage) []SUIClientLink {
+	var links []SUIClientLink
+	if len(linksRaw) == 0 {
+		return links
+	}
+	var str string
+	if err := json.Unmarshal(linksRaw, &str); err == nil {
+		_ = json.Unmarshal([]byte(str), &links)
+		return links
+	}
+	_ = json.Unmarshal(linksRaw, &links)
+	return links
+}
+
+func parseSUIClientConfig(configRaw json.RawMessage) map[string]map[string]any {
+	var cfg map[string]map[string]any
+	if len(configRaw) == 0 {
+		return cfg
+	}
+	var str string
+	if err := json.Unmarshal(configRaw, &str); err == nil {
+		_ = json.Unmarshal([]byte(str), &cfg)
+		return cfg
+	}
+	_ = json.Unmarshal(configRaw, &cfg)
+	return cfg
+}
+
 func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, publicHost string) []string {
 	inbTag := s.sqliteQuery(fmt.Sprintf("SELECT tag FROM inbounds WHERE id = %d;", inboundID))
 	inbType := strings.ToLower(s.sqliteQuery(fmt.Sprintf("SELECT type FROM inbounds WHERE id = %d;", inboundID)))
 	baseInbTag := getBaseTag(inbTag)
-
-	type SUIClientLink struct {
-		Remark string `json:"remark"`
-		Type   string `json:"type"`
-		URI    string `json:"uri"`
-	}
 
 	var matchedURIs []string
 
@@ -1389,13 +1417,11 @@ func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, 
 
 	// 2. 如果不是 split client，且自身 links 字段包含有效链接，直接取用 s-ui 权威生成的 links
 	if !isSplitClient && len(client.Links) > 0 {
-		var linksArr []SUIClientLink
-		if err := json.Unmarshal(client.Links, &linksArr); err == nil {
-			for _, item := range linksArr {
-				if item.Remark == inbTag || item.Remark == baseInbTag || getBaseTag(item.Remark) == baseInbTag {
-					if item.URI != "" {
-						matchedURIs = append(matchedURIs, item.URI)
-					}
+		linksArr := parseSUIClientLinks(client.Links)
+		for _, item := range linksArr {
+			if item.Remark == inbTag || item.Remark == baseInbTag || getBaseTag(item.Remark) == baseInbTag {
+				if item.URI != "" {
+					matchedURIs = append(matchedURIs, item.URI)
 				}
 			}
 		}
@@ -1412,12 +1438,9 @@ func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, 
 		_ = json.Unmarshal(templateJSON, &templates)
 		if len(templates) > 0 {
 			tmpl := templates[0]
-			var tmplLinks []SUIClientLink
-			_ = json.Unmarshal(tmpl.Links, &tmplLinks)
-
-			var tmplCfg, clientCfg map[string]map[string]any
-			_ = json.Unmarshal(tmpl.Config, &tmplCfg)
-			_ = json.Unmarshal(client.Config, &clientCfg)
+			tmplLinks := parseSUIClientLinks(tmpl.Links)
+			tmplCfg := parseSUIClientConfig(tmpl.Config)
+			clientCfg := parseSUIClientConfig(client.Config)
 
 			for _, item := range tmplLinks {
 				if item.Remark == inbTag || item.Remark == baseInbTag || getBaseTag(item.Remark) == baseInbTag {
