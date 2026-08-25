@@ -1302,7 +1302,6 @@ func getCfgVal(cfg map[string]map[string]any, section, key string) string {
 func replaceLinkCredential(uri string, proto string, oldClientCfg, newClientCfg map[string]map[string]any) string {
 	proto = strings.ToLower(proto)
 	if strings.HasPrefix(uri, "vmess://") || proto == "vmess" {
-		oldUUID := getCfgVal(oldClientCfg, "vmess", "uuid")
 		newUUID := getCfgVal(newClientCfg, "vmess", "uuid")
 		if newUUID == "" {
 			newUUID = getCfgVal(newClientCfg, "vless", "uuid")
