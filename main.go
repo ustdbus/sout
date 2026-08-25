@@ -974,11 +974,9 @@ func handleSub(m *Manager) http.HandlerFunc {
 		w.Header().Set("Profile-Update-Interval", "1")
 		w.Header().Set("Subscription-Userinfo", "upload=0; download=0; total=1073741824000; expire=0")
 
-		accept := r.Header.Get("Accept")
-		isBrowser := strings.Contains(accept, "text/html")
+		// 仅在显式请求 ?raw=1 时输出明文（便于排查），默认全部输出与 s-ui 一致的标准 Base64 订阅
 		isRaw := r.URL.Query().Get("raw") == "1" || r.URL.Query().Get("b64") == "0"
-
-		if isRaw || (isBrowser && r.URL.Query().Get("b64") != "1") {
+		if isRaw {
 			_, _ = w.Write([]byte(rawText + "\n"))
 			return
 		}

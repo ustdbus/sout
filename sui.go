@@ -1301,8 +1301,42 @@ func getCfgVal(cfg map[string]map[string]any, section, key string) string {
 
 func replaceLinkCredential(uri string, proto string, oldClientCfg, newClientCfg map[string]map[string]any) string {
 	proto = strings.ToLower(proto)
+	if strings.HasPrefix(uri, "vmess://") || proto == "vmess" {
+		oldUUID := getCfgVal(oldClientCfg, "vmess", "uuid")
+		newUUID := getCfgVal(newClientCfg, "vmess", "uuid")
+		if newUUID == "" {
+			newUUID = getCfgVal(newClientCfg, "vless", "uuid")
+		}
+		if newUUID != "" {
+			b64Part := strings.TrimPrefix(uri, "vmess://")
+			if idx := strings.Index(b64Part, "#"); idx != -1 {
+				b64Part = b64Part[:idx]
+			}
+			var jsonBytes []byte
+			for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.RawURLEncoding} {
+				b, err := enc.DecodeString(b64Part)
+				if err == nil && len(b) > 0 {
+					jsonBytes = b
+					break
+				}
+			}
+			if len(jsonBytes) > 0 {
+				var vmessMap map[string]any
+				if err := json.Unmarshal(jsonBytes, &vmessMap); err == nil {
+					vmessMap["id"] = newUUID
+					if alterId, ok := newClientCfg["vmess"]["alterId"].(float64); ok {
+						vmessMap["aid"] = int(alterId)
+					}
+					newJSON, _ := json.Marshal(vmessMap)
+					return "vmess://" + base64.StdEncoding.EncodeToString(newJSON)
+				}
+			}
+		}
+		return uri
+	}
+
 	switch proto {
-	case "vless", "vmess", "tuic":
+	case "vless", "tuic":
 		oldUUID := getCfgVal(oldClientCfg, proto, "uuid")
 		newUUID := getCfgVal(newClientCfg, proto, "uuid")
 		if oldUUID != "" && newUUID != "" && strings.Contains(uri, oldUUID) {
@@ -1346,6 +1380,43 @@ func replaceLinkCredential(uri string, proto string, oldClientCfg, newClientCfg 
 		}
 	}
 	return uri
+}
+
+func formatNodeURI(uri string, tagToUse string) string {
+	if strings.HasPrefix(uri, "vmess://") {
+		b64Part := strings.TrimPrefix(uri, "vmess://")
+		if idx := strings.Index(b64Part, "#"); idx != -1 {
+			b64Part = b64Part[:idx]
+		}
+		var jsonBytes []byte
+		for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.RawURLEncoding} {
+			b, err := enc.DecodeString(b64Part)
+			if err == nil && len(b) > 0 {
+				jsonBytes = b
+				break
+			}
+		}
+		if len(jsonBytes) > 0 {
+			var vmessMap map[string]any
+			if err := json.Unmarshal(jsonBytes, &vmessMap); err == nil {
+				if tagToUse != "" {
+					vmessMap["ps"] = tagToUse
+				}
+				newJSON, _ := json.Marshal(vmessMap)
+				return "vmess://" + base64.StdEncoding.EncodeToString(newJSON)
+			}
+		}
+		return "vmess://" + b64Part
+	}
+
+	basePart := uri
+	if idx := strings.Index(uri, "#"); idx != -1 {
+		basePart = uri[:idx]
+	}
+	if tagToUse == "" {
+		return basePart
+	}
+	return fmt.Sprintf("%s#%s", basePart, url.PathEscape(tagToUse))
 }
 
 type SUIClientLink struct {
@@ -1447,7 +1518,7 @@ func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, 
 		}
 	}
 
-	// 4. 替换 fragment 为指定的 branchTag
+	// 4. 格式化链接与备注（vmess 使用 ps 字段且无 #hash，其他协议使用 #remark 片段）
 	if len(matchedURIs) > 0 {
 		var finalLinks []string
 		tagToUse := branchTag
@@ -1455,11 +1526,7 @@ func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, 
 			tagToUse = inbTag
 		}
 		for _, uri := range matchedURIs {
-			basePart := uri
-			if idx := strings.Index(uri, "#"); idx != -1 {
-				basePart = uri[:idx]
-			}
-			finalLinks = append(finalLinks, fmt.Sprintf("%s#%s", basePart, url.PathEscape(tagToUse)))
+			finalLinks = append(finalLinks, formatNodeURI(uri, tagToUse))
 		}
 		return finalLinks
 	}
