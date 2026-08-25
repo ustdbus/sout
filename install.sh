@@ -204,6 +204,7 @@ pkg_for() {
     tar)      echo tar ;;
     ip)       case "$mgr" in apk) echo iproute2 ;; pacman) echo iproute2 ;; *) echo iproute ;; esac ;;
     iptables) echo iptables ;;
+    sqlite3)  case "$mgr" in yum|dnf) echo sqlite ;; *) echo sqlite3 ;; esac ;;
     unzip)    echo unzip ;;
   esac
 }
@@ -234,7 +235,7 @@ MGR=$(detect_mgr)
 [[ "$MGR" == "apt-get" ]] && iproute_pkg=iproute2 || iproute_pkg=iproute
 
 need_cmd=()
-for c in openvpn curl openssl tar iptables; do
+for c in openvpn curl openssl tar iptables sqlite3; do
   command -v "$c" >/dev/null || need_cmd+=("$c")
 done
 command -v ip >/dev/null || need_cmd+=(ip)

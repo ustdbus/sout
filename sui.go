@@ -71,20 +71,47 @@ func suiRunning() bool {
 	return false
 }
 
-func (s *SUI) sqliteQuery(query string) string {
-	out, err := exec.Command("sqlite3", s.dbPath, query).Output()
-	if err != nil {
-		return ""
+func runSQLite(dbPath string, query string) (string, error) {
+	if hasCmd("sqlite3") {
+		out, err := exec.Command("sqlite3", dbPath, query).Output()
+		if err == nil {
+			return strings.TrimSpace(string(out)), nil
+		}
 	}
-	return strings.TrimSpace(string(out))
+	if hasCmd("python3") {
+		pyCode := fmt.Sprintf("import sqlite3\ncon = sqlite3.connect(%q)\ncur = con.cursor()\ncur.execute(%q)\nif cur.description:\n    rows = cur.fetchall()\n    for r in rows:\n        print('|'.join(str(x) if x is not None else '' for x in r))\nelse:\n    con.commit()\n", dbPath, query)
+		out, err := exec.Command("python3", "-c", pyCode).Output()
+		if err == nil {
+			return strings.TrimSpace(string(out)), nil
+		}
+	}
+	return "", fmt.Errorf("未找到 sqlite3 或 python3 工具")
+}
+
+func runSQLiteJSON(dbPath string, query string) ([]byte, error) {
+	if hasCmd("sqlite3") {
+		out, err := exec.Command("sqlite3", "-json", dbPath, query).Output()
+		if err == nil {
+			return out, nil
+		}
+	}
+	if hasCmd("python3") {
+		pyCode := fmt.Sprintf("import sqlite3, json\ncon = sqlite3.connect(%q)\ncur = con.cursor()\ncur.execute(%q)\ncols = [d[0] for d in cur.description] if cur.description else []\nrows = []\nfor r in cur.fetchall():\n    row_dict = {}\n    for k, v in zip(cols, r):\n        if isinstance(v, (bytes, bytearray)):\n            v = v.decode('utf-8', errors='ignore')\n        row_dict[k] = v\n    rows.append(row_dict)\nprint(json.dumps(rows))\n", dbPath, query)
+		out, err := exec.Command("python3", "-c", pyCode).Output()
+		if err == nil {
+			return out, nil
+		}
+	}
+	return nil, fmt.Errorf("未找到 sqlite3 或 python3 工具")
+}
+
+func (s *SUI) sqliteQuery(query string) string {
+	res, _ := runSQLite(s.dbPath, query)
+	return res
 }
 
 func (s *SUI) sqliteJSONQuery(query string) ([]byte, error) {
-	out, err := exec.Command("sqlite3", "-json", s.dbPath, query).Output()
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
+	return runSQLiteJSON(s.dbPath, query)
 }
 
 // DetectSUI 自动探测本机 s-ui 安装状态、端口、路径并提取或生成 Token
@@ -100,11 +127,8 @@ func DetectSUI(workDir string) (*SUI, error) {
 	}
 
 	sqliteExec := func(query string) string {
-		out, err := exec.Command("sqlite3", dbPath, query).Output()
-		if err != nil {
-			return ""
-		}
-		return strings.TrimSpace(string(out))
+		res, _ := runSQLite(dbPath, query)
+		return res
 	}
 
 	portStr := sqliteExec("SELECT value FROM settings WHERE key='webPort';")
