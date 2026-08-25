@@ -318,8 +318,17 @@ ACTUAL_PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' \
 [[ -n $ACTUAL_PORT ]] && WEB_PORT="$ACTUAL_PORT"
 
 echo
-echo "  管理地址:  http://${IP}:${WEB_PORT}/${BP}/"
+echo "================================================================"
+echo "  🎉 sout 插件安装部署完成！"
+echo "================================================================"
+echo "  [sout 动态家宽出口插件]"
+echo "  管理面板:  http://${IP}:${WEB_PORT}/${BP}/"
 echo "  访问口令:  $(cat "${WORK_DIR}/password" 2>/dev/null || echo "见 ${WORK_DIR}/password")"
+echo "  终端管理:  在终端输入 sout 或 f 呼出插件管理菜单"
 echo
-echo "  快捷管理:  在终端直接输入 sout 或 f 即可呼出管理菜单"
+if check_sui; then
+  echo "  [s-ui (Sing-Box) 节点面板]"
+  echo "  终端管理:  在终端输入 s-ui 即可配置 s-ui 账号/端口与节点设置"
+fi
+echo "================================================================"
 echo
