@@ -2,13 +2,18 @@
 set -e
 
 REPO="${REPO:-ustdbus/sout}"
-BIN="/usr/local/bin/fanout"
-WORK_DIR="/var/lib/fanout"
+BIN="/usr/local/bin/sout"
+WORK_DIR="/var/lib/sout"
 WEB_PORT=8899
 
 if [[ $EUID -ne 0 ]]; then
   echo "请使用 root 权限运行此脚本 (sudo ./install.sh 或 sudo bash ...)" >&2
   exit 1
+fi
+
+# 自动平滑迁移旧工作目录
+if [[ -d "/var/lib/fanout" && ! -d "/var/lib/sout" ]]; then
+  mv /var/lib/fanout /var/lib/sout 2>/dev/null || true
 fi
 
 detect_init() {
@@ -32,16 +37,20 @@ check_sui() {
 cleanup_sout() {
   echo "      正在清理并卸载 sout 脚本与服务..."
   if [[ "$INIT_SYS" == systemd ]]; then
+    systemctl stop sout 2>/dev/null || true
+    systemctl disable sout 2>/dev/null || true
     systemctl stop fanout 2>/dev/null || true
     systemctl disable fanout 2>/dev/null || true
-    rm -f /etc/systemd/system/fanout.service
+    rm -f /etc/systemd/system/sout.service /etc/systemd/system/fanout.service
     systemctl daemon-reload 2>/dev/null || true
   else
+    rc-service sout stop 2>/dev/null || true
+    rc-update del sout default 2>/dev/null || true
     rc-service fanout stop 2>/dev/null || true
     rc-update del fanout default 2>/dev/null || true
-    rm -f /etc/init.d/fanout
+    rm -f /etc/init.d/sout /etc/init.d/fanout
   fi
-  rm -f "$BIN" /usr/local/bin/f /usr/local/bin/sout /usr/local/bin/sout-cli 2>/dev/null || true
+  rm -f "$BIN" /usr/local/bin/fanout /usr/local/bin/f /usr/local/bin/sout /usr/local/bin/sout-cli 2>/dev/null || true
   echo "      sout 已清理完毕。"
 }
 
@@ -106,7 +115,6 @@ ensure_sui() {
       exit 0
       ;;
     *)
-      echo
       echo "  [-] 输入无效，已取消安装并退出。"
       cleanup_sout
       exit 0
@@ -132,48 +140,57 @@ SEEOF
 
 svc_install() {
   if [[ "$INIT_SYS" == systemd ]]; then
-    sed "s#-web [0-9]* ##; s#-dir /var/lib/fanout#-dir ${WORK_DIR}#" fanout.service \
-      > /etc/systemd/system/fanout.service
+    # 停止并清理旧版 fanout.service
+    systemctl stop fanout 2>/dev/null || true
+    systemctl disable fanout 2>/dev/null || true
+    rm -f /etc/systemd/system/fanout.service 2>/dev/null || true
+
+    local svc_file="sout.service"
+    [[ ! -f "$svc_file" && -f "fanout.service" ]] && svc_file="fanout.service"
+    sed "s#-web [0-9]* ##; s#-dir /var/lib/[a-zA-Z0-9_-]*#-dir ${WORK_DIR}#; s#/usr/local/bin/[a-zA-Z0-9_-]*#${BIN}#" "$svc_file" \
+      > /etc/systemd/system/sout.service
+    ln -sf /etc/systemd/system/sout.service /etc/systemd/system/fanout.service 2>/dev/null || true
     systemctl daemon-reload
   else
-    cat > /etc/init.d/fanout <<INITEOF
+    cat > /etc/init.d/sout <<INITEOF
 #!/sbin/openrc-run
-name="fanout"
+name="sout"
 description="sout - s-ui 动态家宽出口插件"
 command="${BIN}"
 command_args="-dir ${WORK_DIR}"
 command_background=true
-pidfile="/run/fanout.pid"
-output_log="/var/log/fanout.log"
-error_log="/var/log/fanout.log"
+pidfile="/run/sout.pid"
+output_log="/var/log/sout.log"
+error_log="/var/log/sout.log"
 respawn_delay=5
 respawn_max=0
 supervisor=supervise-daemon
 depend() { need net; after firewall; }
 INITEOF
-    chmod +x /etc/init.d/fanout
+    chmod +x /etc/init.d/sout
+    ln -sf /etc/init.d/sout /etc/init.d/fanout 2>/dev/null || true
   fi
 }
 
 svc_enable_start() {
   if [[ "$INIT_SYS" == systemd ]]; then
-    systemctl enable --now fanout
+    systemctl enable --now sout
   else
-    rc-update add fanout default >/dev/null 2>&1 || true
-    rc-service fanout restart
+    rc-update add sout default >/dev/null 2>&1 || true
+    rc-service sout restart
   fi
 }
 
 svc_is_active() {
   if [[ "$INIT_SYS" == systemd ]]; then
-    systemctl is-active --quiet fanout
+    systemctl is-active --quiet sout
   else
-    rc-service fanout status >/dev/null 2>&1
+    rc-service sout status >/dev/null 2>&1
   fi
 }
 
 svc_logs_hint() {
-  [[ "$INIT_SYS" == systemd ]] && echo "journalctl -u fanout -n 30" || echo "cat /var/log/fanout.log"
+  [[ "$INIT_SYS" == systemd ]] && echo "journalctl -u sout -n 30" || echo "cat /var/log/sout.log"
 }
 
 echo "[1/6] 检查系统基础依赖..."
@@ -259,8 +276,14 @@ else
     exit 1
   fi
   tar xzf "$TMP/f.tar.gz" -C "$TMP"
-  install -m 755 "$TMP/fanout" "$BIN"
-  [[ -f fanout.service ]] || cp "$TMP/fanout.service" .
+  if [[ -f "$TMP/sout" ]]; then
+    install -m 755 "$TMP/sout" "$BIN"
+  elif [[ -f "$TMP/fanout" ]]; then
+    install -m 755 "$TMP/fanout" "$BIN"
+  fi
+  ln -sf "$BIN" /usr/local/bin/fanout 2>/dev/null || true
+  [[ -f "$TMP/sout.service" ]] && cp "$TMP/sout.service" .
+  [[ -f "$TMP/fanout.service" ]] && cp "$TMP/fanout.service" .
   [[ -f "$TMP/f.sh" ]] && install -m 755 "$TMP/f.sh" /usr/local/bin/f
   rm -rf "$TMP"
 fi

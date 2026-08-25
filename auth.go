@@ -126,7 +126,7 @@ func (a *Auth) valid(tok string) bool {
 	return ok && time.Now().Before(exp)
 }
 
-const sessionCookie = "fanout_session"
+const sessionCookie = "sout_session"
 
 // Wrap 包装 handler。未登录时 API 返回 401，页面跳登录，订阅 /sub 免登录放行
 func (a *Auth) Wrap(next http.Handler) http.Handler {

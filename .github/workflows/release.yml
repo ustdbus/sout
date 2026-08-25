@@ -52,10 +52,12 @@ jobs:
             TAG="v1.0.0"
           fi
           mkdir -p dist/${{ matrix.pkg_name }}
-          go build -trimpath -ldflags "-s -w -X main.version=${TAG}" -o dist/${{ matrix.pkg_name }}/fanout .
+          go build -trimpath -ldflags "-s -w -X main.version=${TAG}" -o dist/${{ matrix.pkg_name }}/sout .
+          cp dist/${{ matrix.pkg_name }}/sout dist/${{ matrix.pkg_name }}/fanout
           cp f.sh dist/${{ matrix.pkg_name }}/
+          cp sout.service dist/${{ matrix.pkg_name }}/
           cp fanout.service dist/${{ matrix.pkg_name }}/
-          tar -czf ${{ matrix.pkg_name }}.tar.gz -C dist/${{ matrix.pkg_name }} fanout f.sh fanout.service
+          tar -czf ${{ matrix.pkg_name }}.tar.gz -C dist/${{ matrix.pkg_name }} sout fanout f.sh sout.service fanout.service
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4

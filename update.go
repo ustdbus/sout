@@ -64,7 +64,7 @@ func fetchLatestRelease() (*releaseInfo, error) {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "fanout-updater")
+	req.Header.Set("User-Agent", "sout-updater")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -182,9 +182,11 @@ func applyUpdate() error {
 		}
 	}
 
-	newBin := filepath.Join(tmp, "fanout")
-	if err := extractBinary(tarPath, "fanout", newBin); err != nil {
-		return fmt.Errorf("解包失败: %w", err)
+	newBin := filepath.Join(tmp, "sout")
+	if err := extractBinary(tarPath, "sout", newBin); err != nil {
+		if err2 := extractBinary(tarPath, "fanout", newBin); err2 != nil {
+			return fmt.Errorf("解包失败: %w", err)
+		}
 	}
 
 	self, err := os.Executable()
@@ -337,20 +339,28 @@ func copyFileMode(src, dst string, mode os.FileMode) error {
 	return out.Close()
 }
 
-// restartSelf 通过 init 系统重启 fanout 服务，拉起刚替换的新二进制。
+// restartSelf 通过 init 系统重启 sout 服务，拉起刚替换的新二进制。
 // systemd / openrc 各一套；都不可用时退回直接自我 exec。
 func restartSelf() {
 	if hasCmd("systemctl") && dirExists("/run/systemd/system") {
+		if exec.Command("systemctl", "is-active", "sout").Run() == nil {
+			_ = exec.Command("systemctl", "restart", "sout").Start()
+			return
+		}
 		_ = exec.Command("systemctl", "restart", "fanout").Start()
 		return
 	}
 	if hasCmd("rc-service") {
+		if exec.Command("rc-service", "sout", "status").Run() == nil {
+			_ = exec.Command("rc-service", "sout", "restart").Start()
+			return
+		}
 		_ = exec.Command("rc-service", "fanout", "restart").Start()
 		return
 	}
 	// 没有 init 系统托管：直接退出，让外部守护（若有）拉起；
 	// 没有守护就只能等下次手动启动。日志留个痕。
-	fmt.Println("fanout: 已替换二进制，但未检测到 systemd/openrc，请手动重启服务")
+	fmt.Println("sout: 已替换二进制，但未检测到 systemd/openrc，请手动重启服务")
 }
 
 func hasCmd(name string) bool {

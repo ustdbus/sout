@@ -21,7 +21,7 @@ import (
 const (
 	suiDBPathDefault = "/usr/local/s-ui/db/s-ui.db"
 	suiBinaryDefault = "/usr/local/s-ui/sui"
-	suiTagPrefix     = "fanout-"
+	suiTagPrefix     = "sout-"
 	suiTokenFile     = "sui-token"
 )
 
@@ -168,7 +168,7 @@ func DetectSUI(workDir string) (*SUI, error) {
 		}
 	}
 
-	existingToken := sqliteExec("SELECT token FROM tokens WHERE desc='fanout' AND (expiry=0 OR expiry > " + strconv.FormatInt(time.Now().Unix(), 10) + ") LIMIT 1;")
+	existingToken := sqliteExec("SELECT token FROM tokens WHERE (desc='sout' OR desc='fanout') AND (expiry=0 OR expiry > " + strconv.FormatInt(time.Now().Unix(), 10) + ") LIMIT 1;")
 	if existingToken != "" {
 		s := newSUI(existingToken)
 		if s.tokenValid() {
@@ -188,7 +188,7 @@ func DetectSUI(workDir string) (*SUI, error) {
 	if adminIDStr != "" {
 		adminID = adminIDStr
 	}
-	_ = exec.Command("sqlite3", dbPath, fmt.Sprintf("INSERT INTO tokens (desc, token, expiry, user_id) VALUES ('fanout', '%s', 0, %s);", newToken, adminID)).Run()
+	_ = exec.Command("sqlite3", dbPath, fmt.Sprintf("INSERT INTO tokens (desc, token, expiry, user_id) VALUES ('sout', '%s', 0, %s);", newToken, adminID)).Run()
 
 	_ = exec.Command("systemctl", "restart", "s-ui").Run()
 	time.Sleep(2 * time.Second)
@@ -753,7 +753,7 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 			}
 		}
 
-		clientName := fmt.Sprintf("fanout-u-%d-%s", templateID, sanitizeTag(host))
+		clientName := fmt.Sprintf("sout-u-%d-%s", templateID, sanitizeTag(host))
 		clientRemark := fmt.Sprintf("%s%s", cName, poolName)
 
 		existingClientID := s.sqliteQuery(fmt.Sprintf("SELECT id FROM clients WHERE name='%s' LIMIT 1;", clientName))
@@ -914,8 +914,8 @@ func (s *SUI) DeleteBranchesByHost(host string, tunnels []*Tunnel) error {
 			_ = s.BindUserRoute(userName, "", tunnels)
 		}
 	}
-	// 双重保障：清理 SQLite 中以该 hostTag 结尾的所有 fanout client
-	_ = s.sqliteQuery(fmt.Sprintf("DELETE FROM clients WHERE name LIKE 'fanout-u-%%-%s';", oldHostTag))
+	// 双重保障：清理 SQLite 中以该 hostTag 结尾的所有 sout/fanout client
+	_ = s.sqliteQuery(fmt.Sprintf("DELETE FROM clients WHERE (name LIKE 'sout-u-%%-%s' OR name LIKE 'fanout-u-%%-%s');", oldHostTag, oldHostTag))
 	s.syncSUIDatabaseLinks(hostPublicIP())
 	invalidateInbounds()
 	return nil
@@ -928,7 +928,7 @@ func (s *SUI) ResyncOutbound(t *Tunnel, tunnels []*Tunnel) error {
 // DeleteInbounds 删除分流分支。若传入 Client ID，删除该 Client 并移除路由规则；若删光分流，恢复纯净直连。
 func (s *SUI) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
 	for _, id := range ids {
-		clientName := s.sqliteQuery(fmt.Sprintf("SELECT name FROM clients WHERE id = %d AND name LIKE 'fanout-u-%%';", id))
+		clientName := s.sqliteQuery(fmt.Sprintf("SELECT name FROM clients WHERE id = %d AND (name LIKE 'sout-u-%%' OR name LIKE 'fanout-u-%%');", id))
 		if clientName != "" {
 			_ = s.sqliteQuery(fmt.Sprintf("DELETE FROM clients WHERE id = %d;", id))
 			_ = s.BindUserRoute(clientName, "", tunnels)

@@ -25,7 +25,7 @@ func main() {
 	var (
 		webPort  = flag.Int("web", 8899, "Web 管理端口")
 		maxSlots = flag.Int("max", 20, "最多同时运行的隧道数")
-		workDir  = flag.String("dir", "/var/lib/fanout", "工作目录")
+		workDir  = flag.String("dir", "/var/lib/sout", "工作目录")
 	)
 	panelMode := flag.String("panel", "", "节点链接后端: 留空自动探测, s-ui, 3x-ui")
 	publicIP := flag.String("ip", "", "母机公网 IPv4，用于分享链接/SOCKS5 地址；留空则自动探测")
@@ -33,7 +33,10 @@ func main() {
 	flag.Parse()
 
 	if *publicIP == "" {
-		*publicIP = os.Getenv("FANOUT_PUBLIC_IP")
+		*publicIP = os.Getenv("SOUT_PUBLIC_IP")
+		if *publicIP == "" {
+			*publicIP = os.Getenv("FANOUT_PUBLIC_IP")
+		}
 	}
 
 	if *showVersion {
@@ -44,6 +47,16 @@ func main() {
 	if os.Geteuid() != 0 {
 		log.Fatal("需要 root 权限（要创建 netns 和改 iptables）")
 	}
+
+	// 自动平滑迁移历史工作目录
+	if *workDir == "/var/lib/sout" {
+		if _, err := os.Stat("/var/lib/fanout"); err == nil {
+			if _, err2 := os.Stat("/var/lib/sout"); os.IsNotExist(err2) {
+				_ = os.Rename("/var/lib/fanout", "/var/lib/sout")
+			}
+		}
+	}
+
 	if err := os.MkdirAll(*workDir, 0700); err != nil {
 		log.Fatalf("创建工作目录失败: %v", err)
 	}

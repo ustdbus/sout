@@ -6,7 +6,6 @@ Wants=network-online.target
 [Service]
 Type=simple
 # 端口由 /var/lib/sout/settings.json 决定（界面和 f 菜单都改它）。
-# 这里不写 -web，否则改完端口一重启就被拽回旧值。
 ExecStart=/usr/local/bin/sout -dir /var/lib/sout
 Restart=on-failure
 RestartSec=5

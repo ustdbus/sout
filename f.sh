@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 set -e
 
-UNIT="fanout.service"
-BIN="/usr/local/bin/fanout"
-WORK_DIR="/var/lib/fanout"
+UNIT="sout.service"
+if systemctl is-active fanout.service >/dev/null 2>&1 && ! systemctl is-active sout.service >/dev/null 2>&1; then
+  UNIT="fanout.service"
+fi
+BIN="/usr/local/bin/sout"
+[[ ! -f "$BIN" && -f "/usr/local/bin/fanout" ]] && BIN="/usr/local/bin/fanout"
+WORK_DIR="/var/lib/sout"
+[[ ! -d "$WORK_DIR" && -d "/var/lib/fanout" ]] && WORK_DIR="/var/lib/fanout"
 DEFAULT_PORT=8899
 
 R='\033[31m'; G='\033[32m'; Y='\033[33m'; B='\033[34m'; D='\033[90m'; N='\033[0m'
@@ -306,7 +311,7 @@ cleanup_sui() {
   if [[ ! -f "$db" ]]; then
     return
   fi
-  echo -e "  正在清理 s-ui 中由 fanout 创建的所有出入站及路由规则..."
+  echo -e "  正在清理 s-ui 中由 sout 创建的所有出入站及路由规则..."
   python3 -c "
 import sqlite3, json
 
@@ -315,28 +320,28 @@ try:
     con = sqlite3.connect(db)
     cur = con.cursor()
     
-    # 1. 查找所有 fanout 创建的入站 ID 和 Tag
+    # 1. 查找所有 sout/fanout 创建的入站 ID 和 Tag
     cur.execute('SELECT id, tag FROM inbounds')
     inbounds = cur.fetchall()
     
-    fanout_inb_ids = []
-    fanout_inb_tags = []
+    sout_inb_ids = []
+    sout_inb_tags = []
     for (ib_id, tag) in inbounds:
         tag_str = str(tag)
-        if '家宽' in tag_str or 'fanout' in tag_str:
-            fanout_inb_ids.append(ib_id)
-            fanout_inb_tags.append(tag_str)
+        if '家宽' in tag_str or 'fanout' in tag_str or 'sout' in tag_str:
+            sout_inb_ids.append(ib_id)
+            sout_inb_tags.append(tag_str)
     
-    if fanout_inb_ids:
-        for ib_id in fanout_inb_ids:
+    if sout_inb_ids:
+        for ib_id in sout_inb_ids:
             con.execute('DELETE FROM inbounds WHERE id = ?', (ib_id,))
-        print(f'    - 已清理 {len(fanout_inb_ids)} 个 fanout 分流入站: {fanout_inb_tags}')
+        print(f'    - 已清理 {len(sout_inb_ids)} 个 sout 分流入站: {sout_inb_tags}')
     
-    # 2. 删除所有 fanout-* 出站
-    cur.execute(\"DELETE FROM outbounds WHERE tag LIKE 'fanout-%'\")
+    # 2. 删除所有 sout-* 与 fanout-* 出站
+    cur.execute(\"DELETE FROM outbounds WHERE tag LIKE 'sout-%' OR tag LIKE 'fanout-%'\")
     out_deleted = cur.rowcount
     if out_deleted > 0:
-        print(f'    - 已清理 {out_deleted} 个 fanout 出站隧道')
+        print(f'    - 已清理 {out_deleted} 个 sout 出站隧道')
 
     # 3. 清理 settings 表中 config 的 route.rules
     cur.execute(\"SELECT value FROM settings WHERE key = 'config'\")
@@ -348,17 +353,17 @@ try:
             new_rules = []
             for r in rules:
                 outbound = r.get('outbound', '')
-                if not outbound.startswith('fanout-'):
+                if not outbound.startswith('sout-') and not outbound.startswith('fanout-'):
                     new_rules.append(r)
             if len(new_rules) != len(rules):
                 cfg['route']['rules'] = new_rules
                 con.execute(\"UPDATE settings SET value = ? WHERE key = 'config'\", (json.dumps(cfg, indent=2),))
-                print(f'    - 已清理 {len(rules) - len(new_rules)} 条 fanout 分流路由规则')
+                print(f'    - 已清理 {len(rules) - len(new_rules)} 条 sout 分流路由规则')
         except Exception as e:
             print('    - 清理路由规则警告:', e)
 
     # 4. 清理 clients
-    cur.execute(\"DELETE FROM clients WHERE name LIKE 'fanout-%'\")
+    cur.execute(\"DELETE FROM clients WHERE name LIKE 'sout-%' OR name LIKE 'fanout-%'\")
 
     con.commit()
     con.close()
@@ -373,26 +378,29 @@ except Exception as e:
 do_uninstall() {
   local yes
   echo
-  read -rp "  确定彻底卸载 fanout 并清理所有相关出入站节点吗？[y/N]: " yes
+  read -rp "  确定彻底卸载 sout 并清理所有相关出入站节点吗？[y/N]: " yes
   [[ ${yes,,} == y ]] || { echo "  已取消"; return; }
 
-  echo "  正在停止并清理 fanout 服务..."
+  echo "  正在停止并清理 sout 服务..."
   svc_stop >/dev/null 2>&1 || true
   svc_disable >/dev/null 2>&1 || true
-  for ns in $(ip netns list 2>/dev/null | awk '{print $1}' | grep '^fo[0-9]'); do
+  systemctl stop fanout 2>/dev/null || true
+  systemctl disable fanout 2>/dev/null || true
+  for ns in $(ip netns list 2>/dev/null | awk '{print $1}' | grep -E '^(fo|so)[0-9]'); do
     ip netns del "$ns" 2>/dev/null || true
   done
-  for l in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep '^fov[0-9]'); do
+  for l in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep -E '^(fov|sov)[0-9]'); do
     ip link del "$l" 2>/dev/null || true
   done
 
-  # 清理 s-ui 中所有 fanout 生成的出入站与路由
+  # 清理 s-ui 中所有 sout 生成的出入站与路由
   cleanup_sui
 
-  rm -f "/etc/systemd/system/$UNIT" "$BIN" /usr/local/bin/f
-  rm -rf "$WORK_DIR"
+  rm -f "/etc/systemd/system/sout.service" "/etc/systemd/system/fanout.service" "/etc/init.d/sout" "/etc/init.d/fanout"
+  rm -f "$BIN" /usr/local/bin/sout /usr/local/bin/fanout /usr/local/bin/f /usr/local/bin/sout-cli
+  rm -rf "$WORK_DIR" /var/lib/sout /var/lib/fanout 2>/dev/null || true
   svc_reload
-  echo -e "  ${G}fanout 已彻底卸载完成，所有由 fanout 创建的出入站已全部清理，s-ui 完全保持原样！${N}"
+  echo -e "  ${G}sout 已彻底卸载完成，所有由 sout 创建的出入站已全部清理，s-ui 完全保持原样！${N}"
   exit 0
 }
 
@@ -467,15 +475,16 @@ sys.exit(0 if latest > cur else 1)
   fi
 
   tar -zxf "$tmp_dir/sout.tar.gz" -C "$tmp_dir"
-  if [[ -f "$tmp_dir/fanout" ]]; then
-    cp -f "$tmp_dir/fanout" "$BIN"
-    chmod +x "$BIN"
-    ln -sf "$BIN" /usr/local/bin/sout
-  elif [[ -f "$tmp_dir/sout" ]]; then
+  if [[ -f "$tmp_dir/sout" ]]; then
     cp -f "$tmp_dir/sout" "$BIN"
     chmod +x "$BIN"
-    ln -sf "$BIN" /usr/local/bin/sout
+    ln -sf "$BIN" /usr/local/bin/fanout 2>/dev/null || true
+  elif [[ -f "$tmp_dir/fanout" ]]; then
+    cp -f "$tmp_dir/fanout" "$BIN"
+    chmod +x "$BIN"
+    ln -sf "$BIN" /usr/local/bin/fanout 2>/dev/null || true
   fi
+  ln -sf "$BIN" /usr/local/bin/sout 2>/dev/null || true
 
   if [[ -f "$tmp_dir/f.sh" ]]; then
     cp -f "$tmp_dir/f.sh" /usr/local/bin/f
