@@ -22,6 +22,100 @@ detect_init() {
 }
 INIT_SYS=$(detect_init)
 
+check_sui() {
+  if [[ -f /usr/local/s-ui/db/s-ui.db ]] || [[ -f /usr/local/s-ui/s-ui ]] || command -v sui >/dev/null 2>&1 || [[ -f /usr/local/s-ui/sui ]]; then
+    return 0
+  fi
+  return 1
+}
+
+cleanup_sout() {
+  echo "      正在清理并卸载 sout 脚本与服务..."
+  if [[ "$INIT_SYS" == systemd ]]; then
+    systemctl stop fanout 2>/dev/null || true
+    systemctl disable fanout 2>/dev/null || true
+    rm -f /etc/systemd/system/fanout.service
+    systemctl daemon-reload 2>/dev/null || true
+  else
+    rc-service fanout stop 2>/dev/null || true
+    rc-update del fanout default 2>/dev/null || true
+    rm -f /etc/init.d/fanout
+  fi
+  rm -f "$BIN" /usr/local/bin/f /usr/local/bin/sout /usr/local/bin/sout-cli 2>/dev/null || true
+  echo "      sout 已清理完毕。"
+}
+
+ensure_sui() {
+  if check_sui; then
+    return 0
+  fi
+
+  echo
+  echo "================================================================"
+  echo "  [!] 检测到当前 VPS 尚未安装 s-ui 面板！"
+  echo
+  echo "  sout 是专为 s-ui (Sing-Box) 设计的动态家宽出口与分流插件。"
+  echo "  必须配合 s-ui 面板才能实现多协议入站、单端口多用户及分流联动。"
+  echo
+  echo "  请选择操作："
+  echo "    y) 自动检测当前服务器系统并安装官方 s-ui 面板"
+  echo "    n) 退出并卸载/取消安装脚本"
+  echo "================================================================"
+  echo
+
+  local choice=""
+  if [[ -t 0 ]]; then
+    read -rp "  是否安装官方 s-ui 面板？[Y/n]: " choice
+  else
+    read -rp "  是否安装官方 s-ui 面板？[Y/n]: " choice < /dev/tty || choice="y"
+  fi
+
+  choice="${choice:-y}"
+  case "${choice,,}" in
+    y|yes)
+      echo
+      echo "  [+] 正在自动检测当前服务器系统架构并安装官方 s-ui 面板..."
+      echo "      (官方仓库: https://github.com/alireza0/s-ui)"
+      echo
+      bash <(curl -Ls https://raw.githubusercontent.com/alireza0/s-ui/master/install.sh) || true
+      
+      if check_sui; then
+        echo
+        echo "  [✓] s-ui 面板安装完成并就绪！继续进行 sout 插件安装..."
+        echo
+      else
+        echo
+        echo "  [!] 未能检测到 s-ui 面板组件（可能安装被取消或中断）。"
+        local continue_choice=""
+        if [[ -t 0 ]]; then
+          read -rp "  是否仍要继续安装 sout？[y/N]: " continue_choice
+        else
+          read -rp "  是否仍要继续安装 sout？[y/N]: " continue_choice < /dev/tty || continue_choice="n"
+        fi
+        if [[ "${continue_choice,,}" != "y" ]]; then
+          cleanup_sout
+          echo "  已退出安装。"
+          exit 0
+        fi
+      fi
+      ;;
+    n|no)
+      echo
+      echo "  [-] 您选择了取消安装，正在卸载并退出..."
+      cleanup_sout
+      exit 0
+      ;;
+    *)
+      echo
+      echo "  [-] 输入无效，已取消安装并退出。"
+      cleanup_sout
+      exit 0
+      ;;
+  esac
+}
+
+ensure_sui
+
 seed_settings() {
   local target="${WORK_DIR}/settings.json"
   if [[ -f "$target" ]]; then
@@ -172,12 +266,12 @@ else
 fi
 
 echo "[3/6] 检测节点管理面板..."
-if [[ -f /usr/local/s-ui/db/s-ui.db ]] || command -v /usr/local/s-ui/sui >/dev/null 2>&1; then
+if check_sui; then
   echo "      检测到已安装 s-ui 面板（将自动以 s-ui 模式接管分流）"
 elif command -v /usr/local/x-ui/x-ui >/dev/null 2>&1 || [[ -x /usr/bin/x-ui ]]; then
   echo "      检测到已安装 3x-ui 面板（将自动以 3x-ui 模式接管出入站）"
 else
-  echo "      提示：未检测到 s-ui 面板，请在安装后配置 s-ui 以启用节点分流联动。"
+  echo "      提示：未检测到 s-ui 面板，请配置 s-ui 以启用节点分流联动。"
 fi
 
 echo "[4/6] 配置网络转发与防火墙规则..."

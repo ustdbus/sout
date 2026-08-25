@@ -113,6 +113,14 @@ show_info() {
     echo -e "  服务状态:    ${R}已停止 (${st})${N}"
   fi
   echo -e "  开机自启:    $(svc_is_enabled && echo -e "${G}已开启${N}" || echo -e "${D}已关闭${N}")"
+
+  if [[ -f /usr/local/s-ui/db/s-ui.db ]] || [[ -f /usr/local/s-ui/s-ui ]] || command -v sui >/dev/null 2>&1; then
+    echo -e "  面板对接:    ${G}s-ui (Sing-Box) 已就绪${N}"
+  elif command -v /usr/local/x-ui/x-ui >/dev/null 2>&1 || [[ -x /usr/bin/x-ui ]]; then
+    echo -e "  面板对接:    ${G}3x-ui 已就绪${N}"
+  else
+    echo -e "  面板对接:    ${R}未检测到 s-ui 面板 (可选择 13 安装 s-ui)${N}"
+  fi
   
   if [[ "$la" == "127.0.0.1" ]]; then
     echo -e "  监听地址:    ${Y}127.0.0.1 (本地反向代理模式)${N}"
@@ -479,6 +487,20 @@ sys.exit(0 if latest > cur else 1)
   echo -e "  ${G}恭喜！sout 已成功更新至 ${tag_name}，服务已自动重启生效。${N}"
 }
 
+install_sui() {
+  echo
+  echo -e "  ${G}正在为您检测当前服务器系统并拉取官方安装脚本安装 s-ui 面板...${N}"
+  echo -e "  ${D}(官方仓库: https://github.com/alireza0/s-ui)${N}"
+  echo
+  bash <(curl -Ls https://raw.githubusercontent.com/alireza0/s-ui/master/install.sh)
+  echo
+  if [[ -f /usr/local/s-ui/db/s-ui.db ]] || [[ -f /usr/local/s-ui/s-ui ]] || command -v sui >/dev/null 2>&1; then
+    echo -e "  ${G}[✓] s-ui 面板已就绪！${N}"
+  else
+    echo -e "  ${Y}[!] 未检测到 s-ui 面板组件，请确认安装是否成功。${N}"
+  fi
+}
+
 menu() {
   while true; do
     clear
@@ -494,10 +516,10 @@ menu() {
     echo -e "   7) 修改面板端口      8) 修改监听地址"
     echo -e "   9) 重置访问口令     10) 重置访问路径"
     echo -e "  11) 面板 URL 设置    12) 检查/更新版本"
-    echo -e "  13) 彻底卸载 sout"
+    echo -e "  13) 安装/重置 s-ui   14) 彻底卸载 sout"
     echo -e "   0) 退出脚本"
     echo -e "${D}----------------------------------------${N}"
-    read -rp "  请选择 [0-13]: " choice
+    read -rp "  请选择 [0-14]: " choice
 
     case "$choice" in
       1) svc_start   && echo -e "\n  ${G}已启动${N}"; pause ;;
@@ -520,7 +542,8 @@ menu() {
       10) reset_basepath; pause ;;
       11) change_panel_url; pause ;;
       12) check_and_update; pause ;;
-      13) do_uninstall; pause ;;
+      13) install_sui; pause ;;
+      14) do_uninstall; pause ;;
       0) exit 0 ;;
       *) ;;
     esac
@@ -539,12 +562,13 @@ case "${1:-}" in
   list)      list_tunnels ;;
   listen)    change_listen_addr ;;
   url)       change_panel_url ;;
+  sui)       install_sui ;;
   update)    check_and_update ;;
   upgrade)   check_and_update ;;
   uninstall) do_uninstall ;;
   "")        menu ;;
   *)
-    echo "用法: sout [start|stop|restart|status|log|info|list|listen|url|update|uninstall]"
+    echo "用法: sout [start|stop|restart|status|log|info|list|listen|url|sui|update|uninstall]"
     echo "直接在终端输入 sout 或 f 即可进入交互控制菜单"
     ;;
 esac
