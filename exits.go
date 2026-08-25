@@ -108,7 +108,7 @@ func invalidateInbounds() {
 }
 
 func isResidentialBranch(tag string) bool {
-	return strings.Contains(tag, " (") && (strings.HasSuffix(tag, "家宽)") || strings.HasSuffix(tag, "机房)") || strings.Contains(tag, "家宽-") || strings.Contains(tag, "机房-"))
+	return strings.Contains(tag, " (") && strings.HasSuffix(tag, ")")
 }
 
 func getBaseTag(tag string) string {
@@ -203,36 +203,19 @@ func (m *Manager) ExitsOf() ExitsView {
 	baseNodeMap := map[string]*GroupedNode{}
 	var baseOrder []string
 
-	// 第一轮：识别基础原生入站（非家宽后缀）
+	// 识别基础原生入站并去重保序
 	for _, ib := range list {
-		if !isResidentialBranch(ib.Tag) {
+		baseTag := getBaseTag(ib.Tag)
+		if _, exists := baseNodeMap[baseTag]; !exists {
 			node := &GroupedNode{
 				BaseID:   ib.ID,
-				Name:     ib.Tag,
+				Name:     baseTag,
 				Protocol: strings.ToUpper(ib.Protocol),
 				Port:     ib.Port,
 				Branches: make([]NodeBranch, 0),
 			}
-			baseNodeMap[ib.Tag] = node
-			baseOrder = append(baseOrder, ib.Tag)
-		}
-	}
-
-	// 第二轮：如果某些家宽分支的原生入站不存在，兜底创建 baseNode
-	for _, ib := range list {
-		if isResidentialBranch(ib.Tag) {
-			baseTag := getBaseTag(ib.Tag)
-			if _, exists := baseNodeMap[baseTag]; !exists {
-				node := &GroupedNode{
-					BaseID:   ib.ID,
-					Name:     baseTag,
-					Protocol: strings.ToUpper(ib.Protocol),
-					Port:     ib.Port,
-					Branches: make([]NodeBranch, 0),
-				}
-				baseNodeMap[baseTag] = node
-				baseOrder = append(baseOrder, baseTag)
-			}
+			baseNodeMap[baseTag] = node
+			baseOrder = append(baseOrder, baseTag)
 		}
 	}
 

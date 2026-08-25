@@ -365,6 +365,20 @@ func (s *SUI) getDBInboundIDs(inboundsRaw json.RawMessage) []int {
 	return ids
 }
 
+func isSUIOutboundTag(outbound string) bool {
+	return strings.HasPrefix(outbound, "sout-") || strings.HasPrefix(outbound, "fanout-")
+}
+
+func extractSUIHost(outbound string) string {
+	if strings.HasPrefix(outbound, "sout-") {
+		return strings.TrimPrefix(outbound, "sout-")
+	}
+	if strings.HasPrefix(outbound, "fanout-") {
+		return strings.TrimPrefix(outbound, "fanout-")
+	}
+	return outbound
+}
+
 // getBoundUserRoutes 读取 sing-box 路由规则中按用户 (auth_user) 分流的映射
 func (s *SUI) getBoundUserRoutes() (map[string]string, error) {
 	configObj, err := s.callAPI(http.MethodGet, "config", nil)
@@ -386,10 +400,10 @@ func (s *SUI) getBoundUserRoutes() (map[string]string, error) {
 	bound := make(map[string]string)
 	for _, rule := range cfg.Config.Route.Rules {
 		outbound, _ := rule["outbound"].(string)
-		if !strings.HasPrefix(outbound, suiTagPrefix) {
+		if !isSUIOutboundTag(outbound) {
 			continue
 		}
-		host := strings.TrimPrefix(outbound, suiTagPrefix)
+		host := extractSUIHost(outbound)
 		users := toSUITagSlice(rule["auth_user"])
 		if len(users) == 0 {
 			users = toSUITagSlice(rule["user"])
@@ -467,11 +481,14 @@ func (s *SUI) Inbounds(live map[string]bool) ([]Inbound, error) {
 
 		for _, c := range matchedClients {
 			boundHost := boundUserMap[c.Name]
-			isBase := boundHost == ""
+			isFanoutClient := strings.HasPrefix(c.Name, "sout-u-") || strings.HasPrefix(c.Name, "fanout-u-")
+			isBase := !isFanoutClient && boundHost == ""
 			branchTag := item.Tag
 			if !isBase {
 				if c.Remark != "" {
 					branchTag = fmt.Sprintf("%s (%s)", item.Tag, c.Remark)
+				} else if boundHost != "" {
+					branchTag = fmt.Sprintf("%s (%s)", item.Tag, boundHost)
 				} else {
 					branchTag = fmt.Sprintf("%s (%s)", item.Tag, c.Name)
 				}
@@ -527,7 +544,7 @@ func (s *SUI) BindUserRoute(userName string, hostname string, tunnels []*Tunnel)
 			continue
 		}
 		outbound, _ := ruleMap["outbound"].(string)
-		if strings.HasPrefix(outbound, suiTagPrefix) {
+		if isSUIOutboundTag(outbound) {
 			users := toSUITagSlice(ruleMap["auth_user"])
 			if len(users) == 0 {
 				users = toSUITagSlice(ruleMap["user"])
@@ -599,7 +616,7 @@ func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {
 
 	existingFanoutTags := make(map[string]int)
 	for _, ob := range rawWrap.Outbounds {
-		if strings.HasPrefix(ob.Tag, suiTagPrefix) {
+		if isSUIOutboundTag(ob.Tag) {
 			existingFanoutTags[ob.Tag] = ob.ID
 		}
 	}
