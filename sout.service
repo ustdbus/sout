@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 # 端口由 /var/lib/sout/settings.json 决定（界面和 f 菜单都改它）。
-ExecStart=/usr/local/bin/sout -dir /var/lib/sout
+ExecStart=/usr/local/bin/sout-server -dir /var/lib/sout
 Restart=on-failure
 RestartSec=5
 # 退出时给足时间清理 netns 与 openvpn 子进程

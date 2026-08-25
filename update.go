@@ -182,10 +182,12 @@ func applyUpdate() error {
 		}
 	}
 
-	newBin := filepath.Join(tmp, "sout")
-	if err := extractBinary(tarPath, "sout", newBin); err != nil {
-		if err2 := extractBinary(tarPath, "fanout", newBin); err2 != nil {
-			return fmt.Errorf("解包失败: %w", err)
+	newBin := filepath.Join(tmp, "sout-server")
+	if err := extractBinary(tarPath, "sout-server", newBin); err != nil {
+		if err2 := extractBinary(tarPath, "sout", newBin); err2 != nil {
+			if err3 := extractBinary(tarPath, "fanout", newBin); err3 != nil {
+				return fmt.Errorf("解包失败: %w", err)
+			}
 		}
 	}
 

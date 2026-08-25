@@ -2,7 +2,7 @@
 set -e
 
 REPO="${REPO:-ustdbus/sout}"
-BIN="/usr/local/bin/sout"
+BIN="/usr/local/bin/sout-server"
 WORK_DIR="/var/lib/sout"
 WEB_PORT=8899
 
@@ -50,7 +50,7 @@ cleanup_sout() {
     rc-update del fanout default 2>/dev/null || true
     rm -f /etc/init.d/sout /etc/init.d/fanout
   fi
-  rm -f "$BIN" /usr/local/bin/fanout /usr/local/bin/f /usr/local/bin/sout /usr/local/bin/sout-cli 2>/dev/null || true
+  rm -f "$BIN" /usr/local/bin/sout-server /usr/local/bin/fanout /usr/local/bin/f /usr/local/bin/sout /usr/local/bin/sout-cli 2>/dev/null || true
   echo "      sout 已清理完毕。"
 }
 
@@ -277,7 +277,9 @@ else
     exit 1
   fi
   tar xzf "$TMP/f.tar.gz" -C "$TMP"
-  if [[ -f "$TMP/sout" ]]; then
+  if [[ -f "$TMP/sout-server" ]]; then
+    install -m 755 "$TMP/sout-server" "$BIN"
+  elif [[ -f "$TMP/sout" ]]; then
     install -m 755 "$TMP/sout" "$BIN"
   elif [[ -f "$TMP/fanout" ]]; then
     install -m 755 "$TMP/fanout" "$BIN"
@@ -285,7 +287,9 @@ else
   ln -sf "$BIN" /usr/local/bin/fanout 2>/dev/null || true
   [[ -f "$TMP/sout.service" ]] && cp "$TMP/sout.service" .
   [[ -f "$TMP/fanout.service" ]] && cp "$TMP/fanout.service" .
-  [[ -f "$TMP/f.sh" ]] && install -m 755 "$TMP/f.sh" /usr/local/bin/f
+  if [[ -f "$TMP/f.sh" ]]; then
+    install -m 755 "$TMP/f.sh" /usr/local/bin/f
+  fi
   rm -rf "$TMP"
 fi
 

@@ -5,7 +5,8 @@ UNIT="sout.service"
 if systemctl is-active fanout.service >/dev/null 2>&1 && ! systemctl is-active sout.service >/dev/null 2>&1; then
   UNIT="fanout.service"
 fi
-BIN="/usr/local/bin/sout"
+BIN="/usr/local/bin/sout-server"
+[[ ! -f "$BIN" && -f "/usr/local/bin/sout" ]] && BIN="/usr/local/bin/sout"
 [[ ! -f "$BIN" && -f "/usr/local/bin/fanout" ]] && BIN="/usr/local/bin/fanout"
 WORK_DIR="/var/lib/sout"
 [[ ! -d "$WORK_DIR" && -d "/var/lib/fanout" ]] && WORK_DIR="/var/lib/fanout"
@@ -475,7 +476,11 @@ sys.exit(0 if latest > cur else 1)
   fi
 
   tar -zxf "$tmp_dir/sout.tar.gz" -C "$tmp_dir"
-  if [[ -f "$tmp_dir/sout" ]]; then
+  if [[ -f "$tmp_dir/sout-server" ]]; then
+    cp -f "$tmp_dir/sout-server" "$BIN"
+    chmod +x "$BIN"
+    ln -sf "$BIN" /usr/local/bin/fanout 2>/dev/null || true
+  elif [[ -f "$tmp_dir/sout" ]]; then
     cp -f "$tmp_dir/sout" "$BIN"
     chmod +x "$BIN"
     ln -sf "$BIN" /usr/local/bin/fanout 2>/dev/null || true
@@ -484,11 +489,11 @@ sys.exit(0 if latest > cur else 1)
     chmod +x "$BIN"
     ln -sf "$BIN" /usr/local/bin/fanout 2>/dev/null || true
   fi
-  ln -sf "$BIN" /usr/local/bin/sout 2>/dev/null || true
 
   if [[ -f "$tmp_dir/f.sh" ]]; then
     cp -f "$tmp_dir/f.sh" /usr/local/bin/f
     chmod +x /usr/local/bin/f
+    ln -sf /usr/local/bin/f /usr/local/bin/sout 2>/dev/null || true
     ln -sf /usr/local/bin/f /usr/local/bin/sout-cli 2>/dev/null || true
   fi
 
