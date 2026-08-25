@@ -250,7 +250,7 @@ func (m *Manager) ExitsOf() ExitsView {
 			}
 		}
 
-		boundLabel := "直连（香港）"
+		boundLabel := "直连"
 		if ib.BoundTo != "" {
 			if t, ok := hostToTunnel[ib.BoundTo]; ok {
 				exitIP := t.ExitIP
