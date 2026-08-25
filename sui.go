@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1205,6 +1206,76 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 				}
 			}
 			links = append(links, fmt.Sprintf("trojan://%s@%s:%d?%s#%s", passStr, host, port, v.Encode(), url.PathEscape(remark)))
+
+		case "socks", "socks5":
+			user, _ := clientCfg["socks"]["username"].(string)
+			pass, _ := clientCfg["socks"]["password"].(string)
+			if user != "" || pass != "" {
+				links = append(links, fmt.Sprintf("socks5://%s:%s@%s:%d#%s", url.QueryEscape(user), url.QueryEscape(pass), host, port, url.PathEscape(remark)))
+			} else {
+				links = append(links, fmt.Sprintf("socks5://%s:%d#%s", host, port, url.PathEscape(remark)))
+			}
+
+		case "http", "mixed":
+			user, _ := clientCfg["http"]["username"].(string)
+			pass, _ := clientCfg["http"]["password"].(string)
+			if user == "" && pass == "" {
+				user, _ = clientCfg["mixed"]["username"].(string)
+				pass, _ = clientCfg["mixed"]["password"].(string)
+			}
+			if user != "" || pass != "" {
+				links = append(links, fmt.Sprintf("http://%s:%s@%s:%d#%s", url.QueryEscape(user), url.QueryEscape(pass), host, port, url.PathEscape(remark)))
+			} else {
+				links = append(links, fmt.Sprintf("http://%s:%d#%s", host, port, url.PathEscape(remark)))
+			}
+
+		case "shadowsocks", "ss":
+			passStr, _ := clientCfg["shadowsocks"]["password"].(string)
+			methodStr, _ := clientCfg["shadowsocks"]["method"].(string)
+			if methodStr == "" {
+				methodStr = "2022-blake3-aes-128-gcm"
+			}
+			auth := base64.URLEncoding.EncodeToString([]byte(methodStr + ":" + passStr))
+			links = append(links, fmt.Sprintf("ss://%s@%s:%d#%s", auth, host, port, url.PathEscape(remark)))
+
+		case "hysteria2", "hy2":
+			passStr, _ := clientCfg["hysteria2"]["password"].(string)
+			v := url.Values{}
+			if out.TLS.ServerName != "" {
+				v.Set("sni", out.TLS.ServerName)
+			}
+			if out.TLS.Insecure {
+				v.Set("insecure", "1")
+			}
+			links = append(links, fmt.Sprintf("hysteria2://%s@%s:%d?%s#%s", passStr, host, port, v.Encode(), url.PathEscape(remark)))
+
+		case "vmess":
+			uuidStr, _ := clientCfg["vmess"]["uuid"].(string)
+			alterId, _ := clientCfg["vmess"]["alterId"].(float64)
+			tlsStr := ""
+			if out.TLS.Enabled {
+				tlsStr = "tls"
+			}
+			tp := out.Transport.Type
+			if tp == "" {
+				tp = "tcp"
+			}
+			vmessObj := map[string]any{
+				"v":    "2",
+				"ps":   remark,
+				"add":  host,
+				"port": port,
+				"id":   uuidStr,
+				"aid":  int(alterId),
+				"net":  tp,
+				"type": "none",
+				"host": out.Transport.Host,
+				"path": out.Transport.Path,
+				"tls":  tlsStr,
+				"sni":  out.TLS.ServerName,
+			}
+			b, _ := json.Marshal(vmessObj)
+			links = append(links, "vmess://"+base64.StdEncoding.EncodeToString(b))
 		}
 	}
 
