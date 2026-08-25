@@ -382,8 +382,37 @@ func (m *Manager) Regions(poolType string) []RegionStat {
 		sourceStats = append([]RegionStat{srcStat}, sourceStats...)
 	}
 
-	// 将所有订阅源排在具体国家卡片的前面
-	return append(sourceStats, out...)
+	// 4. 计算全局「不限地区 (ALL)」真实可用总数与最高速度
+	allAvail := 0
+	allBestPing := 0
+	allBestSpeed := 0.0
+	for _, n := range candidateNodes {
+		if used[n.HostName] {
+			continue
+		}
+		allAvail++
+		if n.SpeedMbps > allBestSpeed {
+			allBestSpeed = n.SpeedMbps
+		}
+		if n.Ping > 0 && (allBestPing == 0 || n.Ping < allBestPing) {
+			allBestPing = n.Ping
+		}
+	}
+	allStat := RegionStat{
+		Code:          "ALL",
+		Name:          "不限地区",
+		Available:     allAvail,
+		BestPing:      allBestPing,
+		BestSpeed:     allBestSpeed,
+	}
+
+	var result []RegionStat
+	if allAvail > 0 {
+		result = append(result, allStat)
+	}
+	result = append(result, sourceStats...)
+	result = append(result, out...)
+	return result
 }
 
 func regionLabel(n Node) string {

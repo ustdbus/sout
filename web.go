@@ -710,22 +710,7 @@ $('#openNewExitModalBtn').onclick = async () => {
 
 function renderRegionList(){
   const kw = ($('#rgFilter').value || '').trim().toLowerCase();
-  let totalAvail = 0;
-  let maxSpeed = 0;
-  regionList.forEach(r => {
-    totalAvail += r.available || 0;
-    if((r.best_speed_mbps || 0) > maxSpeed) maxSpeed = r.best_speed_mbps;
-  });
-
-  const allItem = {
-    code: 'ALL',
-    name: '不限地区',
-    available: totalAvail,
-    best_speed_mbps: maxSpeed,
-  };
-
-  const fullList = [allItem, ...regionList];
-  const filtered = fullList.filter(r => !kw || r.code.toLowerCase().includes(kw) || r.name.toLowerCase().includes(kw));
+  const filtered = regionList.filter(r => !kw || r.code.toLowerCase().includes(kw) || r.name.toLowerCase().includes(kw));
   $('#rgList').innerHTML = filtered.map(r => {
     let title = '';
     if(r.code === 'ALL'){
