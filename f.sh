@@ -125,7 +125,7 @@ show_info() {
   elif command -v /usr/local/x-ui/x-ui >/dev/null 2>&1 || [[ -x /usr/bin/x-ui ]]; then
     echo -e "  面板对接:    ${G}3x-ui 已就绪${N}"
   else
-    echo -e "  面板对接:    ${R}未检测到 s-ui 面板 (可选择 13 安装 s-ui)${N}"
+    echo -e "  面板对接:    ${R}未检测到 s-ui 面板${N}"
   fi
   
   if [[ "$la" == "127.0.0.1" ]]; then
@@ -376,10 +376,10 @@ except Exception as e:
   systemctl restart s-ui 2>/dev/null || true
 }
 
-do_uninstall() {
+uninstall_sout_only() {
   local yes
   echo
-  read -rp "  确定彻底卸载 sout 并清理所有相关出入站节点吗？[y/N]: " yes
+  read -rp "  确定仅卸载 sout 并清理其生成的出入站分流吗？(保留 s-ui 面板) [y/N]: " yes
   [[ ${yes,,} == y ]] || { echo "  已取消"; return; }
 
   echo "  正在停止并清理 sout 服务..."
@@ -401,8 +401,82 @@ do_uninstall() {
   rm -f "$BIN" /usr/local/bin/sout /usr/local/bin/fanout /usr/local/bin/f /usr/local/bin/sout-cli
   rm -rf "$WORK_DIR" /var/lib/sout /var/lib/fanout 2>/dev/null || true
   svc_reload
-  echo -e "  ${G}sout 已彻底卸载完成，所有由 sout 创建的出入站已全部清理，s-ui 完全保持原样！${N}"
+  echo -e "  ${G}[✓] sout 已卸载完成，所有由 sout 创建的出入站已全部清理，s-ui 面板保持原样！${N}"
   exit 0
+}
+
+uninstall_sui_only() {
+  local yes
+  echo
+  read -rp "  确定仅卸载 s-ui 面板吗？(保留 sout 服务) [y/N]: " yes
+  [[ ${yes,,} == y ]] || { echo "  已取消"; return; }
+
+  echo "  正在停止并卸载 s-ui 面板..."
+  systemctl stop s-ui 2>/dev/null || true
+  systemctl disable s-ui 2>/dev/null || true
+  rm -f /etc/systemd/system/s-ui.service /etc/init.d/s-ui 2>/dev/null || true
+  systemctl daemon-reload 2>/dev/null || true
+  systemctl reset-failed 2>/dev/null || true
+  rm -rf /etc/s-ui /usr/local/s-ui 2>/dev/null || true
+  rm -f /usr/bin/s-ui /usr/local/bin/s-ui /usr/bin/sui /usr/local/bin/sui 2>/dev/null || true
+  echo -e "  ${G}[✓] s-ui 面板已卸载完成，sout 服务已保留。${N}"
+}
+
+uninstall_all() {
+  local yes
+  echo
+  read -rp "  ⚠️ 确定彻底卸载 sout 和 s-ui 吗？所有节点与服务将被完全清理！[y/N]: " yes
+  [[ ${yes,,} == y ]] || { echo "  已取消"; return; }
+
+  echo "  正在停止并清理所有服务与组件..."
+  svc_stop >/dev/null 2>&1 || true
+  svc_disable >/dev/null 2>&1 || true
+  systemctl stop fanout 2>/dev/null || true
+  systemctl disable fanout 2>/dev/null || true
+  for ns in $(ip netns list 2>/dev/null | awk '{print $1}' | grep -E '^(fo|so)[0-9]'); do
+    ip netns del "$ns" 2>/dev/null || true
+  done
+  for l in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep -E '^(fov|sov)[0-9]'); do
+    ip link del "$l" 2>/dev/null || true
+  done
+
+  # 清理 sout 二进制与工作目录
+  rm -f "/etc/systemd/system/sout.service" "/etc/systemd/system/fanout.service" "/etc/init.d/sout" "/etc/init.d/fanout"
+  rm -f "$BIN" /usr/local/bin/sout /usr/local/bin/fanout /usr/local/bin/f /usr/local/bin/sout-cli
+  rm -rf "$WORK_DIR" /var/lib/sout /var/lib/fanout 2>/dev/null || true
+
+  # 清理 s-ui
+  systemctl stop s-ui 2>/dev/null || true
+  systemctl disable s-ui 2>/dev/null || true
+  rm -f /etc/systemd/system/s-ui.service /etc/init.d/s-ui 2>/dev/null || true
+  systemctl daemon-reload 2>/dev/null || true
+  systemctl reset-failed 2>/dev/null || true
+  rm -rf /etc/s-ui /usr/local/s-ui 2>/dev/null || true
+  rm -f /usr/bin/s-ui /usr/local/bin/s-ui /usr/bin/sui /usr/local/bin/sui 2>/dev/null || true
+
+  svc_reload
+  echo -e "  ${G}[✓] sout 与 s-ui 已全部彻底卸载完成！${N}"
+  exit 0
+}
+
+do_uninstall() {
+  echo
+  echo -e "${B}========================================${N}"
+  echo -e "${B}  sout / s-ui 卸载管理${N}"
+  echo -e "${B}========================================${N}"
+  echo -e "   1) 仅卸载 sout (保留 s-ui 面板及其节点配置)"
+  echo -e "   2) 仅卸载 s-ui (保留 sout 插件服务与设置)"
+  echo -e "   3) 全部卸载   (同时彻底卸载 sout 与 s-ui)"
+  echo -e "   0) 取消并返回"
+  echo -e "${D}----------------------------------------${N}"
+  local opt
+  read -rp "  请选择 [0-3]: " opt
+  case "$opt" in
+    1) uninstall_sout_only ;;
+    2) uninstall_sui_only ;;
+    3) uninstall_all ;;
+    *) echo "  已取消" ;;
+  esac
 }
 
 check_and_update() {
@@ -501,20 +575,6 @@ sys.exit(0 if latest > cur else 1)
   echo -e "  ${G}恭喜！sout 已成功更新至 ${tag_name}，服务已自动重启生效。${N}"
 }
 
-install_sui() {
-  echo
-  echo -e "  ${G}正在为您检测当前服务器系统并拉取官方安装脚本安装 s-ui 面板...${N}"
-  echo -e "  ${D}(官方仓库: https://github.com/alireza0/s-ui)${N}"
-  echo
-  bash <(curl -Ls https://raw.githubusercontent.com/alireza0/s-ui/master/install.sh)
-  echo
-  if [[ -f /usr/local/s-ui/db/s-ui.db ]] || [[ -f /usr/local/s-ui/s-ui ]] || command -v sui >/dev/null 2>&1; then
-    echo -e "  ${G}[✓] s-ui 面板已就绪！${N}"
-  else
-    echo -e "  ${Y}[!] 未检测到 s-ui 面板组件，请确认安装是否成功。${N}"
-  fi
-}
-
 menu() {
   while true; do
     clear
@@ -530,10 +590,9 @@ menu() {
     echo -e "   7) 修改面板端口      8) 修改监听地址"
     echo -e "   9) 重置访问口令     10) 重置访问路径"
     echo -e "  11) 面板 URL 设置    12) 检查/更新版本"
-    echo -e "  13) 安装/重置 s-ui   14) 彻底卸载 sout"
-    echo -e "   0) 退出脚本"
+    echo -e "  13) 卸载             0) 退出脚本"
     echo -e "${D}----------------------------------------${N}"
-    read -rp "  请选择 [0-14]: " choice
+    read -rp "  请选择 [0-13]: " choice
 
     case "$choice" in
       1) svc_start   && echo -e "\n  ${G}已启动${N}"; pause ;;
@@ -556,8 +615,7 @@ menu() {
       10) reset_basepath; pause ;;
       11) change_panel_url; pause ;;
       12) check_and_update; pause ;;
-      13) install_sui; pause ;;
-      14) do_uninstall; pause ;;
+      13) do_uninstall; pause ;;
       0) exit 0 ;;
       *) ;;
     esac
@@ -576,13 +634,12 @@ case "${1:-}" in
   list)      list_tunnels ;;
   listen)    change_listen_addr ;;
   url)       change_panel_url ;;
-  sui)       install_sui ;;
   update)    check_and_update ;;
   upgrade)   check_and_update ;;
   uninstall) do_uninstall ;;
   "")        menu ;;
   *)
-    echo "用法: sout [start|stop|restart|status|log|info|list|listen|url|sui|update|uninstall]"
+    echo "用法: sout [start|stop|restart|status|log|info|list|listen|url|update|uninstall]"
     echo "直接在终端输入 sout 或 f 即可进入交互控制菜单"
     ;;
 esac
