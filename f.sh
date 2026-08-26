@@ -963,8 +963,57 @@ EOF
   systemctl restart caddy
   sleep 3
 
-  # 4. 同步证书
-  sync_caddy_certs "$domain" || true
+  # 4. 同步证书并锁定显式证书加载
+  if sync_caddy_certs "$domain"; then
+    cat > /etc/caddy/Caddyfile <<EOF
+{
+    admin off
+    default_sni ${domain}
+    storage file_system {
+        root /var/lib/caddy
+    }
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 10mb
+            roll_keep 3
+        }
+        level INFO
+    }
+}
+
+:443, https://${domain}:443 {
+    tls /home/acme/${domain}/fullchain.pem /home/acme/${domain}/privkey.pem {
+        protocols tls1.2 tls1.3
+    }
+
+    # 1. sout 动态家宽管理面板
+    handle /${sout_path}* {
+        reverse_proxy 127.0.0.1:${sout_port}
+    }
+
+    # 2. s-ui 节点管理面板
+    handle /${sui_path}* {
+        reverse_proxy 127.0.0.1:${sui_port}
+    }
+
+    # 3. s-ui 订阅端口
+    handle /${sub_path}* {
+        reverse_proxy 127.0.0.1:${sub_port}
+    }
+
+    # 4. VLESS + WebSocket 节点
+    handle /${ws_path}* {
+        reverse_proxy 127.0.0.1:${node_port}
+    }
+
+    # 5. 伪装根路径
+    handle {
+        respond "Service Ready" 200
+    }
+}
+EOF
+    systemctl restart caddy
+  fi
 
   # 5. 自动化配置 s-ui
   local sui_db="/usr/local/s-ui/db/s-ui.db"
