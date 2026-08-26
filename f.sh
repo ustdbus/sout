@@ -836,7 +836,7 @@ C='[0;36m'
 D='[0;90m'
 N='[0m'
 
-WORK_DIR="/usr/local/sout"
+WORK_DIR="/var/lib/sout"
 CADDY_META="${WORK_DIR}/caddy_meta.json"
 
 pause() {

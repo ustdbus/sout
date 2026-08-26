@@ -4,6 +4,7 @@ set -e
 REPO="${REPO:-ustdbus/sout}"
 BIN="/usr/local/bin/sout-server"
 WORK_DIR="/var/lib/sout"
+[[ -d "/usr/local/sout" && ! -d "/var/lib/sout" ]] && cp -rf /usr/local/sout /var/lib/sout 2>/dev/null || true
 WEB_PORT=8899
 
 if [[ $EUID -ne 0 ]]; then
@@ -442,10 +443,13 @@ if [[ "$WANT_TUNNEL" == "y" && -n "$TUNNEL_DOMAIN" && -n "$TUNNEL_TOKEN" ]]; the
   fi
 fi
 
-IP=$(curl -s --max-time 8 http://api.ipify.org || echo "<服务器IP>")
-BP=$(cat "${WORK_DIR}/basepath" 2>/dev/null || true)
-ACTUAL_PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*//p'   "${WORK_DIR}/settings.json" 2>/dev/null | head -1)
-[[ -n $ACTUAL_PORT ]] && WEB_PORT="$ACTUAL_PORT"
+IP=$(curl -s4m 5 https://api.ipify.org || curl -s4m 5 https://ifconfig.me || echo "127.0.0.1")
+BP=$(cat "${WORK_DIR}/basepath" 2>/dev/null | tr -d ' \r\n')
+BP="/${BP#/}"
+BP="${BP%/}/"
+
+ACTUAL_PORT=$(grep -oE '"port"[[:space:]]*:[[:space:]]*[0-9]+' "${WORK_DIR}/settings.json" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
+WEB_PORT="${ACTUAL_PORT:-8899}"
 
 CADDY_META="${WORK_DIR}/caddy_meta.json"
 if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$CADDY_META"; then
@@ -526,7 +530,7 @@ con.close()
   echo "  🎉 sout 插件安装部署完成！"
   echo "================================================================"
   echo "  [sout 动态家宽出口插件]"
-  echo "  管理面板:  http://${IP}:${WEB_PORT}/${BP}/"
+  echo "  管理面板:  http://${IP}:${WEB_PORT}${BP}"
   echo "  访问口令:  $(cat "${WORK_DIR}/password" 2>/dev/null || echo "见 ${WORK_DIR}/password")"
   echo "  sout 唤起命令:  sout"
   echo
