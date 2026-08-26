@@ -1076,7 +1076,24 @@ for k, v in settings_map.items():
     else:
         cur.execute('INSERT INTO settings (key, value) VALUES (?, ?)', (k, v))
 
-# 3. 配置/更新 VLESS-WS CDN 节点
+# 3. 自动收敛所有原本监听 443 的入站节点至本地端口 (避免与 Caddy 443 冲突)
+cur.execute('SELECT id, tag, options, addrs FROM inbounds')
+for inb_id, inb_tag, inb_opts, inb_addrs in cur.fetchall():
+    try:
+        opts_s = inb_opts.decode('utf-8') if isinstance(inb_opts, bytes) else str(inb_opts)
+        opts_j = json.loads(opts_s)
+        if opts_j.get('listen_port') == 443 or opts_j.get('listen') in ('::', '0.0.0.0', '*'):
+            if 'transport' in opts_j and opts_j['transport'].get('type') == 'ws':
+                opts_j['listen'] = '127.0.0.1'
+                opts_j['listen_port'] = 43641
+                b_opts = json.dumps(opts_j, indent=2).encode('utf-8')
+                b_addrs = inb_addrs if isinstance(inb_addrs, bytes) else (str(inb_addrs).encode('utf-8') if inb_addrs else b'[]')
+                cur.execute('UPDATE inbounds SET tls_id = 0, options = ?, addrs = ? WHERE id = ?',
+                            (b_opts, b_addrs, inb_id))
+    except:
+        pass
+
+# 4. 配置/更新 VLESS-WS CDN 节点
 node_tag = 'vless-ws-cdn'
 addrs_blob = json.dumps([{'server': domain, 'server_port': 443}]).encode('utf-8')
 options_dict = {
