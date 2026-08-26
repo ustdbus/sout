@@ -804,35 +804,43 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 			newUUID := generateUUID()
 			newPass := generateRandomToken(10)
 
-			clientCfgObj := map[string]map[string]any{
-				"vless": {
-					"name": clientName,
-					"uuid": newUUID,
-					"flow": baseFlow,
-				},
-				"tuic": {
-					"name":     clientName,
-					"uuid":     newUUID,
-					"password": newPass,
-				},
-				"vmess": {
-					"name":    clientName,
-					"uuid":    newUUID,
-					"alterId": 0,
-				},
-				"trojan": {
-					"name":     clientName,
-					"password": newPass,
-				},
-				"shadowsocks": {
-					"name":     clientName,
-					"password": newPass,
-				},
-				"hysteria2": {
-					"name":     clientName,
-					"password": newPass,
-				},
+			// 优先读取原生主客户端模版，派生出 100% 协议兼容的 clientCfgObj
+			clientCfgObj := make(map[string]map[string]any)
+			tmplJSON, _ := s.sqliteJSONQuery("SELECT config FROM clients WHERE enable=1 AND name NOT LIKE 'sout-u-%' AND name NOT LIKE 'fanout-u-%' LIMIT 1;")
+			var tmplClients []suiDBClient
+			_ = json.Unmarshal(tmplJSON, &tmplClients)
+			if len(tmplClients) > 0 {
+				clientCfgObj = parseSUIClientConfig(tmplClients[0].Config)
 			}
+			if clientCfgObj == nil {
+				clientCfgObj = make(map[string]map[string]any)
+			}
+
+			// 覆盖并补充全部 14 种常见协议，确保 s-ui 无论面对何种入站协议都能安全解析
+			setProtoVal := func(proto string, vals map[string]any) {
+				if clientCfgObj[proto] == nil {
+					clientCfgObj[proto] = make(map[string]any)
+				}
+				for k, v := range vals {
+					clientCfgObj[proto][k] = v
+				}
+			}
+
+			setProtoVal("vless", map[string]any{"name": clientName, "uuid": newUUID, "flow": baseFlow})
+			setProtoVal("tuic", map[string]any{"name": clientName, "uuid": newUUID, "password": newPass})
+			setProtoVal("vmess", map[string]any{"name": clientName, "uuid": newUUID, "alterId": 0})
+			setProtoVal("trojan", map[string]any{"name": clientName, "password": newPass})
+			setProtoVal("shadowsocks", map[string]any{"name": clientName, "password": newPass})
+			setProtoVal("hysteria2", map[string]any{"name": clientName, "password": newPass})
+			setProtoVal("hysteria", map[string]any{"name": clientName, "auth_str": newPass})
+			setProtoVal("socks", map[string]any{"username": clientName, "password": newPass})
+			setProtoVal("http", map[string]any{"username": clientName, "password": newPass})
+			setProtoVal("mixed", map[string]any{"username": clientName, "password": newPass})
+			setProtoVal("naive", map[string]any{"username": clientName, "password": newPass})
+			setProtoVal("anytls", map[string]any{"name": clientName, "password": newPass})
+			setProtoVal("shadowtls", map[string]any{"name": clientName, "password": newPass})
+			setProtoVal("shadowsocks16", map[string]any{"name": clientName, "password": newPass})
+
 			cfgBytes, _ := json.Marshal(clientCfgObj)
 			inboundsJSON := fmt.Sprintf("[%d]", templateID)
 
@@ -1359,6 +1367,12 @@ func replaceLinkCredential(uri string, proto string, oldClientCfg, newClientCfg 
 		newPass := getCfgVal(newClientCfg, proto, "password")
 		if oldPass != "" && newPass != "" && strings.Contains(uri, oldPass) {
 			return strings.ReplaceAll(uri, oldPass, newPass)
+		}
+	case "hysteria", "hy":
+		oldAuth := getCfgVal(oldClientCfg, "hysteria", "auth_str")
+		newAuth := getCfgVal(newClientCfg, "hysteria", "auth_str")
+		if oldAuth != "" && newAuth != "" && strings.Contains(uri, oldAuth) {
+			return strings.ReplaceAll(uri, oldAuth, newAuth)
 		}
 	case "socks", "socks5", "http", "mixed":
 		oldUser := getCfgVal(oldClientCfg, proto, "username")
