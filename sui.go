@@ -796,7 +796,7 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 			}
 		}
 
-		clientName := fmt.Sprintf("sout-u-%d-%s", templateID, sanitizeTag(host))
+		clientName := fmt.Sprintf("soutu%d%s", templateID, sanitizeTag(host))
 		clientRemark := fmt.Sprintf("%s%s", cName, poolName)
 
 		existingClientID := s.sqliteQuery(fmt.Sprintf("SELECT id FROM clients WHERE name='%s' LIMIT 1;", clientName))

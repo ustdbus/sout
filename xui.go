@@ -440,21 +440,19 @@ func tunnelTag(t *Tunnel) string {
 	return xuiTagPrefix + sanitizeTag(t.Node.HostName)
 }
 
-// sanitizeTag 把主机名收敛成安全的 tag 片段。
+// sanitizeTag 把主机名收敛成纯字母数字片段（彻底去除连字符与下划线）。
 func sanitizeTag(name string) string {
 	var b strings.Builder
 	for _, r := range name {
 		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
 			b.WriteRune(r)
-		default:
-			b.WriteRune('-')
 		}
 	}
 	if b.Len() == 0 {
-		return "unknown"
+		return "node"
 	}
-	return b.String()
+	return strings.ToLower(b.String())
 }
 
 // boundInbounds 返回 inboundTag -> 隧道槽位 的当前绑定关系。
