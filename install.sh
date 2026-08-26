@@ -255,7 +255,7 @@ MGR=$(detect_mgr)
 [[ "$MGR" == "apt-get" ]] && iproute_pkg=iproute2 || iproute_pkg=iproute
 
 need_cmd=()
-for c in curl tar; do
+for c in curl tar python3 sqlite3; do
   command -v "$c" >/dev/null || need_cmd+=("$c")
 done
 

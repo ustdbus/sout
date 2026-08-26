@@ -1044,15 +1044,15 @@ options_blob = json.dumps(options_dict, indent=2).encode('utf-8')
 cur.execute('SELECT id FROM inbounds WHERE tag = ?', (node_tag,))
 inb_row = cur.fetchone()
 if inb_row:
-    cur.execute('UPDATE inbounds SET type = \"vless\", tls_id = 0, addrs = ?, options = ? WHERE id = ?',
-                (addrs_blob, options_blob, inb_row[0]))
+    cur.execute('UPDATE inbounds SET type = ?, tls_id = 0, addrs = ?, options = ? WHERE id = ?',
+                ('vless', addrs_blob, options_blob, inb_row[0]))
 else:
-    cur.execute('INSERT INTO inbounds (type, tag, tls_id, addrs, options) VALUES (\"vless\", ?, 0, ?, ?)',
-                (node_tag, addrs_blob, options_blob))
+    cur.execute('INSERT INTO inbounds (type, tag, tls_id, addrs, options) VALUES (?, ?, 0, ?, ?)',
+                ('vless', node_tag, addrs_blob, options_blob))
 
 con.commit()
 con.close()
-" 2>/dev/null || true
+" || true
     systemctl restart s-ui 2>/dev/null || true
   fi
 
