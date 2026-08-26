@@ -1335,12 +1335,25 @@ func replaceLinkCredential(uri string, proto string, oldClientCfg, newClientCfg 
 	}
 
 	switch proto {
-	case "vless", "tuic":
+	case "vless":
 		oldUUID := getCfgVal(oldClientCfg, proto, "uuid")
 		newUUID := getCfgVal(newClientCfg, proto, "uuid")
 		if oldUUID != "" && newUUID != "" && strings.Contains(uri, oldUUID) {
 			return strings.ReplaceAll(uri, oldUUID, newUUID)
 		}
+	case "tuic":
+		oldUUID := getCfgVal(oldClientCfg, "tuic", "uuid")
+		newUUID := getCfgVal(newClientCfg, "tuic", "uuid")
+		oldPass := getCfgVal(oldClientCfg, "tuic", "password")
+		newPass := getCfgVal(newClientCfg, "tuic", "password")
+		res := uri
+		if oldUUID != "" && newUUID != "" && strings.Contains(res, oldUUID) {
+			res = strings.ReplaceAll(res, oldUUID, newUUID)
+		}
+		if oldPass != "" && newPass != "" && strings.Contains(res, oldPass) {
+			res = strings.ReplaceAll(res, oldPass, newPass)
+		}
+		return res
 	case "trojan", "hysteria2", "hy2":
 		oldPass := getCfgVal(oldClientCfg, proto, "password")
 		newPass := getCfgVal(newClientCfg, proto, "password")
