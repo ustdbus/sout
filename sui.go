@@ -22,7 +22,7 @@ import (
 const (
 	suiDBPathDefault = "/usr/local/s-ui/db/s-ui.db"
 	suiBinaryDefault = "/usr/local/s-ui/sui"
-	suiTagPrefix     = "sout-"
+	suiTagPrefix     = "sout"
 	suiTokenFile     = "sui-token"
 )
 
@@ -367,15 +367,21 @@ func (s *SUI) getDBInboundIDs(inboundsRaw json.RawMessage) []int {
 }
 
 func isSUIOutboundTag(outbound string) bool {
-	return strings.HasPrefix(outbound, "sout-") || strings.HasPrefix(outbound, "fanout-")
+	return strings.HasPrefix(outbound, "sout") || strings.HasPrefix(outbound, "fanout")
 }
 
 func extractSUIHost(outbound string) string {
 	if strings.HasPrefix(outbound, "sout-") {
 		return strings.TrimPrefix(outbound, "sout-")
 	}
+	if strings.HasPrefix(outbound, "sout") {
+		return strings.TrimPrefix(outbound, "sout")
+	}
 	if strings.HasPrefix(outbound, "fanout-") {
 		return strings.TrimPrefix(outbound, "fanout-")
+	}
+	if strings.HasPrefix(outbound, "fanout") {
+		return strings.TrimPrefix(outbound, "fanout")
 	}
 	return outbound
 }
@@ -482,7 +488,7 @@ func (s *SUI) Inbounds(live map[string]bool) ([]Inbound, error) {
 
 		for _, c := range matchedClients {
 			boundHost := boundUserMap[c.Name]
-			isFanoutClient := strings.HasPrefix(c.Name, "sout-u-") || strings.HasPrefix(c.Name, "fanout-u-")
+			isFanoutClient := strings.HasPrefix(c.Name, "soutu") || strings.HasPrefix(c.Name, "sout-u-") || strings.HasPrefix(c.Name, "fanoutu") || strings.HasPrefix(c.Name, "fanout-u-")
 			isBase := !isFanoutClient && boundHost == ""
 			branchTag := item.Tag
 			if !isBase {
@@ -806,7 +812,7 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 
 			// 优先读取原生主客户端模版，派生出 100% 协议兼容的 clientCfgObj
 			clientCfgObj := make(map[string]map[string]any)
-			tmplJSON, _ := s.sqliteJSONQuery("SELECT config FROM clients WHERE enable=1 AND name NOT LIKE 'sout-u-%' AND name NOT LIKE 'fanout-u-%' LIMIT 1;")
+			tmplJSON, _ := s.sqliteJSONQuery("SELECT config FROM clients WHERE enable=1 AND name NOT LIKE 'soutu%' AND name NOT LIKE 'sout-u-%' AND name NOT LIKE 'fanoutu%' AND name NOT LIKE 'fanout-u-%' LIMIT 1;")
 			var tmplClients []suiDBClient
 			_ = json.Unmarshal(tmplJSON, &tmplClients)
 			if len(tmplClients) > 0 {
@@ -869,7 +875,7 @@ func (s *SUI) syncSUIDatabaseLinks(publicHost string) {
 	_ = json.Unmarshal(clientRowsJSON, &clients)
 
 	for _, client := range clients {
-		isSplitClient := strings.HasPrefix(client.Name, "sout-u-") || strings.HasPrefix(client.Name, "fanout-u-")
+		isSplitClient := strings.HasPrefix(client.Name, "soutu") || strings.HasPrefix(client.Name, "sout-u-") || strings.HasPrefix(client.Name, "fanoutu") || strings.HasPrefix(client.Name, "fanout-u-")
 		if !isSplitClient {
 			// 严格保留原生主客户端由 s-ui 自身生成的权威 links，不进行任何重写覆盖
 			continue
@@ -948,7 +954,7 @@ func (s *SUI) DeleteBranchesByHost(host string, tunnels []*Tunnel) error {
 		}
 	}
 	// 双重保障：清理 SQLite 中以该 hostTag 结尾的所有 sout/fanout client
-	_ = s.sqliteQuery(fmt.Sprintf("DELETE FROM clients WHERE (name LIKE 'sout-u-%%-%s' OR name LIKE 'fanout-u-%%-%s');", oldHostTag, oldHostTag))
+	_ = s.sqliteQuery(fmt.Sprintf("DELETE FROM clients WHERE (name LIKE 'soutu%%' OR name LIKE 'sout-u-%%' OR name LIKE 'fanoutu%%' OR name LIKE 'fanout-u-%%') AND (name LIKE '%%%s');", oldHostTag))
 	s.syncSUIDatabaseLinks(hostPublicIP())
 	invalidateInbounds()
 	return nil
@@ -961,7 +967,7 @@ func (s *SUI) ResyncOutbound(t *Tunnel, tunnels []*Tunnel) error {
 // DeleteInbounds 删除分流分支。若传入 Client ID，删除该 Client 并移除路由规则；若删光分流，恢复纯净直连。
 func (s *SUI) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
 	for _, id := range ids {
-		clientName := s.sqliteQuery(fmt.Sprintf("SELECT name FROM clients WHERE id = %d AND (name LIKE 'sout-u-%%' OR name LIKE 'fanout-u-%%');", id))
+		clientName := s.sqliteQuery(fmt.Sprintf("SELECT name FROM clients WHERE id = %d AND (name LIKE 'soutu%%' OR name LIKE 'sout-u-%%' OR name LIKE 'fanoutu%%' OR name LIKE 'fanout-u-%%');", id))
 		if clientName != "" {
 			_ = s.sqliteQuery(fmt.Sprintf("DELETE FROM clients WHERE id = %d;", id))
 			_ = s.BindUserRoute(clientName, "", tunnels)
@@ -1522,7 +1528,7 @@ func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, 
 		}
 	}
 
-	isSplitClient := strings.HasPrefix(client.Name, "sout-u-") || strings.HasPrefix(client.Name, "fanout-u-")
+	isSplitClient := strings.HasPrefix(client.Name, "soutu") || strings.HasPrefix(client.Name, "sout-u-") || strings.HasPrefix(client.Name, "fanoutu") || strings.HasPrefix(client.Name, "fanout-u-")
 
 	// 2. 如果不是 split client，且自身 links 字段包含有效链接，直接取用 s-ui 权威生成的 links
 	if !isSplitClient && len(client.Links) > 0 {
@@ -1538,9 +1544,9 @@ func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, 
 
 	// 3. 如果是 split client 或者当前 client 尚未生成 links，寻找该入站的主原生 client 作为模版派生
 	if len(matchedURIs) == 0 {
-		query := fmt.Sprintf("SELECT id, name, remark, enable, inbounds, links, config FROM clients WHERE id != %d AND (name NOT LIKE 'sout-u-%%' AND name NOT LIKE 'fanout-u-%%') AND links IS NOT NULL AND links != '' LIMIT 1;", client.ID)
+		query := fmt.Sprintf("SELECT id, name, remark, enable, inbounds, links, config FROM clients WHERE id != %d AND (name NOT LIKE 'soutu%%' AND name NOT LIKE 'sout-u-%%' AND name NOT LIKE 'fanoutu%%' AND name NOT LIKE 'fanout-u-%%') AND links IS NOT NULL AND links != '' LIMIT 1;", client.ID)
 		if client.ID == 0 {
-			query = "SELECT id, name, remark, enable, inbounds, links, config FROM clients WHERE (name NOT LIKE 'sout-u-%%' AND name NOT LIKE 'fanout-u-%%') AND links IS NOT NULL AND links != '' LIMIT 1;"
+			query = "SELECT id, name, remark, enable, inbounds, links, config FROM clients WHERE (name NOT LIKE 'soutu%%' AND name NOT LIKE 'sout-u-%%' AND name NOT LIKE 'fanoutu%%' AND name NOT LIKE 'fanout-u-%%') AND links IS NOT NULL AND links != '' LIMIT 1;"
 		}
 		templateJSON, _ := s.sqliteJSONQuery(query)
 		var templates []suiDBClient

@@ -176,7 +176,7 @@ func (o *soutDynamicOutbound) endpointFor(ctx context.Context, destination M.Soc
 }
 
 func isEmbeddedEndpointInbound(tag string) bool {
-	return strings.HasPrefix(tag, "sout-openvpn-") || strings.HasPrefix(tag, "fanout-openvpn-")
+	return strings.HasPrefix(tag, "soutopenvpn") || strings.HasPrefix(tag, "sout-openvpn-") || strings.HasPrefix(tag, "fanoutopenvpn") || strings.HasPrefix(tag, "fanout-openvpn-")
 }
 
 func (e *embeddedEngine) close() error {
@@ -213,8 +213,8 @@ func (e *embeddedEngine) addTunnel(tunnel *Tunnel) error {
 		return fmt.Errorf("内嵌 sing-box 已关闭")
 	}
 
-	endpointTag := fmt.Sprintf("sout-openvpn-%d", tunnel.Slot)
-	socksTag := fmt.Sprintf("sout-socks-%d", tunnel.Slot)
+	endpointTag := fmt.Sprintf("soutopenvpn%d", tunnel.Slot)
+	socksTag := fmt.Sprintf("soutsocks%d", tunnel.Slot)
 
 	if previous, exists := e.tunnels[tunnel.Slot]; exists {
 		nextRoutes := cloneEmbeddedRoutes(e.routes)
