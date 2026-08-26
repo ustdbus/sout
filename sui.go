@@ -828,42 +828,52 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 			newUUID := generateUUID()
 			newPass := generateRandomToken(10)
 
-			// 优先读取原生主客户端模版，派生出 100% 协议兼容的 clientCfgObj
+			// 精准深拷贝原生主客户端模版的 config，仅替换实际存在的协议字段
 			clientCfgObj := make(map[string]map[string]any)
-			tmplJSON, _ := s.sqliteJSONQuery("SELECT config FROM clients WHERE enable=1 AND name NOT LIKE 'soutu%' AND name NOT LIKE 'sout-u-%' AND name NOT LIKE 'fanoutu%' AND name NOT LIKE 'fanout-u-%' LIMIT 1;")
+			tmplJSON, _ := s.sqliteJSONQuery(fmt.Sprintf("SELECT config FROM clients WHERE enable=1 AND %d IN (SELECT json_each.value FROM json_each(clients.inbounds)) LIMIT 1;", templateID))
+			if string(tmplJSON) == "[]" || len(tmplJSON) == 0 {
+				tmplJSON, _ = s.sqliteJSONQuery("SELECT config FROM clients WHERE enable=1 AND name NOT LIKE 'soutu%' AND name NOT LIKE 'sout-u-%' AND name NOT LIKE 'fanoutu%' AND name NOT LIKE 'fanout-u-%' LIMIT 1;")
+			}
 			var tmplClients []suiDBClient
 			_ = json.Unmarshal(tmplJSON, &tmplClients)
 			if len(tmplClients) > 0 {
 				clientCfgObj = parseSUIClientConfig(tmplClients[0].Config)
 			}
-			if clientCfgObj == nil {
-				clientCfgObj = make(map[string]map[string]any)
-			}
-
-			// 覆盖并补充全部 14 种常见协议，确保 s-ui 无论面对何种入站协议都能安全解析
-			setProtoVal := func(proto string, vals map[string]any) {
-				if clientCfgObj[proto] == nil {
-					clientCfgObj[proto] = make(map[string]any)
+			if len(clientCfgObj) == 0 {
+				clientCfgObj = map[string]map[string]any{
+					"vless": {
+						"name": clientName,
+						"uuid": newUUID,
+						"flow": baseFlow,
+					},
 				}
-				for k, v := range vals {
-					clientCfgObj[proto][k] = v
+			} else {
+				// 仅遍历模板中真实存在的协议并替换凭据，绝不塞入未使用的冗余协议
+				for proto, vals := range clientCfgObj {
+					if vals == nil {
+						vals = make(map[string]any)
+					}
+					if _, hasName := vals["name"]; hasName {
+						vals["name"] = clientName
+					}
+					if _, hasUser := vals["username"]; hasUser {
+						vals["username"] = clientName
+					}
+					if _, hasUUID := vals["uuid"]; hasUUID {
+						vals["uuid"] = newUUID
+					}
+					if _, hasPass := vals["password"]; hasPass {
+						vals["password"] = newPass
+					}
+					if _, hasAuth := vals["auth_str"]; hasAuth {
+						vals["auth_str"] = newPass
+					}
+					if proto == "vless" {
+						vals["flow"] = baseFlow
+					}
+					clientCfgObj[proto] = vals
 				}
 			}
-
-			setProtoVal("vless", map[string]any{"name": clientName, "uuid": newUUID, "flow": baseFlow})
-			setProtoVal("tuic", map[string]any{"name": clientName, "uuid": newUUID, "password": newPass})
-			setProtoVal("vmess", map[string]any{"name": clientName, "uuid": newUUID, "alterId": 0})
-			setProtoVal("trojan", map[string]any{"name": clientName, "password": newPass})
-			setProtoVal("shadowsocks", map[string]any{"name": clientName, "password": newPass})
-			setProtoVal("hysteria2", map[string]any{"name": clientName, "password": newPass})
-			setProtoVal("hysteria", map[string]any{"name": clientName, "auth_str": newPass})
-			setProtoVal("socks", map[string]any{"username": clientName, "password": newPass})
-			setProtoVal("http", map[string]any{"username": clientName, "password": newPass})
-			setProtoVal("mixed", map[string]any{"username": clientName, "password": newPass})
-			setProtoVal("naive", map[string]any{"username": clientName, "password": newPass})
-			setProtoVal("anytls", map[string]any{"name": clientName, "password": newPass})
-			setProtoVal("shadowtls", map[string]any{"name": clientName, "password": newPass})
-			setProtoVal("shadowsocks16", map[string]any{"name": clientName, "password": newPass})
 
 			cfgBytes, _ := json.Marshal(clientCfgObj)
 			inboundsJSON := fmt.Sprintf("[%d]", templateID)
