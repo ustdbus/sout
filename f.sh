@@ -16,7 +16,7 @@ R='\033[31m'; G='\033[32m'; Y='\033[33m'; B='\033[34m'; D='\033[90m'; N='\033[0m
 
 need_root() {
   if [[ $EUID -ne 0 ]]; then
-    echo -e "${R}请使用 root 权限运行此脚本 (sudo f)${N}"
+    echo -e "${R}请使用 root 权限运行此脚本 (sudo sout)${N}"
     exit 1
   fi
 }
@@ -565,10 +565,9 @@ sys.exit(0 if latest > cur else 1)
   fi
 
   if [[ -f "$tmp_dir/f.sh" ]]; then
-    cp -f "$tmp_dir/f.sh" /usr/local/bin/f
-    chmod +x /usr/local/bin/f
-    ln -sf /usr/local/bin/f /usr/local/bin/sout 2>/dev/null || true
-    ln -sf /usr/local/bin/f /usr/local/bin/sout-cli 2>/dev/null || true
+    cp -f "$tmp_dir/f.sh" /usr/local/bin/sout
+    chmod +x /usr/local/bin/sout
+    rm -f /usr/local/bin/f /usr/local/bin/sout-cli 2>/dev/null || true
   fi
 
   svc_restart
@@ -640,6 +639,6 @@ case "${1:-}" in
   "")        menu ;;
   *)
     echo "用法: sout [start|stop|restart|status|log|info|list|listen|url|update|uninstall]"
-    echo "直接在终端输入 sout 或 f 即可进入交互控制菜单"
+    echo "直接在终端输入 sout 即可进入交互控制菜单"
     ;;
 esac

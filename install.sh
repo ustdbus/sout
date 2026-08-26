@@ -86,11 +86,17 @@ ensure_sui() {
       echo "  [+] 正在自动检测当前服务器系统架构并安装官方 s-ui 面板..."
       echo "      (官方仓库: https://github.com/alireza0/s-ui)"
       echo
-      bash <(curl -Ls https://raw.githubusercontent.com/alireza0/s-ui/master/install.sh) || true
+      if [[ -c /dev/tty ]]; then
+        bash <(curl -Ls https://raw.githubusercontent.com/alireza0/s-ui/master/install.sh) < /dev/tty || true
+      else
+        bash <(curl -Ls https://raw.githubusercontent.com/alireza0/s-ui/master/install.sh) || true
+      fi
       
       if check_sui; then
         echo
+        echo "================================================================"
         echo "  [✓] s-ui 面板安装完成并就绪！继续进行 sout 插件安装..."
+        echo "================================================================"
         echo
       else
         echo
@@ -145,10 +151,24 @@ svc_install() {
     systemctl disable fanout 2>/dev/null || true
     rm -f /etc/systemd/system/fanout.service 2>/dev/null || true
 
-    local svc_file="sout.service"
-    [[ ! -f "$svc_file" && -f "fanout.service" ]] && svc_file="fanout.service"
-    sed "s#-web [0-9]* ##; s#-dir /var/lib/[a-zA-Z0-9_-]*#-dir ${WORK_DIR}#; s#/usr/local/bin/[a-zA-Z0-9_-]*#${BIN}#" "$svc_file" \
-      > /etc/systemd/system/sout.service
+    cat > /etc/systemd/system/sout.service <<SVCEOF
+[Unit]
+Description=sout - s-ui 动态家宽出口插件 (VPN Gate)
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=${BIN} -dir ${WORK_DIR}
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
     ln -sf /etc/systemd/system/sout.service /etc/systemd/system/fanout.service 2>/dev/null || true
     systemctl daemon-reload
   else
@@ -285,10 +305,9 @@ else
     install -m 755 "$TMP/fanout" "$BIN"
   fi
   ln -sf "$BIN" /usr/local/bin/fanout 2>/dev/null || true
-  [[ -f "$TMP/sout.service" ]] && cp "$TMP/sout.service" .
-  [[ -f "$TMP/fanout.service" ]] && cp "$TMP/fanout.service" .
   if [[ -f "$TMP/f.sh" ]]; then
-    install -m 755 "$TMP/f.sh" /usr/local/bin/f
+    install -m 755 "$TMP/f.sh" /usr/local/bin/sout
+    rm -f /usr/local/bin/f /usr/local/bin/sout-cli 2>/dev/null || true
   fi
   rm -rf "$TMP"
 fi
@@ -321,11 +340,9 @@ fi
 
 echo "[5/6] 部署服务与终端管理命令..."
 if [[ -f f.sh ]]; then
-  install -m 755 f.sh /usr/local/bin/f
-elif [[ -n "${TMP:-}" && -f "${TMP}/f.sh" ]]; then
-  install -m 755 "${TMP}/f.sh" /usr/local/bin/f
+  install -m 755 f.sh /usr/local/bin/sout
 fi
-ln -sf /usr/local/bin/f /usr/local/bin/sout 2>/dev/null || true
+rm -f /usr/local/bin/f /usr/local/bin/sout-cli 2>/dev/null || true
 mkdir -p "$WORK_DIR"
 chmod 700 "$WORK_DIR"
 seed_settings
@@ -357,7 +374,7 @@ echo "================================================================"
 echo "  [sout 动态家宽出口插件]"
 echo "  管理面板:  http://${IP}:${WEB_PORT}/${BP}/"
 echo "  访问口令:  $(cat "${WORK_DIR}/password" 2>/dev/null || echo "见 ${WORK_DIR}/password")"
-echo "  终端管理:  在终端输入 sout 或 f 呼出插件管理菜单"
+echo "  终端管理:  在终端输入 sout 呼出插件管理菜单"
 echo
 if check_sui; then
   echo "  [s-ui (Sing-Box) 节点面板]"
