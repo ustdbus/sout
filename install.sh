@@ -322,16 +322,14 @@ else
 fi
 
 echo "[4/6] 配置网络转发与防火墙规则..."
-sysctl -qw net.ipv4.ip_forward=1
-grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf 2>/dev/null \
-  || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
-if ! iptables -C FORWARD -s 10.99.0.0/16 -j ACCEPT 2>/dev/null; then
-  iptables -I FORWARD 1 -s 10.99.0.0/16 -j ACCEPT
+sysctl -qw net.ipv4.ip_forward=1 2>/dev/null || true
+(grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf 2>/dev/null \
+  || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf) 2>/dev/null || true
+if command -v iptables >/dev/null 2>&1; then
+  iptables -C FORWARD -s 10.99.0.0/16 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -s 10.99.0.0/16 -j ACCEPT 2>/dev/null || true
+  iptables -C FORWARD -d 10.99.0.0/16 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -d 10.99.0.0/16 -j ACCEPT 2>/dev/null || true
+  command -v netfilter-persistent >/dev/null 2>&1 && netfilter-persistent save >/dev/null 2>&1 || true
 fi
-if ! iptables -C FORWARD -d 10.99.0.0/16 -j ACCEPT 2>/dev/null; then
-  iptables -I FORWARD 1 -d 10.99.0.0/16 -j ACCEPT
-fi
-command -v netfilter-persistent >/dev/null && netfilter-persistent save >/dev/null 2>&1 || true
 
 # 解除 Ubuntu/Debian AppArmor 对 openvpn 访问工作目录配置的限制
 if command -v apparmor_parser >/dev/null 2>&1 && [[ -f /etc/apparmor.d/openvpn ]]; then
