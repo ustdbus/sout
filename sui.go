@@ -543,6 +543,15 @@ func (s *SUI) BindUserRoute(userName string, hostname string, tunnels []*Tunnel)
 	}
 	rules, _ := route["rules"].([]any)
 
+	validOutboundTags := make(map[string]bool)
+	validOutboundTags["direct"] = true
+	validOutboundTags["block"] = true
+	for _, t := range tunnels {
+		if t.Node.HostName != "" {
+			validOutboundTags[suiTagPrefix+sanitizeTag(t.Node.HostName)] = true
+		}
+	}
+
 	newRules := make([]any, 0, len(rules)+1)
 	for _, r := range rules {
 		ruleMap, ok := r.(map[string]any)
@@ -551,7 +560,16 @@ func (s *SUI) BindUserRoute(userName string, hostname string, tunnels []*Tunnel)
 			continue
 		}
 		outbound, _ := ruleMap["outbound"].(string)
+		action, _ := ruleMap["action"].(string)
+		if action != "route" {
+			newRules = append(newRules, r)
+			continue
+		}
 		if isSUIOutboundTag(outbound) {
+			// 如果该出站已经在当前活跃隧道中失效/不存在，直接丢弃该悬空规则
+			if len(validOutboundTags) > 2 && !validOutboundTags[outbound] && outbound != (suiTagPrefix+sanitizeTag(hostname)) {
+				continue
+			}
 			users := toSUITagSlice(ruleMap["auth_user"])
 			if len(users) == 0 {
 				users = toSUITagSlice(ruleMap["user"])
@@ -767,7 +785,7 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		listenPort = int(pVal)
 	}
 
-	baseFlow := "xtls-rprx-vision"
+	baseFlow := ""
 	baseClientCfgJSON := s.sqliteQuery(fmt.Sprintf(
 		"SELECT config FROM clients WHERE enable=1 AND %d IN (SELECT json_each.value FROM json_each(clients.inbounds)) LIMIT 1;",
 		templateID,
@@ -776,7 +794,7 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		var baseCfg map[string]map[string]any
 		if err := json.Unmarshal([]byte(baseClientCfgJSON), &baseCfg); err == nil {
 			if vlessMap, ok := baseCfg["vless"]; ok {
-				if f, ok := vlessMap["flow"].(string); ok && f != "" {
+				if f, ok := vlessMap["flow"].(string); ok {
 					baseFlow = f
 				}
 			}
