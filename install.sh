@@ -486,44 +486,31 @@ else
   if [[ -f "$sui_db" ]]; then
     if command -v sqlite3 >/dev/null 2>&1; then
       sui_u=$(sqlite3 "$sui_db" "SELECT username FROM users LIMIT 1;" 2>/dev/null || echo "admin")
-      local_db_p=$(sqlite3 "$sui_db" "SELECT password FROM users LIMIT 1;" 2>/dev/null || true)
       local_p_val=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPort' LIMIT 1;" 2>/dev/null || true)
       [[ -n "$local_p_val" ]] && sui_port="$local_p_val"
       local_path_val=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPath' LIMIT 1;" 2>/dev/null || true)
       [[ -n "$local_path_val" ]] && sui_path="$local_path_val"
-      if [[ "$local_db_p" =~ ^\$2[ayb]\$ ]]; then
-        sui_p=$(cat "${WORK_DIR}/sui_pass" 2>/dev/null || echo "(已加密，如遗忘可通过 s-ui 命令行重置)")
-      else
-        sui_p="${local_db_p:-见 s-ui 提示}"
-      fi
-    elif command -v python3 >/dev/null 2>&1; then
-      python_out=$(python3 -c "
-import sqlite3
-con = sqlite3.connect('$sui_db')
-cur = con.cursor()
-u = cur.execute('SELECT username, password FROM users LIMIT 1').fetchone()
-port = '8443'
-path = '/app/'
-for r in cur.execute('SELECT key, value FROM settings WHERE key in ("webPort", "webPath")').fetchall():
-    if r[0] == 'webPort': port = r[1]
-    if r[0] == 'webPath': path = r[1]
-print(f'{u[0] if u else "admin"}|{u[1] if u else ""}|{port}|{path}')
-con.close()
-" 2>/dev/null || true)
-      if [[ -n "$python_out" ]]; then
-        sui_u=$(echo "$python_out" | cut -d'|' -f1)
-        sui_p_raw=$(echo "$python_out" | cut -d'|' -f2)
-        sui_port=$(echo "$python_out" | cut -d'|' -f3)
-        sui_path=$(echo "$python_out" | cut -d'|' -f4)
-        if [[ "$sui_p_raw" =~ ^\$2[ayb]\$ ]]; then
-          sui_p=$(cat "${WORK_DIR}/sui_pass" 2>/dev/null || echo "(已加密，如遗忘可通过 s-ui 命令行重置)")
-        else
-          sui_p="${sui_p_raw:-见 s-ui 提示}"
-        fi
-      fi
     fi
   fi
-  [[ -z "$sui_p" ]] && sui_p=$(cat "${WORK_DIR}/sui_pass" 2>/dev/null || echo "(见 s-ui 命令行)")
+  [[ -z "$sui_u" ]] && sui_u="admin"
+
+  if [[ -f "${WORK_DIR}/sui_pass" ]]; then
+    sui_p=$(cat "${WORK_DIR}/sui_pass" 2>/dev/null || true)
+  fi
+
+  # 保证无论何时安装完成，都有确定的明文密码可以展示并登录
+  if [[ -z "$sui_p" && -x /usr/local/s-ui/sui ]]; then
+    sui_p=$(head -c 8 /dev/urandom | xxd -p | head -c 10)
+    echo "$sui_p" > "${WORK_DIR}/sui_pass"
+    chmod 600 "${WORK_DIR}/sui_pass"
+    echo "$sui_u" > "${WORK_DIR}/sui_user"
+    chmod 600 "${WORK_DIR}/sui_user"
+    /usr/local/s-ui/sui admin -username "$sui_u" -password "$sui_p" >/dev/null 2>&1 || true
+  fi
+  [[ -z "$sui_p" ]] && sui_p="(可通过 s-ui 命令重置)"
+
+  sui_path="/${sui_path#/}"
+  [[ "$sui_path" != */ ]] && sui_path="${sui_path}/"
 
   echo
   echo "================================================================"
@@ -537,7 +524,7 @@ con.close()
   if check_sui; then
     echo "  [s-ui (Sing-Box) 节点面板]"
     echo "  s-ui 面板:  http://${IP}:${sui_port}${sui_path}"
-    echo "  s-ui 用户名:  ${sui_u:-admin}"
+    echo "  s-ui 用户名:  ${sui_u}"
     echo "  s-ui 密码:    ${sui_p}"
     echo "  s-ui 唤起命令:  s-ui"
   fi

@@ -21,6 +21,13 @@ need_root() {
   fi
 }
 
+check_sui() {
+  if [[ -f /usr/local/s-ui/db/s-ui.db ]] || [[ -f /usr/local/s-ui/s-ui ]] || command -v sui >/dev/null 2>&1 || [[ -f /usr/local/s-ui/sui ]]; then
+    return 0
+  fi
+  return 1
+}
+
 svc_status()     { systemctl is-active "$UNIT" 2>/dev/null || echo inactive; }
 svc_is_enabled() { systemctl is-enabled "$UNIT" 2>/dev/null | grep -q 'enabled'; }
 svc_start()      { systemctl start "$UNIT"; }
@@ -126,6 +133,38 @@ pause() {
 
 CADDY_META="${WORK_DIR}/caddy_meta.json"
 
+get_sui_creds() {
+  local sui_db="/usr/local/s-ui/db/s-ui.db"
+  local u="admin"
+  local p=""
+  
+  if [[ -f "$sui_db" ]]; then
+    if command -v sqlite3 >/dev/null 2>&1; then
+      u=$(sqlite3 "$sui_db" "SELECT username FROM users LIMIT 1;" 2>/dev/null || echo "admin")
+    elif command -v python3 >/dev/null 2>&1; then
+      u=$(python3 -c "import sqlite3; con=sqlite3.connect('$sui_db'); cur=con.cursor(); print(cur.execute('SELECT username FROM users LIMIT 1').fetchone()[0]); con.close()" 2>/dev/null || echo "admin")
+    fi
+  fi
+  [[ -z "$u" ]] && u="admin"
+
+  if [[ -f "${WORK_DIR}/sui_pass" ]]; then
+    p=$(cat "${WORK_DIR}/sui_pass" 2>/dev/null || true)
+  fi
+
+  # 如果没有保存明文密码，且存在 sui 命令行，则自动生成并同步一次密码
+  if [[ -z "$p" && -x /usr/local/s-ui/sui ]]; then
+    p=$(head -c 8 /dev/urandom | xxd -p | head -c 10)
+    echo "$p" > "${WORK_DIR}/sui_pass"
+    chmod 600 "${WORK_DIR}/sui_pass"
+    echo "$u" > "${WORK_DIR}/sui_user"
+    chmod 600 "${WORK_DIR}/sui_user"
+    /usr/local/s-ui/sui admin -username "$u" -password "$p" >/dev/null 2>&1 || true
+  fi
+
+  [[ -z "$p" ]] && p="(未记录密码，可通过 s-ui 命令重置)"
+  echo "${u}|${p}"
+}
+
 show_info() {
   local st la port bp pw pip purl full_url ssl_en ssl_dom scheme c_en c_dom c_sout_p c_sui_p c_sub_p
   st=$(svc_status)
@@ -173,61 +212,33 @@ show_info() {
     echo -e "  面板对接:    ${R}未检测到 s-ui 面板${N}"
   fi
 
-  local sui_u="" sui_p=""
-  if [[ -f "$CADDY_META" ]]; then
-    sui_u=$(grep -oE '"sui_user"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
-    sui_p=$(grep -oE '"sui_pass"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
-  fi
-  if [[ -z "$sui_p" && -f "${WORK_DIR}/sui_pass" ]]; then
-    sui_p=$(cat "${WORK_DIR}/sui_pass" 2>/dev/null || true)
-  fi
-  if [[ -z "$sui_u" && -f "${WORK_DIR}/sui_user" ]]; then
-    sui_u=$(cat "${WORK_DIR}/sui_user" 2>/dev/null || true)
-  fi
-  if [[ -z "$sui_u" && -f /usr/local/s-ui/db/s-ui.db ]]; then
-    if command -v sqlite3 >/dev/null 2>&1; then
-      sui_u=$(sqlite3 /usr/local/s-ui/db/s-ui.db "SELECT username FROM users LIMIT 1;" 2>/dev/null)
-      local db_p=$(sqlite3 /usr/local/s-ui/db/s-ui.db "SELECT password FROM users LIMIT 1;" 2>/dev/null)
-      [[ -z "$sui_p" ]] && sui_p="$db_p"
-    elif command -v python3 >/dev/null 2>&1; then
-      sui_u=$(python3 -c "import sqlite3; con=sqlite3.connect('/usr/local/s-ui/db/s-ui.db'); print(con.cursor().execute('SELECT username FROM users LIMIT 1').fetchone()[0])" 2>/dev/null)
-      local db_p=$(python3 -c "import sqlite3; con=sqlite3.connect('/usr/local/s-ui/db/s-ui.db'); print(con.cursor().execute('SELECT password FROM users LIMIT 1').fetchone()[0])" 2>/dev/null)
-      [[ -z "$sui_p" ]] && sui_p="$db_p"
-    fi
-  fi
-  [[ -z "$sui_u" ]] && sui_u="admin"
-  if [[ "$sui_p" =~ ^\$2[ayb]\$ ]]; then
-    if [[ -f "${WORK_DIR}/sui_pass" ]]; then
-      sui_p=$(cat "${WORK_DIR}/sui_pass" 2>/dev/null || true)
-    elif [[ -f "$CADDY_META" ]]; then
-      sui_p=$(grep -oE '"sui_pass"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
-    fi
-  fi
+  local sui_creds sui_u sui_p
+  sui_creds=$(get_sui_creds || echo "admin|(可通过 s-ui 命令行重置)")
+  sui_u=$(echo "$sui_creds" | cut -d'|' -f1)
+  sui_p=$(echo "$sui_creds" | cut -d'|' -f2)
 
   if [[ "$c_en" == "true" ]]; then
-    c_dom=$(grep -oE '"domain"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
-    c_sout_p=$(grep -oE '"sout_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
-    c_sui_p=$(grep -oE '"sui_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
-    c_sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+    c_dom=$(grep -oE '"domain"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4 || echo "")
+    c_sout_p=$(grep -oE '"sout_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4 || echo "sout")
+    c_sui_p=$(grep -oE '"sui_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4 || echo "sui")
+    c_sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4 || echo "sub")
     local c_tun_p
-    c_tun_p=$(grep -oE '"tunnel_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
+    c_tun_p=$(grep -oE '"tunnel_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ' || echo "8080")
     [[ -z "$c_tun_p" ]] && c_tun_p="8080"
 
     local cf_st="未运行"
-    if [[ $(systemctl is-active cloudflared 2>/dev/null) == "active" ]]; then
+    if [[ $(systemctl is-active cloudflared 2>/dev/null || echo "") == "active" ]]; then
       cf_st="${G}运行中 (active)${N}"
     else
       cf_st="${R}未运行${N}"
     fi
 
     echo -e "  反代模式:    ${G}Cloudflare 隧道 4合1 模式 (已开启)${N}"
-    echo -e "  隧道服务:    ${cf_st} (本地回源端口: 127.0.0.1:${c_tun_p})"
+    echo -e "  隧道服务:    ${cf_st} (本地回源: 127.0.0.1:${c_tun_p})"
     echo -e "  管理面板:    ${B}https://${c_dom}/${c_sout_p}/${N}"
     echo -e "  s-ui 面板:   ${B}https://${c_dom}/${c_sui_p}/${N}"
-    if [[ -n "$sui_u" ]]; then
-      echo -e "  s-ui 用户名: ${Y}${sui_u}${N}"
-      echo -e "  s-ui 密  码: ${Y}${sui_p}${N}"
-    fi
+    echo -e "  s-ui 用户名: ${Y}${sui_u}${N}"
+    echo -e "  s-ui 密  码: ${Y}${sui_p}${N}"
     echo -e "  订阅链接:    ${B}https://${c_dom}/${c_sub_p}/${N}"
   else
     if [[ "$ssl_en" == "true" ]]; then
@@ -253,6 +264,25 @@ show_info() {
       else
         echo -e "  管理面板:    ${B}${scheme}://${pip}:${port}${bp}${N}"
       fi
+    fi
+
+    # 独立端口模式下展示 s-ui 面板地址与账号密码
+    local sui_db="/usr/local/s-ui/db/s-ui.db"
+    if [[ -f "$sui_db" ]]; then
+      local sui_port="8443"
+      local sui_path="/app/"
+      if command -v sqlite3 >/dev/null 2>&1; then
+        local p_val path_val
+        p_val=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPort' LIMIT 1;" 2>/dev/null || true)
+        path_val=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPath' LIMIT 1;" 2>/dev/null || true)
+        [[ -n "$p_val" ]] && sui_port="$p_val"
+        [[ -n "$path_val" ]] && sui_path="$path_val"
+      fi
+      sui_path="/${sui_path#/}"
+      [[ "$sui_path" != */ ]] && sui_path="${sui_path}/"
+      echo -e "  s-ui 面板:   ${B}http://${pip}:${sui_port}${sui_path}${N}"
+      echo -e "  s-ui 用户名: ${Y}${sui_u}${N}"
+      echo -e "  s-ui 密  码: ${Y}${sui_p}${N}"
     fi
   fi
   echo -e "  访问口令:    ${Y}${pw}${N}"
