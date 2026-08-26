@@ -1103,6 +1103,12 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 		Server     string `json:"server"`
 		ServerPort int    `json:"server_port"`
 		Remark     string `json:"remark"`
+		TLS        struct {
+			Enabled    bool   `json:"enabled"`
+			ServerName string `json:"server_name"`
+			Insecure   bool   `json:"insecure"`
+			DisableSNI bool   `json:"disable_sni"`
+		} `json:"tls"`
 	}
 	var addrs []AddrItem
 	if len(addrsBytes) > 0 {
@@ -1190,19 +1196,28 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 			if out.Transport.ServiceName != "" {
 				v.Set("serviceName", out.Transport.ServiceName)
 			}
-			if out.TLS.Enabled {
+			tlsEnabled := out.TLS.Enabled || addr.TLS.Enabled || port == 443
+			if tlsEnabled {
+				sniToUse := addr.TLS.ServerName
+				if sniToUse == "" {
+					sniToUse = out.TLS.ServerName
+				}
+				if sniToUse == "" {
+					sniToUse = publicHost
+				}
+
 				if out.TLS.Reality.Enabled {
 					v.Set("security", "reality")
 					v.Set("pbk", out.TLS.Reality.PublicKey)
 					v.Set("sid", out.TLS.Reality.ShortID)
 				} else {
 					v.Set("security", "tls")
-					if out.TLS.Insecure {
+					if out.TLS.Insecure || addr.TLS.Insecure {
 						v.Set("allowInsecure", "1")
 					}
 				}
-				if out.TLS.ServerName != "" {
-					v.Set("sni", out.TLS.ServerName)
+				if sniToUse != "" && !addr.TLS.DisableSNI {
+					v.Set("sni", sniToUse)
 				}
 				if out.TLS.UTLS.Fingerprint != "" {
 					v.Set("fp", out.TLS.UTLS.Fingerprint)

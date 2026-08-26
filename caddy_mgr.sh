@@ -368,7 +368,16 @@ for inb_id, inb_tag, inb_opts, inb_addrs in cur.fetchall():
 import uuid
 node_tag = 'vless-ws-cdn'
 client_uuid = str(uuid.uuid4())
-addrs_blob = json.dumps([{'server': domain, 'server_port': 443}]).encode('utf-8')
+addrs_blob = json.dumps([{
+    'server': domain,
+    'server_port': 443,
+    'tls': {
+        'enabled': True,
+        'server_name': domain,
+        'insecure': False,
+        'disable_sni': False
+    }
+}]).encode('utf-8')
 options_dict = {
     'listen': '127.0.0.1',
     'listen_port': node_port,
