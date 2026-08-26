@@ -1068,6 +1068,7 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 			Type                string            `json:"type"`
 			Path                string            `json:"path"`
 			Host                string            `json:"host"`
+			Headers             map[string]string `json:"headers"`
 			ServiceName         string            `json:"service_name"`
 			EarlyDataHeaderName string            `json:"early_data_header_name"`
 		} `json:"transport"`
