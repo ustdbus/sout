@@ -54,6 +54,8 @@ cleanup_sout() {
   echo "      sout 已清理完毕。"
 }
 
+SUI_INSTALLED_BY_US=0
+
 ensure_sui() {
   if check_sui; then
     return 0
@@ -93,6 +95,7 @@ ensure_sui() {
       fi
       
       if check_sui; then
+        SUI_INSTALLED_BY_US=1
         echo
         echo "================================================================"
         echo "  [✓] s-ui 面板安装完成并就绪！继续进行 sout 插件安装..."
@@ -346,24 +349,26 @@ for _ in $(seq 1 10); do
   sleep 1
 done
 
-# 可选：询问用户是否立即配置 Caddy 4合1 反代
+# 可选：仅在 s-ui 是由本脚本全新安装时，才主动引导配置 Caddy 4合1 反代
 caddy_prompt=""
-echo
-echo "  💡 提示：如果是 NAT 机（共享IP/端口映射小鸡），建议使用 Caddy 一键反代（4合1共用443端口）"
-if [[ -t 0 ]]; then
-  read -rp "  是否立即配置 Caddy 4合1 反代（共用 443 端口 + 自动申请与托管证书）？[y/N]: " caddy_prompt
-else
-  if [[ -c /dev/tty ]]; then
-    read -rp "  是否立即配置 Caddy 4合1 反代（共用 443 端口 + 自动申请与托管证书）？[y/N]: " caddy_prompt < /dev/tty || caddy_prompt="n"
-  fi
-fi
-
-if [[ "${caddy_prompt,,}" == "y" || "${caddy_prompt,,}" == "yes" ]]; then
-  if [[ -x /usr/local/bin/sout ]]; then
+if [[ "$SUI_INSTALLED_BY_US" == "1" ]]; then
+  echo
+  echo "  💡 提示：如果是 NAT 机（共享IP/端口映射小鸡），建议使用 Caddy 一键反代（4合1共用443端口）"
+  if [[ -t 0 ]]; then
+    read -rp "  是否立即配置 Caddy 4合1 反代（共用 443 端口 + 自动申请与托管证书）？[y/N]: " caddy_prompt
+  else
     if [[ -c /dev/tty ]]; then
-      /usr/local/bin/sout caddy < /dev/tty || true
-    else
-      /usr/local/bin/sout caddy || true
+      read -rp "  是否立即配置 Caddy 4合1 反代（共用 443 端口 + 自动申请与托管证书）？[y/N]: " caddy_prompt < /dev/tty || caddy_prompt="n"
+    fi
+  fi
+
+  if [[ "${caddy_prompt,,}" == "y" || "${caddy_prompt,,}" == "yes" ]]; then
+    if [[ -x /usr/local/bin/sout ]]; then
+      if [[ -c /dev/tty ]]; then
+        /usr/local/bin/sout caddy < /dev/tty || true
+      else
+        /usr/local/bin/sout caddy || true
+      fi
     fi
   fi
 fi
