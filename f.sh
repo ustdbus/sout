@@ -173,6 +173,21 @@ show_info() {
     echo -e "  面板对接:    ${R}未检测到 s-ui 面板${N}"
   fi
 
+  local sui_u="" sui_p=""
+  if [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
+    if command -v sqlite3 >/dev/null 2>&1; then
+      sui_u=$(sqlite3 /usr/local/s-ui/db/s-ui.db "SELECT username FROM users LIMIT 1;" 2>/dev/null)
+      sui_p=$(sqlite3 /usr/local/s-ui/db/s-ui.db "SELECT password FROM users LIMIT 1;" 2>/dev/null)
+    elif command -v python3 >/dev/null 2>&1; then
+      sui_u=$(python3 -c "import sqlite3; con=sqlite3.connect('/usr/local/s-ui/db/s-ui.db'); print(con.cursor().execute('SELECT username FROM users LIMIT 1').fetchone()[0])" 2>/dev/null)
+      sui_p=$(python3 -c "import sqlite3; con=sqlite3.connect('/usr/local/s-ui/db/s-ui.db'); print(con.cursor().execute('SELECT password FROM users LIMIT 1').fetchone()[0])" 2>/dev/null)
+    fi
+  fi
+  if [[ -z "$sui_u" && "$c_en" == "true" ]]; then
+    sui_u=$(grep -oE '"sui_user"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+    sui_p=$(grep -oE '"sui_pass"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+  fi
+
   if [[ "$c_en" == "true" ]]; then
     c_dom=$(grep -oE '"domain"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
     c_sout_p=$(grep -oE '"sout_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
@@ -181,6 +196,10 @@ show_info() {
     echo -e "  反代模式:    ${G}Caddy 4合1 统一 443 (已开启)${N}"
     echo -e "  管理面板:    ${B}https://${c_dom}/${c_sout_p}/${N}"
     echo -e "  s-ui 面板:   ${B}https://${c_dom}/${c_sui_p}/${N}"
+    if [[ -n "$sui_u" ]]; then
+      echo -e "  s-ui 用户名: ${Y}${sui_u}${N}"
+      echo -e "  s-ui 密码:   ${Y}${sui_p}${N}"
+    fi
     echo -e "  订阅链接:    ${B}https://${c_dom}/${c_sub_p}/${N}"
   else
     if [[ "$ssl_en" == "true" ]]; then
@@ -209,6 +228,9 @@ show_info() {
     fi
   fi
   echo -e "  访问口令:    ${Y}${pw}${N}"
+  echo -e "  s-ui 唤起命令: ${C}s-ui${N}"
+  echo -e "  sout 唤起命令: ${C}sout${N}"
+  echo -e "  证书存放路径: ${D}/home/acme${N}"
   echo
 }
 

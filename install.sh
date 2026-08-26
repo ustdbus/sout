@@ -400,14 +400,15 @@ if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$
   echo "  [sout 动态家宽出口插件]"
   echo "  管理面板:  https://${c_dom}/${c_sout_p}/"
   echo "  访问口令:  $(cat "${WORK_DIR}/password" 2>/dev/null || echo "见 ${WORK_DIR}/password")"
-  echo "  终端管理:  在终端输入 sout 呼出插件管理菜单"
+  echo "  sout 唤起命令:  sout"
   echo
   echo "  [s-ui (Sing-Box) 节点面板]"
-  echo "  管理面板:  https://${c_dom}/${c_sui_p}/"
-  echo "  管理账号:  ${c_sui_u:-admin}"
-  echo "  管理密码:  ${c_sui_w:-见 caddy_meta.json}"
-  echo "  订阅地址:  https://${c_dom}/${c_sub_p}/"
-  echo "  终端管理:  在终端输入 s-ui 即可配置节点"
+  echo "  s-ui 面板:  https://${c_dom}/${c_sui_p}/"
+  echo "  s-ui 用户名:  ${c_sui_u:-admin}"
+  echo "  s-ui 密码:    ${c_sui_w:-见 caddy_meta.json}"
+  echo "  订阅链接:    https://${c_dom}/${c_sub_p}/"
+  echo "  s-ui 唤起命令:  s-ui"
+  echo "  证书存放路径:  /home/acme"
   echo "================================================================"
   echo
 else
@@ -418,12 +419,13 @@ else
   echo "  [sout 动态家宽出口插件]"
   echo "  管理面板:  http://${IP}:${WEB_PORT}/${BP}/"
   echo "  访问口令:  $(cat "${WORK_DIR}/password" 2>/dev/null || echo "见 ${WORK_DIR}/password")"
-  echo "  终端管理:  在终端输入 sout 呼出插件管理菜单"
+  echo "  sout 唤起命令:  sout"
   echo
   if check_sui; then
     echo "  [s-ui (Sing-Box) 节点面板]"
-    echo "  终端管理:  在终端输入 s-ui 即可配置 s-ui 账号/端口与节点设置"
+    echo "  s-ui 唤起命令:  s-ui"
   fi
+  echo "  证书存放路径:  /home/acme"
   echo "================================================================"
   echo
 fi

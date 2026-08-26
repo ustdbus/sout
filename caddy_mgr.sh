@@ -507,6 +507,10 @@ METAEOF
   echo
   echo -e "  [3] s-ui 客户端订阅地址:  ${B}https://${domain}/${sub_path}/${N}"
   echo -e "  [4] VLESS+WS+CDN 节点:    ${B}wss://${domain}:443/${ws_path}${N}"
+  echo -e "  ----------------------------------------------------------------"
+  echo -e "  s-ui 唤起命令:  ${C}s-ui${N}"
+  echo -e "  sout 唤起命令:  ${C}sout${N}"
+  echo -e "  证书存放路径:   ${D}/home/acme${N}"
   echo -e "${G}================================================================${N}"
   echo
 }

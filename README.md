@@ -80,13 +80,20 @@ sout
 ========================================
   sout - s-ui 动态家宽出口插件 (VPN Gate) 
 ========================================
-  程序版本:    v1.6.4
+  程序版本:    v1.9.1
   服务状态:    运行中 (active)
   开机自启:    已开启
   面板对接:    s-ui (Sing-Box) 已就绪
-  监听地址:    0.0.0.0 (所有公网网卡)
-  管理面板:    http://1.2.3.4:8899/xxxx/
-  访问口令:    xxxxxxxx
+  反代模式:    Caddy 4合1 统一 443 (已开启)
+  管理面板:    https://your-domain.com/sout8daa93/
+  s-ui 面板:   https://your-domain.com/sui20d93f/
+  s-ui 用户名: admin
+  s-ui 密码:   137a5be55e
+  订阅链接:    https://your-domain.com/subd31109/
+  访问口令:    2d47f81b1e384a0afd
+  s-ui 唤起命令: s-ui
+  sout 唤起命令: sout
+  证书存放路径: /home/acme
 ----------------------------------------
    1) 启动服务          2) 停止服务
    3) 重启服务          4) 查看运行日志
