@@ -604,7 +604,7 @@ func (m *Manager) Shutdown() {
 
 func prepareHost() error {
 	if err := exec.Command("sysctl", "-qw", "net.ipv4.ip_forward=1").Run(); err != nil {
-		return fmt.Errorf("设置 ip_forward 失败: %w", err)
+		log.Printf("提示: 尝试启用 net.ipv4.ip_forward 失败(%v)，若在容器/NAT小鸡中通常由宿主机接管，继续启动", err)
 	}
 	return nil
 }
