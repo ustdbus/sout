@@ -102,14 +102,17 @@ sync_caddy_certs() {
   mkdir -p "/home/acme/${domain}"
   local cert_found="" key_found=""
   
-  for _ in $(seq 1 15); do
-    cert_found=$(find /var/lib/caddy /root/.local/share/caddy -name "${domain}.crt" -o -name "fullchain.pem" 2>/dev/null | head -1)
-    key_found=$(find /var/lib/caddy /root/.local/share/caddy -name "${domain}.key" -o -name "privkey.pem" 2>/dev/null | head -1)
+  echo -n "      正在等待 Let's Encrypt 证书签发 "
+  for _ in $(seq 1 25); do
+    cert_found=$(find /var/lib/caddy /root/.local/share/caddy -type f \( -name "${domain}.crt" -o -name "fullchain.pem" -o -name "*.crt" \) 2>/dev/null | grep -v 'intermediate' | head -1)
+    key_found=$(find /var/lib/caddy /root/.local/share/caddy -type f \( -name "${domain}.key" -o -name "privkey.pem" -o -name "*.key" \) 2>/dev/null | head -1)
     if [[ -n "$cert_found" && -n "$key_found" ]]; then
       break
     fi
-    sleep 2
+    echo -n "."
+    sleep 1
   done
+  echo
 
   if [[ -n "$cert_found" && -n "$key_found" ]]; then
     cp -f "$cert_found" "/home/acme/${domain}/fullchain.pem"
@@ -119,7 +122,7 @@ sync_caddy_certs() {
     echo -e "  ${G}[✓] 证书已成功同步到 /home/acme/${domain}/${N}"
     return 0
   else
-    echo -e "  ${Y}[!] 证书后台生成中，已设置自动监听目录${N}"
+    echo -e "  ${Y}[!] 证书后台生成中，已配置自动监听${N}"
     return 1
   fi
 }
