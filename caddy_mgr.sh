@@ -102,10 +102,10 @@ sync_caddy_certs() {
   mkdir -p "/home/acme/${domain}"
   local cert_found="" key_found=""
   
-  echo -n "      正在等待 Let's Encrypt 证书签发 "
-  for _ in $(seq 1 25); do
+  echo -n "      正在等待 SSL / TLS 证书签发 "
+  for _ in $(seq 1 35); do
     cert_found=$(find /var/lib/caddy /root/.local/share/caddy -type f \( -name "${domain}.crt" -o -name "fullchain.pem" -o -name "*.crt" \) 2>/dev/null | grep -v 'intermediate' | head -1)
-    key_found=$(find /var/lib/caddy /root/.local/share/caddy -type f \( -name "${domain}.key" -o -name "privkey.pem" -o -name "*.key" \) 2>/dev/null | head -1)
+    key_found=$(find /var/lib/caddy /root/.local/share/caddy -type f \( -name "${domain}.key" -o -name "privkey.pem" -o -name "*.key" \) 2>/dev/null | grep -v 'default' | grep -v 'admin' | head -1)
     if [[ -n "$cert_found" && -n "$key_found" ]]; then
       break
     fi
@@ -162,6 +162,7 @@ setup_caddy_proxy() {
 {
     admin off
     default_sni ${domain}
+    email "admin@${domain}"
     storage file_system {
         root /var/lib/caddy
     }
@@ -216,6 +217,7 @@ EOF
 {
     admin off
     default_sni ${domain}
+    email "admin@${domain}"
     storage file_system {
         root /var/lib/caddy
     }
