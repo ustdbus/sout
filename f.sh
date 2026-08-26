@@ -142,26 +142,23 @@ get_sui_creds() {
     if command -v sqlite3 >/dev/null 2>&1; then
       u=$(sqlite3 "$sui_db" "SELECT username FROM users LIMIT 1;" 2>/dev/null || echo "admin")
     elif command -v python3 >/dev/null 2>&1; then
-      u=$(python3 -c "import sqlite3; con=sqlite3.connect('$sui_db'); cur=con.cursor(); print(cur.execute('SELECT username FROM users LIMIT 1').fetchone()[0]); con.close()" 2>/dev/null || echo "admin")
+      u=$(python3 -c "import sqlite3; con=sqlite3.connect('$sui_db'); cur=con.cursor(); r=cur.execute('SELECT username FROM users LIMIT 1').fetchone(); print(r[0] if r else 'admin'); con.close()" 2>/dev/null || echo "admin")
     fi
   fi
   [[ -z "$u" ]] && u="admin"
 
+  local saved_p=""
   if [[ -f "${WORK_DIR}/sui_pass" ]]; then
-    p=$(cat "${WORK_DIR}/sui_pass" 2>/dev/null || true)
+    saved_p=$(cat "${WORK_DIR}/sui_pass" 2>/dev/null | tr -d ' 
+')
   fi
 
-  # 如果没有保存明文密码，且存在 sui 命令行，则自动生成并同步一次密码
-  if [[ -z "$p" && -x /usr/local/s-ui/sui ]]; then
-    p=$(head -c 8 /dev/urandom | xxd -p | head -c 10)
-    echo "$p" > "${WORK_DIR}/sui_pass"
-    chmod 600 "${WORK_DIR}/sui_pass"
-    echo "$u" > "${WORK_DIR}/sui_user"
-    chmod 600 "${WORK_DIR}/sui_user"
-    /usr/local/s-ui/sui admin -username "$u" -password "$p" >/dev/null 2>&1 || true
+  if [[ -n "$saved_p" ]]; then
+    p="$saved_p"
+  else
+    p="(您在 s-ui 设置的密码，若遗忘可在终端输入 s-ui 重置)"
   fi
 
-  [[ -z "$p" ]] && p="(未记录密码，可通过 s-ui 命令重置)"
   echo "${u}|${p}"
 }
 
