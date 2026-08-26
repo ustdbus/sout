@@ -398,6 +398,23 @@ if inb_row:
 else:
     cur.execute('INSERT INTO inbounds (type, tag, tls_id, addrs, options) VALUES (?, ?, 0, ?, ?)',
                 ('vless', node_tag, addrs_blob, options_blob))
+    inb_id = cur.lastrowid
+
+inb_id = inb_row[0] if inb_row else inb_id
+client_cfg = json.dumps({'vless': {'name': 'admin', 'uuid': client_uuid, 'flow': ''}}).encode('utf-8')
+inbounds_blob = json.dumps([inb_id]).encode('utf-8')
+empty_links = b'[]'
+cur.execute('SELECT id FROM clients WHERE name = ?', ('admin',))
+c_row = cur.fetchone()
+if c_row:
+    cur.execute('UPDATE clients SET enable = 1, config = ?, inbounds = ?, links = ? WHERE id = ?',
+                (client_cfg, inbounds_blob, empty_links, c_row[0]))
+else:
+    cur.execute('INSERT INTO clients (enable, name, remark, config, inbounds, links, created_at) VALUES (1, ?, ?, ?, ?, ?, strftime("%s", "now"))',
+                ('admin', '默认用户', client_cfg, inbounds_blob, empty_links))
+
+# 确保所有历史 client 的 links 不为 NULL
+cur.execute("UPDATE clients SET links = CAST('[]' AS BLOB) WHERE links IS NULL OR length(links) = 0")
 
 con.commit()
 con.close()

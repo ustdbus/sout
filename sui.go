@@ -1068,14 +1068,28 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 			Type                string            `json:"type"`
 			Path                string            `json:"path"`
 			Host                string            `json:"host"`
-			Headers             map[string]string `json:"headers"`
 			ServiceName         string            `json:"service_name"`
 			EarlyDataHeaderName string            `json:"early_data_header_name"`
 		} `json:"transport"`
+		Users []struct {
+			Name string `json:"name"`
+			UUID string `json:"uuid"`
+			Flow string `json:"flow"`
+		} `json:"users"`
 		CongestionControl string `json:"congestion_control"`
 	}
 	if err := json.Unmarshal(outJsonBytes, &out); err != nil {
 		return nil
+	}
+
+	if out.Type == "" {
+		out.Type = "vless"
+	}
+	if !out.TLS.Enabled && (out.ServerPort == 443 || strings.Contains(tag, "tls") || strings.Contains(tag, "cdn")) {
+		out.TLS.Enabled = true
+		if out.TLS.ServerName == "" {
+			out.TLS.ServerName = publicHost
+		}
 	}
 
 	type AddrItem struct {
@@ -1148,6 +1162,9 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 		case "vless":
 			u := clientCfg["vless"]["uuid"]
 			uuidStr, _ := u.(string)
+			if uuidStr == "" && len(out.Users) > 0 && out.Users[0].UUID != "" {
+				uuidStr = out.Users[0].UUID
+			}
 			if uuidStr == "" {
 				uuidStr = "auto"
 			}
@@ -1559,6 +1576,9 @@ func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, 
 
 	// 5. 兜底方案：从 inbounds 表构建
 	outJSON := s.sqliteQuery(fmt.Sprintf("SELECT out_json FROM inbounds WHERE id = %d;", inboundID))
+	if outJSON == "" {
+		outJSON = s.sqliteQuery(fmt.Sprintf("SELECT options FROM inbounds WHERE id = %d;", inboundID))
+	}
 	addrsJSON := s.sqliteQuery(fmt.Sprintf("SELECT addrs FROM inbounds WHERE id = %d;", inboundID))
 	if outJSON == "" {
 		return nil
