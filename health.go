@@ -77,6 +77,7 @@ func (m *Manager) tunnelHealthy(t *Tunnel) bool {
 			t.mu.Unlock()
 		}
 		return true
+	}
 	got, err := t.probeExitIP()
 	if err != nil {
 		return false
