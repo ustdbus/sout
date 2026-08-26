@@ -1017,6 +1017,28 @@ EOF
 
   # 5. 自动化配置 s-ui
   local sui_db="/usr/local/s-ui/db/s-ui.db"
+  local sui_admin_user="admin"
+  local sui_admin_pass=""
+  if [[ -f "${WORK_DIR}/sui_pass" ]]; then
+    sui_admin_pass=$(cat "${WORK_DIR}/sui_pass" 2>/dev/null || true)
+  fi
+  if [[ -z "$sui_admin_pass" ]]; then
+    sui_admin_pass=$(head -c 8 /dev/urandom | xxd -p | head -c 10)
+    echo "$sui_admin_pass" > "${WORK_DIR}/sui_pass"
+    chmod 600 "${WORK_DIR}/sui_pass"
+  fi
+  if [[ -f "${WORK_DIR}/sui_user" ]]; then
+    sui_admin_user=$(cat "${WORK_DIR}/sui_user" 2>/dev/null || echo "admin")
+  else
+    echo "$sui_admin_user" > "${WORK_DIR}/sui_user"
+    chmod 600 "${WORK_DIR}/sui_user"
+  fi
+
+  if [[ -x /usr/local/s-ui/sui ]]; then
+    echo -e "  [+] 正在自动配置 s-ui 管理员账号 (${sui_admin_user})..."
+    /usr/local/s-ui/sui admin -username "${sui_admin_user}" -password "${sui_admin_pass}" >/dev/null 2>&1 || true
+  fi
+
   if [[ -f "$sui_db" ]]; then
     echo -e "  [+] 正在自动配置 s-ui 数据库 (绑定 mytls, 路径分流与 VLESS-WS 节点)..."
     python3 -c "
@@ -1158,6 +1180,8 @@ with open(path, 'w') as f:
   "sout_path": "${sout_path}",
   "sui_port": ${sui_port},
   "sui_path": "${sui_path}",
+  "sui_user": "${sui_admin_user}",
+  "sui_pass": "${sui_admin_pass}",
   "sub_port": ${sub_port},
   "sub_path": "${sub_path}",
   "node_port": ${node_port},
@@ -1179,13 +1203,19 @@ METAEOF
   fi
   echo -e "  证书存储目录:  ${B}/home/acme/${domain}/${N}"
   echo -e "  ----------------------------------------------------------------"
-  echo -e "  [1] sout 管理面板:  ${B}https://${domain}/${sout_path}/${N}"
-  echo -e "  [2] s-ui 管理面板:  ${B}https://${domain}/${sui_path}/${N}"
-  echo -e "  [3] s-ui 订阅地址:  ${B}https://${domain}/${sub_path}/${N}"
-  echo -e "  [4] VLESS-WS 节点:  ${B}wss://${domain}:443/${ws_path}${N}"
-  echo -e "  ----------------------------------------------------------------"
-  echo -e "  访问口令:      ${Y}$(cat "${WORK_DIR}/password" 2>/dev/null || echo "未设置")${N}"
+  echo -e "  [1] sout 家宽动态出口插件面板"
+  echo -e "      访问地址:  ${B}https://${domain}/${sout_path}/${N}"
+  echo -e "      访问口令:  ${Y}$(cat "${WORK_DIR}/password" 2>/dev/null || echo "未设置")${N}"
+  echo
+  echo -e "  [2] s-ui 节点与分流管理面板"
+  echo -e "      访问地址:  ${B}https://${domain}/${sui_path}/${N}"
+  echo -e "      管理账号:  ${Y}${sui_admin_user}${N}"
+  echo -e "      管理密码:  ${Y}${sui_admin_pass}${N}"
+  echo
+  echo -e "  [3] s-ui 客户端订阅地址:  ${B}https://${domain}/${sub_path}/${N}"
+  echo -e "  [4] VLESS+WS+CDN 节点:    ${B}wss://${domain}:443/${ws_path}${N}"
   echo -e "${G}================================================================${N}"
+  echo
   echo
 }
 
