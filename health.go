@@ -75,7 +75,7 @@ func (m *Manager) tunnelHealthy(t *Tunnel) bool {
 		}
 		return true
 	}
-	got, err := t.probeExitIP()
+	got, err := t.probeExitIP(healthTimeout)
 	if err != nil {
 		return false
 	}

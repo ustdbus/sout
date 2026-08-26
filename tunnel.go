@@ -107,43 +107,61 @@ func (t *Tunnel) recordHost(oldHost string) {
 	t.HistoryHosts = append(t.HistoryHosts, oldHost)
 }
 
+func (t *Tunnel) dial(network, addr string) (net.Conn, error) {
+	t.mu.Lock()
+	engine := t.engine
+	t.mu.Unlock()
+	if engine == nil {
+		return nil, fmt.Errorf("内嵌 sing-box 未就绪")
+	}
+	return engine.dialTunnel(context.Background(), t, network, addr)
+}
+
 func (t *Tunnel) start(dir string) error {
 	t.mu.Lock()
-	defer t.mu.Unlock()
-
 	t.Status = "starting"
 	t.Err = ""
+	engine := t.engine
+	t.mu.Unlock()
 
 	if t.Kind == "custom" {
 		return t.startCustom()
 	}
 
 	// VPN Gate 用户态 OpenVPN 隧道
-	if t.engine == nil {
+	if engine == nil {
+		t.mu.Lock()
 		t.Status = "failed"
 		t.Err = "内嵌 sing-box 引擎未初始化"
+		t.mu.Unlock()
 		return fmt.Errorf("%s", t.Err)
 	}
 
-	if err := t.engine.addTunnel(t); err != nil {
+	if err := engine.addTunnel(t); err != nil {
+		t.mu.Lock()
 		t.Status = "failed"
 		t.Err = fmt.Sprintf("启动用户态出口失败: %v", err)
+		t.mu.Unlock()
 		return err
 	}
 
-	// 探测出口真实 IP
-	exitIP, err := t.probeExitIP()
+	// 轮询等待 OpenVPN endpoint 握手完成并探测出口真实 IP (最多等待 15 秒)
+	exitIP, err := t.waitExitIP(15 * time.Second)
 	if err != nil {
-		t.engine.removeTunnel(t)
+		engine.removeTunnel(t)
+		t.mu.Lock()
 		t.Status = "failed"
 		t.Err = fmt.Sprintf("探测出口 IP 失败: %v", err)
+		t.mu.Unlock()
 		return err
 	}
 
+	t.mu.Lock()
 	t.ExitIP = exitIP
 	t.Status = "up"
 	t.Since = time.Now()
 	t.Err = ""
+	t.mu.Unlock()
 	return nil
 }
 
@@ -166,46 +184,58 @@ func (t *Tunnel) stop() {
 	t.ExitIP = ""
 }
 
-func (t *Tunnel) probeExitIP() (string, error) {
+func (t *Tunnel) probeExitIP(timeout time.Duration) (string, error) {
 	if t.Kind == "custom" {
 		return t.probeCustomExitIP()
 	}
 
-	// VPN Gate 出口通过用户态 sing-box 拨号探测
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-	defer cancel()
+	transport := &http.Transport{
+		DisableKeepAlives: true,
+		DialContext: func(_ context.Context, network, addr string) (net.Conn, error) {
+			return t.dial(network, addr)
+		},
+	}
+	defer transport.CloseIdleConnections()
 
-	// 尝试多个 IP 查询接口
-	for _, target := range []string{"api.ipify.org:80", "ifconfig.me:80", "icanhazip.com:80"} {
-		conn, err := t.engine.dialTunnel(ctx, t, "tcp", target)
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   timeout,
+	}
+
+	for _, u := range []string{"http://api.ipify.org", "http://ifconfig.me/ip", "http://icanhazip.com"} {
+		resp, err := client.Get(u)
 		if err != nil {
 			continue
 		}
-
-		host := strings.Split(target, ":")[0]
-		req := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nUser-Agent: curl/7.88.1\r\nAccept: */*\r\nConnection: close\r\n\r\n", host)
-		_ = conn.SetDeadline(time.Now().Add(6 * time.Second))
-		if _, err := conn.Write([]byte(req)); err != nil {
-			conn.Close()
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 128))
+		resp.Body.Close()
+		if err != nil || resp.StatusCode != http.StatusOK {
 			continue
 		}
-
-		resp, err := io.ReadAll(conn)
-		conn.Close()
-		if err != nil {
-			continue
-		}
-
-		lines := strings.Split(string(resp), "\r\n\r\n")
-		if len(lines) >= 2 {
-			body := strings.TrimSpace(lines[1])
-			if ip := net.ParseIP(body); ip != nil && ip.To4() != nil {
-				return ip.String(), nil
-			}
+		ip := strings.TrimSpace(string(body))
+		if parsed := net.ParseIP(ip); parsed != nil && parsed.To4() != nil {
+			return parsed.String(), nil
 		}
 	}
 
 	return "", fmt.Errorf("所有出口 IP 探测源均无有效 IPv4 响应")
+}
+
+func (t *Tunnel) waitExitIP(timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if ip, err := t.probeExitIP(5 * time.Second); err == nil {
+			return ip, nil
+		} else {
+			lastErr = err
+		}
+		time.Sleep(1500 * time.Millisecond)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("超时")
+	}
+	return "", fmt.Errorf("等待 OpenVPN 握手与出口就绪失败: %w", lastErr)
 }
 
 func (t *Tunnel) probeCustomExitIP() (string, error) {
