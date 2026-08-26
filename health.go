@@ -77,15 +77,8 @@ func (m *Manager) tunnelHealthy(t *Tunnel) bool {
 			t.mu.Unlock()
 		}
 		return true
-	}
-	out, err := exec.Command("ip", "netns", "exec", t.nsName(),
-		"curl", "-s", "--max-time", strconv.Itoa(int(healthTimeout.Seconds())),
-		"http://api.ipify.org").Output()
+	got, err := t.probeExitIP()
 	if err != nil {
-		return false
-	}
-	got := strings.TrimSpace(string(out))
-	if got == "" {
 		return false
 	}
 	// 出口 IP 变了说明 VPN 已经断开，流量退回了母机
@@ -99,23 +92,12 @@ func (m *Manager) tunnelHealthy(t *Tunnel) bool {
 // 改过 t.Node（比如手动换节点），就要把改之前的名字传进来，
 // 否则 rebind 找不到旧绑定，入站会掉成孤儿。
 func (m *Manager) reconnect(t *Tunnel, oldHost string) {
+	t.stop()
 	t.mu.Lock()
 	t.Status = "starting"
 	t.Err = "正在换节点重连"
 	t.ExitIP = ""
-	if t.listener != nil && t.Kind == "custom" {
-		_ = t.listener.Close()
-		t.listener = nil
-	}
 	t.mu.Unlock()
-
-	if t.ovpn != nil && t.ovpn.Process != nil {
-		_ = t.ovpn.Process.Kill()
-		t.ovpn = nil
-	}
-	if t.Kind != "custom" {
-		t.teardownNetns()
-	}
 
 	go func() {
 		// 通知延后到 rebind/resync 之后：那两步会把入站改绑到新节点，

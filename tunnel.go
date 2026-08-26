@@ -52,6 +52,46 @@ func (t *Tunnel) setEngine(engine *embeddedEngine) {
 	t.engine = engine
 }
 
+func (t *Tunnel) credential() SocksCred {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.Cred
+}
+
+func (t *Tunnel) setCredential(c SocksCred) error {
+	t.mu.Lock()
+	t.Cred = c
+	engine := t.engine
+	kind := t.Kind
+	t.mu.Unlock()
+
+	if kind != "custom" && engine != nil {
+		return engine.addTunnel(t)
+	}
+	return nil
+}
+
+func (t *Tunnel) switchPort(newPort int) error {
+	t.mu.Lock()
+	if t.Port == newPort {
+		t.mu.Unlock()
+		return nil
+	}
+	t.Port = newPort
+	engine := t.engine
+	kind := t.Kind
+	t.mu.Unlock()
+
+	if kind == "custom" {
+		t.stop()
+		return t.startCustom()
+	}
+	if engine != nil {
+		return engine.addTunnel(t)
+	}
+	return nil
+}
+
 func (t *Tunnel) recordHost(oldHost string) {
 	if oldHost == "" {
 		return
