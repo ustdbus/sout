@@ -80,7 +80,7 @@ rand_safe_path() {
   local prefix="$1"
   local r
   r=$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')
-  echo "${prefix}_${r}"
+  echo "${prefix}${r}"
 }
 
 caddy_status() {
@@ -365,11 +365,20 @@ for inb_id, inb_tag, inb_opts, inb_addrs in cur.fetchall():
         pass
 
 # 4. 配置/更新 VLESS-WS CDN 节点
+import uuid
 node_tag = 'vless-ws-cdn'
+client_uuid = str(uuid.uuid4())
 addrs_blob = json.dumps([{'server': domain, 'server_port': 443}]).encode('utf-8')
 options_dict = {
     'listen': '127.0.0.1',
     'listen_port': node_port,
+    'users': [
+        {
+            'name': 'default',
+            'uuid': client_uuid,
+            'flow': ''
+        }
+    ],
     'transport': {
         'early_data_header_name': 'Sec-WebSocket-Protocol',
         'headers': {
