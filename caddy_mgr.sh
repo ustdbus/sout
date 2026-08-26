@@ -230,10 +230,12 @@ EOF
     }
 }
 
-:443 {
-    tls /home/acme/${domain}/fullchain.pem /home/acme/${domain}/privkey.pem {
-        protocols tls1.2 tls1.3
-    }
+:443, ${domain}:443 {
+    tls /home/acme/${domain}/fullchain.pem /home/acme/${domain}/privkey.pem
+
+    redir /${sout_path} /${sout_path}/ 308
+    redir /${sui_path} /${sui_path}/ 308
+    redir /${sub_path} /${sub_path}/ 308
 
     # 1. sout 动态家宽管理面板
     handle /${sout_path}* {
@@ -250,9 +252,12 @@ EOF
         reverse_proxy 127.0.0.1:${sub_port}
     }
 
-    # 4. VLESS + WebSocket 节点
-    handle /${ws_path}* {
-        reverse_proxy 127.0.0.1:${node_port}
+    # 4. VLESS + WebSocket 节点 (实时零缓冲透传)
+    @vless_ws {
+        path /${ws_path}*
+    }
+    reverse_proxy @vless_ws 127.0.0.1:${node_port} {
+        flush_interval -1
     }
 
     # 5. 伪装根路径
