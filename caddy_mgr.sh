@@ -1,8 +1,25 @@
 #!/usr/bin/env bash
-# caddy_mgr.sh - Caddy 一键全自动反代、Cloudflare DNS-01 证书托管与 4合1 端口复用模块
+# ==============================================================================
+# sout - Cloudflare 隧道 4合1 统一反代独立管理脚本
+# ==============================================================================
 
-WORK_DIR="${WORK_DIR:-/var/lib/sout}"
+set -e
+
+R='\033[0;31m'
+G='\033[0;32m'
+Y='\033[0;33m'
+B='\033[0;34m'
+C='\033[0;36m'
+D='\033[0;90m'
+N='\033[0m'
+
+WORK_DIR="/usr/local/sout"
 CADDY_META="${WORK_DIR}/caddy_meta.json"
+
+pause() {
+  echo
+  read -rp "  按回车键继续..." _
+}
 
 get_caddy_arch() {
   local a
@@ -16,12 +33,15 @@ get_caddy_arch() {
 }
 
 install_caddy_bin() {
+  if command -v caddy >/dev/null 2>&1; then
+    return 0
+  fi
   local arch
   arch=$(get_caddy_arch)
-  echo -e "  ${B}[+] 正在获取带 Cloudflare DNS-01 模块的 Caddy (${arch})...${N}"
+  echo -e "  ${B}[+] 正在获取标准 Caddy 反代服务 (${arch})...${N}"
   local tmp
   tmp=$(mktemp -d)
-  local url="https://caddyserver.com/api/download?os=linux&arch=${arch}&p=github.com%2Fcaddy-dns%2Fcloudflare"
+  local url="https://caddyserver.com/api/download?os=linux&arch=${arch}"
   
   if ! curl -fsSL "$url" -o "$tmp/caddy"; then
     echo -e "  ${Y}[!] 官方 API 下载稍慢，正在重试...${N}"
@@ -35,8 +55,8 @@ install_caddy_bin() {
   install -m 755 "$tmp/caddy" /usr/local/bin/caddy
   rm -rf "$tmp"
   
-  mkdir -p /etc/caddy /var/log/caddy /var/lib/caddy /home/acme
-  chmod 755 /etc/caddy /var/log/caddy /home/acme
+  mkdir -p /etc/caddy /var/log/caddy /var/lib/caddy
+  chmod 755 /etc/caddy /var/log/caddy
   
   cat > /etc/systemd/system/caddy.service <<'EOF'
 [Unit]
@@ -63,6 +83,47 @@ EOF
   systemctl enable caddy >/dev/null 2>&1 || true
   echo -e "  ${G}[✓] Caddy 服务已就绪${N}"
   return 0
+}
+
+install_cloudflared_bin() {
+  if command -v cloudflared >/dev/null 2>&1; then
+    return 0
+  fi
+  local arch
+  arch=$(get_caddy_arch)
+  echo -e "  ${B}[+] 正在获取 Cloudflare 官方隧道客户端 cloudflared (${arch})...${N}"
+  local url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch}"
+  
+  if ! curl -fL --retry 3 --connect-timeout 10 -o /usr/local/bin/cloudflared "$url"; then
+    echo -e "  ${R}[✗] cloudflared 二进制下载失败，请检查网络连接${N}" >&2
+    return 1
+  fi
+  chmod +x /usr/local/bin/cloudflared
+  echo -e "  ${G}[✓] cloudflared 已成功安装至 /usr/local/bin/cloudflared${N}"
+  return 0
+}
+
+setup_cloudflared_service() {
+  local token="$1"
+  cat > /etc/systemd/system/cloudflared.service <<EOF
+[Unit]
+Description=Cloudflare Tunnel Agent
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+TimeoutStartSec=0
+ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate run --token ${token}
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable cloudflared >/dev/null 2>&1 || true
+  systemctl restart cloudflared
 }
 
 rand_local_port() {
@@ -97,50 +158,19 @@ is_caddy_enabled() {
   echo "false"
 }
 
-sync_caddy_certs() {
-  local domain="$1"
-  mkdir -p "/home/acme/${domain}"
-  local cert_found="" key_found=""
-  
-  echo -n "      正在等待 SSL / TLS 证书签发 "
-  for _ in $(seq 1 35); do
-    cert_found=$(find /var/lib/caddy /root/.local/share/caddy -type f \( -name "${domain}.crt" -o -name "fullchain.pem" -o -name "*.crt" \) 2>/dev/null | grep -v 'intermediate' | head -1)
-    key_found=$(find /var/lib/caddy /root/.local/share/caddy -type f \( -name "${domain}.key" -o -name "privkey.pem" -o -name "*.key" \) 2>/dev/null | grep -v 'default' | grep -v 'admin' | head -1)
-    if [[ -n "$cert_found" && -n "$key_found" ]]; then
-      break
-    fi
-    echo -n "."
-    sleep 1
-  done
-  echo
-
-  if [[ -n "$cert_found" && -n "$key_found" ]]; then
-    cp -f "$cert_found" "/home/acme/${domain}/fullchain.pem"
-    cp -f "$key_found" "/home/acme/${domain}/privkey.pem"
-    chmod 644 "/home/acme/${domain}/fullchain.pem"
-    chmod 600 "/home/acme/${domain}/privkey.pem"
-    echo -e "  ${G}[✓] 证书已成功同步到 /home/acme/${domain}/${N}"
-    return 0
-  else
-    echo -e "  ${Y}[!] 证书后台生成中，已配置自动监听${N}"
-    return 1
-  fi
-}
-
 setup_caddy_proxy() {
   local domain="$1"
-  local cf_token="$2"
-  local ext_port="${3:-443}"
+  local tunnel_token="$2"
+  local tunnel_port="${3:-8080}"
 
   echo
   echo -e "${B}================================================================${N}"
-  echo -e "${B}  正在配置 Caddy 4合1 反代与 Cloudflare DNS-01 证书申请...${N}"
+  echo -e "${B}  正在配置 Cloudflare 隧道 4合1 统一反代...${N}"
   echo -e "${B}================================================================${N}"
 
-  # 1. 确保 Caddy 安装
-  if ! command -v caddy >/dev/null 2>&1 || ! /usr/local/bin/caddy list-modules 2>/dev/null | grep -q "dns.providers.cloudflare"; then
-    install_caddy_bin || { echo -e "  ${R}安装 Caddy 失败${N}"; return 1; }
-  fi
+  # 1. 确保 Caddy 与 cloudflared 安装
+  install_caddy_bin || { echo -e "  ${R}安装 Caddy 失败${N}"; return 1; }
+  install_cloudflared_bin || { echo -e "  ${R}安装 cloudflared 失败${N}"; return 1; }
 
   # 2. 分配 4 个本地端口和 4 个安全路径
   local sout_port sui_port sub_port node_port
@@ -156,83 +186,15 @@ setup_caddy_proxy() {
   sub_path=$(rand_safe_path "sub")
   ws_path=$(rand_safe_path "vlws")
 
-  # 3. 写入 Caddyfile
-  mkdir -p /etc/caddy /var/log/caddy /var/lib/caddy "/home/acme/${domain}"
+  # 3. 写入纯净本地 Caddyfile (监听 127.0.0.1:${tunnel_port}，无公网端口与证书负担)
+  mkdir -p /etc/caddy /var/log/caddy /var/lib/caddy
   cat > /etc/caddy/Caddyfile <<EOF
 {
     admin off
-    default_sni ${domain}
-    email "admin@${domain}"
-    storage file_system {
-        root /var/lib/caddy
-    }
-    log {
-        output file /var/log/caddy/access.log {
-            roll_size 10mb
-            roll_keep 3
-        }
-        level INFO
-    }
+    auto_https off
 }
 
-:443, ${domain}:443 {
-    tls {
-        dns cloudflare ${cf_token}
-    }
-
-    # 1. sout 动态家宽管理面板
-    handle /${sout_path}* {
-        reverse_proxy 127.0.0.1:${sout_port}
-    }
-
-    # 2. s-ui 节点管理面板
-    handle /${sui_path}* {
-        reverse_proxy 127.0.0.1:${sui_port}
-    }
-
-    # 3. s-ui 订阅端口
-    handle /${sub_path}* {
-        reverse_proxy 127.0.0.1:${sub_port}
-    }
-
-    # 4. VLESS + WebSocket 节点
-    handle /${ws_path}* {
-        reverse_proxy 127.0.0.1:${node_port}
-    }
-
-    # 5. 伪装根路径
-    handle {
-        respond "Service Ready" 200
-    }
-}
-EOF
-
-  echo -e "  [+] 正在启动 Caddy 并通过 Cloudflare DNS-01 申请证书..."
-  systemctl restart caddy
-  sleep 3
-
-  # 4. 同步证书并锁定显式证书加载
-  if sync_caddy_certs "$domain"; then
-    cat > /etc/caddy/Caddyfile <<EOF
-{
-    admin off
-    default_sni ${domain}
-    email "admin@${domain}"
-    storage file_system {
-        root /var/lib/caddy
-    }
-    log {
-        output file /var/log/caddy/access.log {
-            roll_size 10mb
-            roll_keep 3
-        }
-        level INFO
-    }
-}
-
-:443, ${domain}:443 {
-    tls /home/acme/${domain}/fullchain.pem /home/acme/${domain}/privkey.pem
-
+http://127.0.0.1:${tunnel_port} {
     redir /${sout_path} /${sout_path}/ 308
     redir /${sui_path} /${sui_path}/ 308
     redir /${sub_path} /${sub_path}/ 308
@@ -265,10 +227,13 @@ EOF
     }
 }
 EOF
-    systemctl restart caddy
-  fi
 
-  # 5. 自动化配置 s-ui
+  echo -e "  [+] 正在启动本地 Caddy 分流服务与 Cloudflare 隧道..."
+  systemctl restart caddy
+  setup_cloudflared_service "$tunnel_token"
+  sleep 2
+
+  # 4. 自动化配置 s-ui
   local sui_db="/usr/local/s-ui/db/s-ui.db"
   local sui_admin_user="admin"
   local sui_admin_pass=""
@@ -293,9 +258,9 @@ EOF
   fi
 
   if [[ -f "$sui_db" ]]; then
-    echo -e "  [+] 正在自动配置 s-ui 数据库 (绑定 mytls, 路径分流与 VLESS-WS 节点)..."
-    python3 -c "
-import sqlite3, json, os
+    echo -e "  [+] 正在自动配置 s-ui 数据库 (路径分流与 VLESS-WS 节点)..."
+    python3 << PYEOF
+import sqlite3, json, os, uuid, urllib.parse
 
 db = '$sui_db'
 domain = '$domain'
@@ -309,26 +274,7 @@ ws_path = '/${ws_path}'
 con = sqlite3.connect(db)
 cur = con.cursor()
 
-# 1. 设置 mytls 证书
-cur.execute('SELECT id FROM tls WHERE name = ?', ('mytls',))
-row = cur.fetchone()
-tls_server = {
-    'enabled': True,
-    'server_name': domain,
-    'certificate_path': f'/home/acme/{domain}/fullchain.pem',
-    'key_path': f'/home/acme/{domain}/privkey.pem'
-}
-server_blob = json.dumps(tls_server, indent=2).encode('utf-8')
-client_blob = b'{}'
-
-if row:
-    tls_id = row[0]
-    cur.execute('UPDATE tls SET server = ?, client = ? WHERE id = ?', (server_blob, client_blob, tls_id))
-else:
-    cur.execute('INSERT INTO tls (name, server, client) VALUES (?, ?, ?)', ('mytls', server_blob, client_blob))
-    tls_id = cur.lastrowid
-
-# 2. 更新 settings (由 Caddy 统一终结 TLS，s-ui 内部使用纯 HTTP)
+# 1. 更新 settings (Caddy统一终结TLS，s-ui内部使用HTTP代理)
 settings_map = {
     'webPort': str(sui_port),
     'webListen': '127.0.0.1',
@@ -351,7 +297,7 @@ for k, v in settings_map.items():
     else:
         cur.execute('INSERT INTO settings (key, value) VALUES (?, ?)', (k, v))
 
-# 3. 自动收敛所有原本监听 443 的入站节点至本地端口 (避免与 Caddy 443 冲突)
+# 2. 自动收敛所有原本监听 443 的入站节点至本地端口
 cur.execute('SELECT id, tag, options, addrs FROM inbounds')
 for inb_id, inb_tag, inb_opts, inb_addrs in cur.fetchall():
     try:
@@ -368,28 +314,44 @@ for inb_id, inb_tag, inb_opts, inb_addrs in cur.fetchall():
     except:
         pass
 
-# 4. 配置/更新 VLESS-WS CDN 节点
-import uuid
+# 3. 配置/更新 VLESS-WS CDN 节点
 node_tag = 'vless-ws-cdn'
 client_uuid = str(uuid.uuid4())
-addrs_blob = json.dumps([{
-    'server': domain,
-    'server_port': 443,
-    'tls': {
-        'enabled': True,
-        'server_name': domain,
-        'insecure': False,
-        'disable_sni': False
+
+addrs_data = [
+    {
+        'server': '45.89.235.139',
+        'server_port': 443,
+        'tls': {
+            'disable_sni': False,
+            'enabled': True,
+            'insecure': False,
+            'server_name': domain
+        }
+    },
+    {
+        'server': domain,
+        'server_port': 443,
+        'tls': {
+            'disable_sni': False,
+            'enabled': True,
+            'insecure': False,
+            'server_name': domain
+        }
     }
-}]).encode('utf-8')
+]
+addrs_blob = json.dumps(addrs_data, indent=2).encode('utf-8')
+
 options_dict = {
     'listen': '127.0.0.1',
     'listen_port': node_port,
+    'sniff': True,
+    'sniff_override_destination': True,
     'users': [
         {
-            'name': 'default',
-            'uuid': client_uuid,
-            'flow': ''
+            'flow': '',
+            'name': 'admin',
+            'uuid': client_uuid
         }
     ],
     'transport': {
@@ -413,7 +375,6 @@ else:
                 ('vless', node_tag, addrs_blob, options_blob))
     inb_id = cur.lastrowid
 
-import urllib.parse
 node_uri = f'vless://{client_uuid}@{domain}:443?type=ws&path={urllib.parse.quote(ws_path)}&host={domain}&security=tls&sni={domain}#{urllib.parse.quote(node_tag)}'
 links_data = [
     {
@@ -432,19 +393,18 @@ if c_row:
     cur.execute('UPDATE clients SET enable = 1, config = ?, inbounds = ?, links = ? WHERE id = ?',
                 (client_cfg, inbounds_blob, links_blob, c_row[0]))
 else:
-    cur.execute(\"INSERT INTO clients (enable, name, remark, config, inbounds, links, created_at) VALUES (1, ?, ?, ?, ?, ?, strftime('%s', 'now'))\",
+    cur.execute("INSERT INTO clients (enable, name, remark, config, inbounds, links, created_at) VALUES (1, ?, ?, ?, ?, ?, strftime('%s', 'now'))",
                 ('admin', '默认用户', client_cfg, inbounds_blob, links_blob))
 
-# 确保所有历史 client 的 links 不为 NULL
-cur.execute(\"UPDATE clients SET links = CAST('[]' AS BLOB) WHERE links IS NULL OR length(links) = 0\")
+cur.execute("UPDATE clients SET links = CAST('[]' AS BLOB) WHERE links IS NULL OR length(links) = 0")
 
 con.commit()
 con.close()
-" || true
+PYEOF
     systemctl restart s-ui 2>/dev/null || true
   fi
 
-  # 6. 自动化配置 sout
+  # 5. 自动化配置 sout
   echo -e "  [+] 正在自动配置 sout 插件 (绑定 127.0.0.1:${sout_port} 并挂载路径 /${sout_path}/)..."
   mkdir -p "$WORK_DIR"
   echo "$sout_path" > "${WORK_DIR}/basepath"
@@ -466,13 +426,14 @@ with open(path, 'w') as f:
     json.dump(data, f, indent=2)
 " 2>/dev/null || true
 
-  # 7. 保存反代元数据
+  # 6. 保存反代元数据
   cat > "$CADDY_META" <<METAEOF
 {
   "enabled": true,
+  "mode": "tunnel",
   "domain": "${domain}",
-  "cf_token": "${cf_token}",
-  "ext_port": ${ext_port},
+  "tunnel_token": "${tunnel_token}",
+  "tunnel_port": ${tunnel_port},
   "sout_port": ${sout_port},
   "sout_path": "${sout_path}",
   "sui_port": ${sui_port},
@@ -491,14 +452,11 @@ METAEOF
 
   echo
   echo -e "${G}================================================================${N}"
-  echo -e "${G}  🎉 Caddy 4合1 全自动反代与 SSL 证书托管已成功开启！${N}"
+  echo -e "${G}  🎉 Cloudflare 隧道 4合1 统一反代已成功开启！${N}"
   echo -e "${G}================================================================${N}"
-  echo -e "  解析域名:      ${B}${domain}${N}"
-  echo -e "  反代入口:      ${G}443 (HTTPS / TLS 自动托管)${N}"
-  if [[ "$ext_port" != "443" ]]; then
-    echo -e "  NAT 回源端口:  ${Y}${ext_port}${N} (已在 CF Origin Rules 生效)"
-  fi
-  echo -e "  证书存储目录:  ${B}/home/acme/${domain}/${N}"
+  echo -e "  访问域名:      ${B}https://${domain}${N}"
+  echo -e "  隧道服务:      ${G}cloudflared (运行中 / active)${N}"
+  echo -e "  本地回源端口:  ${Y}127.0.0.1:${tunnel_port}${N}"
   echo -e "  ----------------------------------------------------------------"
   echo -e "  [1] sout 家宽动态出口插件面板"
   echo -e "      访问地址:  ${B}https://${domain}/${sout_path}/${N}"
@@ -511,22 +469,20 @@ METAEOF
   echo
   echo -e "  [3] s-ui 客户端订阅地址:  ${B}https://${domain}/${sub_path}/${N}"
   echo -e "  [4] VLESS+WS+CDN 节点:    ${B}wss://${domain}:443/${ws_path}${N}"
-  echo -e "  ----------------------------------------------------------------"
-  echo -e "  s-ui 唤起命令:  ${C}s-ui${N}"
-  echo -e "  sout 唤起命令:  ${C}sout${N}"
-  echo -e "  证书存放路径:   ${D}/home/acme${N}"
   echo -e "${G}================================================================${N}"
   echo
 }
 
 disable_caddy_proxy() {
   echo
-  read -rp "  确定关闭 Caddy 反代并恢复默认独立端口模式吗？[y/N]: " yes
+  read -rp "  确定关闭 Cloudflare 隧道反代并恢复默认独立端口模式吗？[y/N]: " yes
   [[ ${yes,,} == y ]] || { echo "  已取消"; return; }
 
-  echo "  [+] 正在停止 Caddy 服务..."
+  echo "  [+] 正在停止 Caddy 与 cloudflared 服务..."
   systemctl stop caddy 2>/dev/null || true
   systemctl disable caddy 2>/dev/null || true
+  systemctl stop cloudflared 2>/dev/null || true
+  systemctl disable cloudflared 2>/dev/null || true
 
   if [[ -f "$CADDY_META" ]]; then
     rm -f "$CADDY_META"
@@ -554,12 +510,12 @@ with open(path, 'w') as f:
     python3 -c "
 import sqlite3
 con = sqlite3.connect('$sui_db')
-con.execute('UPDATE settings SET value = \"8443\" WHERE key = \"webPort\"')
-con.execute('UPDATE settings SET value = \"\" WHERE key = \"webListen\"')
-con.execute('UPDATE settings SET value = \"/app/\" WHERE key = \"webPath\"')
-con.execute('UPDATE settings SET value = \"8444\" WHERE key = \"subPort\"')
-con.execute('UPDATE settings SET value = \"\" WHERE key = \"subListen\"')
-con.execute('UPDATE settings SET value = \"/sub/\" WHERE key = \"subPath\"')
+con.execute('UPDATE settings SET value = "8443" WHERE key = "webPort"')
+con.execute('UPDATE settings SET value = "" WHERE key = "webListen"')
+con.execute('UPDATE settings SET value = "/app/" WHERE key = "webPath"')
+con.execute('UPDATE settings SET value = "8444" WHERE key = "subPort"')
+con.execute('UPDATE settings SET value = "" WHERE key = "subListen"')
+con.execute('UPDATE settings SET value = "/sub/" WHERE key = "subPath"')
 con.commit()
 con.close()
 " 2>/dev/null || true
@@ -567,70 +523,64 @@ con.close()
   fi
 
   systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || true
-  echo -e "  ${G}[✓] 已成功关闭 Caddy 反代，sout 与 s-ui 已恢复独立端口访问模式。${N}"
+  echo -e "  ${G}[✓] 已成功关闭隧道反代，sout 与 s-ui 已恢复独立端口访问模式。${N}"
 }
 
 caddy_interactive_setup() {
   echo
   echo -e "${B}================================================================${N}"
-  echo -e "${B}  🚀 Caddy 一键全自动反代与 SSL 证书托管配置${N}"
+  echo -e "${B}  🚀 Cloudflare 隧道 4合1 一键全自动反代配置 (免开端口/杜绝525)${N}"
   echo -e "${B}================================================================${N}"
-  echo -e "  特点：4合1共用443端口，自动DNS-01申请并续期证书，无视NAT与CDN"
+  echo -e "  特点：无需公网端口、无视NAT网络、免申请SSL证书、杜绝525握手错误"
   echo -e "${D}----------------------------------------------------------------${N}"
   
-  local domain cf_token ext_port
-  read -rp "  1. 请输入您的解析域名 (如 djj.20023.bond): " domain
+  local domain tunnel_token tunnel_port
+  read -rp "  1. 请输入您的访问域名 (如 djj.20023.bond): " domain
   domain=$(echo "$domain" | tr -d ' \r\n')
   [[ -z "$domain" ]] && { echo -e "  ${R}域名不能为空！${N}"; return 1; }
 
-  echo -e "  ${D}💡 提示：用于 DNS-01 自动申请与续期证书。若不会获取，请询问 AI${N}"
-  read -rp "  2. 请输入 Cloudflare API Token (具有 Zone.DNS 权限): " cf_token
-  cf_token=$(echo "$cf_token" | tr -d ' \r\n')
-  [[ -z "$cf_token" ]] && { echo -e "  ${R}Token 不能为空！${N}"; return 1; }
+  echo -e "  ${D}💡 提示：前往 Cloudflare Zero Trust -> Networks -> Tunnels 创建隧道并复制 Token${N}"
+  read -rp "  2. 请输入 Cloudflare 隧道 Token (eyJh...): " tunnel_token
+  tunnel_token=$(echo "$tunnel_token" | tr -d ' \r\n')
+  [[ -z "$tunnel_token" ]] && { echo -e "  ${R}隧道 Token 不能为空！${N}"; return 1; }
 
   echo
-  echo -e "  ${D}💡 默认 443 为正常独立 VPS；如果是 NAT 小鸡（如 28443:443）请输入 28443${N}"
-  read -rp "  3. 请输入映射到本机 443 的端口 [默认 443]: " ext_port
-  ext_port=$(echo "$ext_port" | tr -d ' \r\n')
-  ext_port="${ext_port:-443}"
+  echo -e "  ${D}💡 本地回源端口用于 cloudflared 将流量转发至本地 Caddy，默认 8080 即可${N}"
+  read -rp "  3. 请输入本地回源端口 [默认 8080]: " tunnel_port
+  tunnel_port=$(echo "$tunnel_port" | tr -d ' \r\n')
+  tunnel_port="${tunnel_port:-8080}"
 
-  if [[ "$ext_port" != "443" ]]; then
-    echo
-    echo -e "  ${Y}⚠️  重要警告 (NAT 小鸡用户必须设置)：${N}"
-    echo -e "  请务必前往 Cloudflare 控制台后台："
-    echo -e "  「规则 (Rules)」->「回源规则 (Origin Rules)」-> 创建规则，"
-    echo -e "  将主机名 \"${domain}\" 的回源端口重写为 \"${ext_port}\"！"
-    echo -e "  ${D}(💡 提示：若不会在 Cloudflare 设置回源规则，请询问 AI)${N}"
-    echo
-    read -rp "  确认已了解并已在 Cloudflare 配置好回源规则？[y/N]: " confirm
-    [[ ${confirm,,} == y ]] || { echo "  已取消配置"; return 1; }
-  fi
-
-  setup_caddy_proxy "$domain" "$cf_token" "$ext_port"
+  setup_caddy_proxy "$domain" "$tunnel_token" "$tunnel_port"
 }
 
 caddy_menu() {
   while true; do
     echo
     echo -e "${B}========================================${N}"
-    echo -e "${B}  Caddy 反代与 SSL 证书全托管管理${N}"
+    echo -e "${B}  Cloudflare 隧道 4合1 反代管理${N}"
     echo -e "${B}========================================${N}"
-    local en dom st
+    local en dom st cf_st
     en=$(is_caddy_enabled)
     st=$(caddy_status)
+    cf_st=$(systemctl is-active cloudflared 2>/dev/null || echo "inactive")
     
     if [[ "$en" == "true" ]]; then
       dom=$(grep -oE '"domain"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" | cut -d'"' -f4)
-      echo -e "  反代状态:      ${G}已开启 (4合1共用443)${N}"
+      local tun_p
+      tun_p=$(grep -oE '"tunnel_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
+      [[ -z "$tun_p" ]] && tun_p="8080"
+
+      echo -e "  反代状态:      ${G}已开启 (Cloudflare 隧道模式)${N}"
+      echo -e "  隧道服务:      $([[ "$cf_st" == "active" ]] && echo -e "${G}运行中${N}" || echo -e "${R}已停止(${cf_st})${N}")"
       echo -e "  Caddy 服务:    $([[ "$st" == "active" ]] && echo -e "${G}运行中${N}" || echo -e "${R}已停止(${st})${N}")"
       echo -e "  托管域名:      ${B}${dom}${N}"
-      echo -e "  证书路径:      ${B}/home/acme/${dom}/${N}"
+      echo -e "  本地回源:      ${Y}127.0.0.1:${tun_p}${N}"
       echo -e "${D}----------------------------------------${N}"
       echo "  1) 查看反代访问清单与节点地址"
-      echo "  2) 重新配置反代与证书 (修改域名/Token/端口)"
-      echo "  3) 查看 Caddy 访问与证书日志"
-      echo "  4) 重启 Caddy 服务"
-      echo "  5) 关闭 Caddy 反代 (恢复独立端口模式)"
+      echo "  2) 重新配置隧道与域名 (修改 Token/域名/端口)"
+      echo "  3) 查看 cloudflared 隧道运行日志"
+      echo "  4) 重启隧道与 Caddy 服务"
+      echo "  5) 关闭隧道反代 (恢复独立端口模式)"
       echo "  0) 返回上级菜单"
       echo
       read -rp "  请选择 [0-5]: " opt
@@ -651,16 +601,20 @@ caddy_menu() {
           fi
           pause ;;
         2) caddy_interactive_setup; pause ;;
-        3) echo; journalctl -u caddy -n 40 --no-pager; pause ;;
-        4) systemctl restart caddy && echo -e "  ${G}Caddy 已重启${N}"; pause ;;
+        3) echo; journalctl -u cloudflared -n 40 --no-pager; pause ;;
+        4)
+          systemctl restart cloudflared 2>/dev/null || true
+          systemctl restart caddy && echo -e "  ${G}服务已重启${N}"
+          pause ;;
         5) disable_caddy_proxy; pause; break ;;
         0) break ;;
         *) ;;
       esac
     else
       echo -e "  反代状态:      ${D}未开启 (当前为独立多端口模式)${N}"
+      echo -e "  💡 提示:       ${Y}强烈推荐开启 Cloudflare 隧道 4合1 反代 (免开端口/杜绝525)${N}"
       echo -e "${D}----------------------------------------${N}"
-      echo "  1) 一键开启 Caddy 4合1反代与证书托管"
+      echo "  1) 一键开启 Cloudflare 隧道 4合1 反代"
       echo "  0) 返回上级菜单"
       echo
       read -rp "  请选择 [0-1]: " opt
@@ -672,3 +626,7 @@ caddy_menu() {
     fi
   done
 }
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  caddy_menu
+fi

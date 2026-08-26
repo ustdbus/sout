@@ -359,12 +359,12 @@ done
 caddy_prompt=""
 if [[ "$SUI_INSTALLED_BY_US" == "1" ]]; then
   echo
-  echo "  💡 提示：如果是 NAT 机（共享IP/端口映射小鸡），建议使用 Caddy 一键反代（4合1共用443端口）"
+  echo "  💡 提示：强烈推荐开启 Cloudflare 隧道 4合1 统一反代（免开端口 / 免证书 / 杜绝525报错）"
   if [[ -t 0 ]]; then
-    read -rp "  是否立即配置 Caddy 4合1 反代（共用 443 端口 + 自动申请与托管证书）？[y/N]: " caddy_prompt
+    read -rp "  是否立即配置 Cloudflare 隧道 4合1 统一反代？[y/N]: " caddy_prompt
   else
     if [[ -c /dev/tty ]]; then
-      read -rp "  是否立即配置 Caddy 4合1 反代（共用 443 端口 + 自动申请与托管证书）？[y/N]: " caddy_prompt < /dev/tty || caddy_prompt="n"
+      read -rp "  是否立即配置 Cloudflare 隧道 4合1 统一反代？[y/N]: " caddy_prompt < /dev/tty || caddy_prompt="n"
     fi
   fi
 
@@ -395,7 +395,7 @@ if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$
   c_sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   echo
   echo "================================================================"
-  echo "  🎉 sout 插件安装部署完成！(Caddy 4合1 反代模式)"
+  echo "  🎉 sout 插件安装部署完成！(Cloudflare 隧道 4合1 模式)"
   echo "================================================================"
   echo "  [sout 动态家宽出口插件]"
   echo "  管理面板:  https://${c_dom}/${c_sout_p}/"
