@@ -1059,11 +1059,10 @@ EOF
     }
 
     # 4. VLESS + WebSocket 节点 (实时零缓冲透传)
-    @vless_ws {
-        path /${ws_path}*
-    }
-    reverse_proxy @vless_ws 127.0.0.1:${node_port} {
-        flush_interval -1
+    handle /${ws_path}* {
+        reverse_proxy 127.0.0.1:${node_port} {
+            flush_interval -1
+        }
     }
 
     # 5. 伪装根路径
