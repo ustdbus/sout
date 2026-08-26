@@ -174,18 +174,34 @@ show_info() {
   fi
 
   local sui_u="" sui_p=""
-  if [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
-    if command -v sqlite3 >/dev/null 2>&1; then
-      sui_u=$(sqlite3 /usr/local/s-ui/db/s-ui.db "SELECT username FROM users LIMIT 1;" 2>/dev/null)
-      sui_p=$(sqlite3 /usr/local/s-ui/db/s-ui.db "SELECT password FROM users LIMIT 1;" 2>/dev/null)
-    elif command -v python3 >/dev/null 2>&1; then
-      sui_u=$(python3 -c "import sqlite3; con=sqlite3.connect('/usr/local/s-ui/db/s-ui.db'); print(con.cursor().execute('SELECT username FROM users LIMIT 1').fetchone()[0])" 2>/dev/null)
-      sui_p=$(python3 -c "import sqlite3; con=sqlite3.connect('/usr/local/s-ui/db/s-ui.db'); print(con.cursor().execute('SELECT password FROM users LIMIT 1').fetchone()[0])" 2>/dev/null)
-    fi
-  fi
-  if [[ -z "$sui_u" && "$c_en" == "true" ]]; then
+  if [[ -f "$CADDY_META" ]]; then
     sui_u=$(grep -oE '"sui_user"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
     sui_p=$(grep -oE '"sui_pass"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+  fi
+  if [[ -z "$sui_p" && -f "${WORK_DIR}/sui_pass" ]]; then
+    sui_p=$(cat "${WORK_DIR}/sui_pass" 2>/dev/null || true)
+  fi
+  if [[ -z "$sui_u" && -f "${WORK_DIR}/sui_user" ]]; then
+    sui_u=$(cat "${WORK_DIR}/sui_user" 2>/dev/null || true)
+  fi
+  if [[ -z "$sui_u" && -f /usr/local/s-ui/db/s-ui.db ]]; then
+    if command -v sqlite3 >/dev/null 2>&1; then
+      sui_u=$(sqlite3 /usr/local/s-ui/db/s-ui.db "SELECT username FROM users LIMIT 1;" 2>/dev/null)
+      local db_p=$(sqlite3 /usr/local/s-ui/db/s-ui.db "SELECT password FROM users LIMIT 1;" 2>/dev/null)
+      [[ -z "$sui_p" ]] && sui_p="$db_p"
+    elif command -v python3 >/dev/null 2>&1; then
+      sui_u=$(python3 -c "import sqlite3; con=sqlite3.connect('/usr/local/s-ui/db/s-ui.db'); print(con.cursor().execute('SELECT username FROM users LIMIT 1').fetchone()[0])" 2>/dev/null)
+      local db_p=$(python3 -c "import sqlite3; con=sqlite3.connect('/usr/local/s-ui/db/s-ui.db'); print(con.cursor().execute('SELECT password FROM users LIMIT 1').fetchone()[0])" 2>/dev/null)
+      [[ -z "$sui_p" ]] && sui_p="$db_p"
+    fi
+  fi
+  [[ -z "$sui_u" ]] && sui_u="admin"
+  if [[ "$sui_p" =~ ^\$2[ayb]\$ ]]; then
+    if [[ -f "${WORK_DIR}/sui_pass" ]]; then
+      sui_p=$(cat "${WORK_DIR}/sui_pass" 2>/dev/null || true)
+    elif [[ -f "$CADDY_META" ]]; then
+      sui_p=$(grep -oE '"sui_pass"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+    fi
   fi
 
   if [[ "$c_en" == "true" ]]; then
@@ -198,7 +214,7 @@ show_info() {
     echo -e "  s-ui 面板:   ${B}https://${c_dom}/${c_sui_p}/${N}"
     if [[ -n "$sui_u" ]]; then
       echo -e "  s-ui 用户名: ${Y}${sui_u}${N}"
-      echo -e "  s-ui 密码:   ${Y}${sui_p}${N}"
+      echo -e "  s-ui 密  码: ${Y}${sui_p}${N}"
     fi
     echo -e "  订阅链接:    ${B}https://${c_dom}/${c_sub_p}/${N}"
   else
