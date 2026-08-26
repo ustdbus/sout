@@ -133,11 +133,9 @@ pause() {
 
 CADDY_META="${WORK_DIR}/caddy_meta.json"
 
-get_sui_creds() {
+get_sui_user() {
   local sui_db="/usr/local/s-ui/db/s-ui.db"
   local u="admin"
-  local p=""
-  
   if [[ -f "$sui_db" ]]; then
     if command -v sqlite3 >/dev/null 2>&1; then
       u=$(sqlite3 "$sui_db" "SELECT username FROM users LIMIT 1;" 2>/dev/null || echo "admin")
@@ -146,20 +144,7 @@ get_sui_creds() {
     fi
   fi
   [[ -z "$u" ]] && u="admin"
-
-  local saved_p=""
-  if [[ -f "${WORK_DIR}/sui_pass" ]]; then
-    saved_p=$(cat "${WORK_DIR}/sui_pass" 2>/dev/null | tr -d ' 
-')
-  fi
-
-  if [[ -n "$saved_p" ]]; then
-    p="$saved_p"
-  else
-    p="(您在 s-ui 设置的密码，若遗忘可在终端输入 s-ui 重置)"
-  fi
-
-  echo "${u}|${p}"
+  echo "$u"
 }
 
 show_info() {
@@ -209,10 +194,8 @@ show_info() {
     echo -e "  面板对接:    ${R}未检测到 s-ui 面板${N}"
   fi
 
-  local sui_creds sui_u sui_p
-  sui_creds=$(get_sui_creds || echo "admin|(可通过 s-ui 命令行重置)")
-  sui_u=$(echo "$sui_creds" | cut -d'|' -f1)
-  sui_p=$(echo "$sui_creds" | cut -d'|' -f2)
+  local sui_u
+  sui_u=$(get_sui_user)
 
   if [[ "$c_en" == "true" ]]; then
     c_dom=$(grep -oE '"domain"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4 || echo "")
@@ -236,7 +219,7 @@ show_info() {
     echo -e "  访问口令:    ${Y}${pw}${N}"
     echo -e "  s-ui 面板:   ${B}https://${c_dom}/${c_sui_p}/${N}"
     echo -e "  s-ui 用户名: ${Y}${sui_u}${N}"
-    echo -e "  s-ui 密  码: ${Y}${sui_p}${N}"
+    echo -e "  s-ui 密  码: ${D}[由您在 s-ui 中设置，已安全加密]${N}"
     echo -e "  订阅链接:    ${B}https://${c_dom}/${c_sub_p}/${N}"
   else
     if [[ "$ssl_en" == "true" ]]; then
@@ -283,9 +266,10 @@ show_info() {
       [[ "$sui_path" != */ ]] && sui_path="${sui_path}/"
       echo -e "  s-ui 面板:   ${B}http://${pip}:${sui_port}${sui_path}${N}"
       echo -e "  s-ui 用户名: ${Y}${sui_u}${N}"
-      echo -e "  s-ui 密  码: ${Y}${sui_p}${N}"
+      echo -e "  s-ui 密  码: ${D}[由您在 s-ui 中设置，已安全加密]${N}"
     fi
   fi
+  echo -e "  💡 提示:     ${D}如遗忘密码，可在终端运行 s-ui 随时重置${N}"
   echo -e "  s-ui 唤起命令: ${C}s-ui${N}"
   echo -e "  sout 唤起命令: ${C}sout${N}"
   echo

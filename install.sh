@@ -471,7 +471,8 @@ if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$
   echo "  [s-ui (Sing-Box) 节点面板]"
   echo "  s-ui 面板:  https://${c_dom}/${c_sui_p}/"
   echo "  s-ui 用户名:  ${c_sui_u:-admin}"
-  echo "  s-ui 密码:    ${c_sui_w:-见 caddy_meta.json}"
+  echo "  s-ui 密  码:  [由您在 s-ui 中设置，已安全加密]"
+  echo "  💡 提示:      如遗忘密码，可在终端运行 s-ui 随时重置"
   echo "  订阅链接:    https://${c_dom}/${c_sub_p}/"
   echo "  s-ui 唤起命令:  s-ui"
   echo "================================================================"
@@ -479,7 +480,6 @@ if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$
 else
   # 读取 s-ui 独立模式下的端口、路径与管理员账号密码
   sui_u="admin"
-  sui_p=""
   sui_port="8443"
   sui_path="/app/"
   sui_db="/usr/local/s-ui/db/s-ui.db"
@@ -490,24 +490,11 @@ else
       [[ -n "$local_p_val" ]] && sui_port="$local_p_val"
       local_path_val=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPath' LIMIT 1;" 2>/dev/null || true)
       [[ -n "$local_path_val" ]] && sui_path="$local_path_val"
+    elif command -v python3 >/dev/null 2>&1; then
+      sui_u=$(python3 -c "import sqlite3; con=sqlite3.connect('$sui_db'); cur=con.cursor(); r=cur.execute('SELECT username FROM users LIMIT 1').fetchone(); print(r[0] if r else 'admin'); con.close()" 2>/dev/null || echo "admin")
     fi
   fi
   [[ -z "$sui_u" ]] && sui_u="admin"
-
-  if [[ -f "${WORK_DIR}/sui_pass" ]]; then
-    sui_p=$(cat "${WORK_DIR}/sui_pass" 2>/dev/null || true)
-  fi
-
-  # 保证无论何时安装完成，都有确定的明文密码可以展示并登录
-  if [[ -z "$sui_p" && -x /usr/local/s-ui/sui ]]; then
-    sui_p=$(head -c 8 /dev/urandom | xxd -p | head -c 10)
-    echo "$sui_p" > "${WORK_DIR}/sui_pass"
-    chmod 600 "${WORK_DIR}/sui_pass"
-    echo "$sui_u" > "${WORK_DIR}/sui_user"
-    chmod 600 "${WORK_DIR}/sui_user"
-    /usr/local/s-ui/sui admin -username "$sui_u" -password "$sui_p" >/dev/null 2>&1 || true
-  fi
-  [[ -z "$sui_p" ]] && sui_p="(可通过 s-ui 命令重置)"
 
   sui_path="/${sui_path#/}"
   [[ "$sui_path" != */ ]] && sui_path="${sui_path}/"
@@ -525,7 +512,8 @@ else
     echo "  [s-ui (Sing-Box) 节点面板]"
     echo "  s-ui 面板:  http://${IP}:${sui_port}${sui_path}"
     echo "  s-ui 用户名:  ${sui_u}"
-    echo "  s-ui 密码:    ${sui_p}"
+    echo "  s-ui 密  码:  [由您在 s-ui 中设置，已安全加密]"
+    echo "  💡 提示:      如遗忘密码，可在终端运行 s-ui 随时重置"
     echo "  s-ui 唤起命令:  s-ui"
   fi
   echo "================================================================"

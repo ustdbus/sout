@@ -465,7 +465,8 @@ METAEOF
   echo -e "  [2] s-ui 节点与分流管理面板"
   echo -e "      访问地址:  ${B}https://${domain}/${sui_path}/${N}"
   echo -e "      管理账号:  ${Y}${sui_admin_user}${N}"
-  echo -e "      管理密码:  ${Y}${sui_admin_pass}${N}"
+  echo -e "      管理密码:  ${D}[由您在 s-ui 中设置，已安全加密]${N}"
+  echo -e "      💡 提示:   ${D}如遗忘密码，可在终端运行 s-ui 随时重置${N}"
   echo
   echo -e "  [3] s-ui 客户端订阅地址:  ${B}https://${domain}/${sub_path}/${N}"
   echo -e "  [4] VLESS+WS+CDN 节点:    ${B}wss://${domain}:443/${ws_path}${N}"
