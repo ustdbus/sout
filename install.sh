@@ -348,8 +348,9 @@ done
 
 # 可选：询问用户是否立即配置 Caddy 4合1 反代
 caddy_prompt=""
+echo
+echo "  💡 提示：如果是 NAT 机（共享IP/端口映射小鸡），建议使用 Caddy 一键反代（4合1共用443端口）"
 if [[ -t 0 ]]; then
-  echo
   read -rp "  是否立即配置 Caddy 4合1 反代（共用 443 端口 + 自动申请与托管证书）？[y/N]: " caddy_prompt
 else
   if [[ -c /dev/tty ]]; then

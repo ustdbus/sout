@@ -158,6 +158,7 @@ setup_caddy_proxy() {
   cat > /etc/caddy/Caddyfile <<EOF
 {
     admin off
+    default_sni ${domain}
     storage file_system {
         root /var/lib/caddy
     }
@@ -170,23 +171,23 @@ setup_caddy_proxy() {
     }
 }
 
-https://${domain}:443 {
+:443, ${domain}:443 {
     tls {
         dns cloudflare ${cf_token}
     }
 
     # 1. sout 动态家宽管理面板
-    handle /${sout_path}/* {
+    handle /${sout_path}* {
         reverse_proxy 127.0.0.1:${sout_port}
     }
 
     # 2. s-ui 节点管理面板
-    handle /${sui_path}/* {
+    handle /${sui_path}* {
         reverse_proxy 127.0.0.1:${sui_port}
     }
 
     # 3. s-ui 订阅端口
-    handle /${sub_path}/* {
+    handle /${sub_path}* {
         reverse_proxy 127.0.0.1:${sub_port}
     }
 
@@ -247,7 +248,7 @@ else:
     cur.execute('INSERT INTO tls (name, server, client) VALUES (?, ?, ?)', ('mytls', server_blob, client_blob))
     tls_id = cur.lastrowid
 
-# 2. 更新 settings
+# 2. 更新 settings (由 Caddy 统一终结 TLS，s-ui 内部使用纯 HTTP)
 settings_map = {
     'webPort': str(sui_port),
     'webListen': '127.0.0.1',
@@ -257,8 +258,10 @@ settings_map = {
     'subListen': '127.0.0.1',
     'subPath': sub_path,
     'subURI': f'https://{domain}{sub_path}',
-    'webCertFile': f'/home/acme/{domain}/fullchain.pem',
-    'webKeyFile': f'/home/acme/{domain}/privkey.pem'
+    'webCertFile': '',
+    'webKeyFile': '',
+    'subCertFile': '',
+    'subKeyFile': ''
 }
 
 for k, v in settings_map.items():
