@@ -1032,7 +1032,7 @@ setup_caddy_proxy() {
     auto_https off
 }
 
-http://127.0.0.1:${tunnel_port} {
+:${tunnel_port} {
     redir /${sout_path} /${sout_path}/ 308
     redir /${sui_path} /${sui_path}/ 308
     redir /${sub_path} /${sub_path}/ 308
