@@ -69,7 +69,7 @@ cleanup_sout() {
 WANT_TUNNEL="n"
 TUNNEL_DOMAIN=""
 TUNNEL_TOKEN=""
-TUNNEL_PORT="8080"
+TUNNEL_PORT="8081"
 
 ask_tunnel_setup() {
   echo
@@ -90,20 +90,20 @@ ask_tunnel_setup() {
     echo
     echo "  [Cloudflare 隧道参数设置]"
     if [[ -t 0 ]]; then
-      read -rp "  1. 请输入您的访问域名 (如 djj.20023.bond): " TUNNEL_DOMAIN
+      read -rp "  1. 请输入您的访问域名 (如 example.com): " TUNNEL_DOMAIN
       read -rp "  2. 请输入 Cloudflare 隧道 Token (eyJh...): " TUNNEL_TOKEN
-      read -rp "  3. 请输入本地回源端口 [默认 8080]: " TUNNEL_PORT
+      read -rp "  3. 请输入本地回源端口 [默认 8081]: " TUNNEL_PORT
     else
       if [[ -c /dev/tty ]]; then
-        read -rp "  1. 请输入您的访问域名 (如 djj.20023.bond): " TUNNEL_DOMAIN < /dev/tty
+        read -rp "  1. 请输入您的访问域名 (如 example.com): " TUNNEL_DOMAIN < /dev/tty
         read -rp "  2. 请输入 Cloudflare 隧道 Token (eyJh...): " TUNNEL_TOKEN < /dev/tty
-        read -rp "  3. 请输入本地回源端口 [默认 8080]: " TUNNEL_PORT < /dev/tty
+        read -rp "  3. 请输入本地回源端口 [默认 8081]: " TUNNEL_PORT < /dev/tty
       fi
     fi
     TUNNEL_DOMAIN=$(echo "$TUNNEL_DOMAIN" | tr -d ' \r\n')
     TUNNEL_TOKEN=$(echo "$TUNNEL_TOKEN" | tr -d ' \r\n')
     TUNNEL_PORT=$(echo "$TUNNEL_PORT" | tr -d ' \r\n')
-    TUNNEL_PORT="${TUNNEL_PORT:-8080}"
+    TUNNEL_PORT="${TUNNEL_PORT:-8081}"
     if [[ -z "$TUNNEL_DOMAIN" || -z "$TUNNEL_TOKEN" ]]; then
       echo "  [!] 域名或 Token 不能为空，已取消隧道预配置，后续可通过 sout caddy 随时配置。"
       WANT_TUNNEL="n"
@@ -439,7 +439,7 @@ if [[ "$WANT_TUNNEL" == "y" && -n "$TUNNEL_DOMAIN" && -n "$TUNNEL_TOKEN" ]]; the
   echo
   echo "  [+] 正在根据第一步输入的参数配置 Cloudflare 隧道 4合1 反代..."
   if [[ -x /usr/local/bin/sout ]]; then
-    bash -c "source /usr/local/bin/sout; setup_caddy_proxy '$TUNNEL_DOMAIN' '$TUNNEL_TOKEN' '$TUNNEL_PORT'" || true
+    /usr/local/bin/sout setup_tunnel "$TUNNEL_DOMAIN" "$TUNNEL_TOKEN" "$TUNNEL_PORT"
   fi
 fi
 

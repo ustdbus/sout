@@ -204,7 +204,7 @@ show_info() {
     c_sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4 || echo "sub")
     local c_tun_p
     c_tun_p=$(grep -oE '"tunnel_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ' || echo "8080")
-    [[ -z "$c_tun_p" ]] && c_tun_p="8080"
+    [[ -z "$c_tun_p" ]] && c_tun_p="8081"
 
     local cf_st="未运行"
     if [[ $(systemctl is-active cloudflared 2>/dev/null || echo "") == "active" ]]; then
@@ -949,11 +949,11 @@ After=network.target network-online.target
 Wants=network-online.target
 
 [Service]
-Type=notify
-TimeoutStartSec=0
+Type=simple
 ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate run --token ${token}
-Restart=on-failure
+Restart=always
 RestartSec=5s
+LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
@@ -999,7 +999,7 @@ is_caddy_enabled() {
 setup_caddy_proxy() {
   local domain="$1"
   local tunnel_token="$2"
-  local tunnel_port="${3:-8080}"
+  local tunnel_port="${3:-8081}"
 
   echo
   echo -e "${B}================================================================${N}"
@@ -1373,7 +1373,7 @@ caddy_interactive_setup() {
   echo -e "${D}----------------------------------------------------------------${N}"
   
   local domain tunnel_token tunnel_port
-  read -rp "  1. 请输入您的访问域名 (如 djj.20023.bond): " domain
+  read -rp "  1. 请输入您的访问域名 (如 example.com): " domain
   domain=$(echo "$domain" | tr -d ' 
 ')
   [[ -z "$domain" ]] && { echo -e "  ${R}域名不能为空！${N}"; return 1; }
@@ -1385,11 +1385,11 @@ caddy_interactive_setup() {
   [[ -z "$tunnel_token" ]] && { echo -e "  ${R}隧道 Token 不能为空！${N}"; return 1; }
 
   echo
-  echo -e "  ${D}💡 本地回源端口用于 cloudflared 将流量转发至本地 Caddy，默认 8080 即可${N}"
-  read -rp "  3. 请输入本地回源端口 [默认 8080]: " tunnel_port
+  echo -e "  ${D}💡 本地回源端口用于 cloudflared 将流量转发至本地 Caddy，默认 8081 即可${N}"
+  read -rp "  3. 请输入本地回源端口 [默认 8081]: " tunnel_port
   tunnel_port=$(echo "$tunnel_port" | tr -d ' 
 ')
-  tunnel_port="${tunnel_port:-8080}"
+  tunnel_port="${tunnel_port:-8081}"
 
   setup_caddy_proxy "$domain" "$tunnel_token" "$tunnel_port"
 }
@@ -1409,7 +1409,7 @@ caddy_menu() {
       dom=$(grep -oE '"domain"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" | cut -d'"' -f4)
       local tun_p
       tun_p=$(grep -oE '"tunnel_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
-      [[ -z "$tun_p" ]] && tun_p="8080"
+      [[ -z "$tun_p" ]] && tun_p="8081"
 
       echo -e "  反代状态:      ${G}已开启 (Cloudflare 隧道模式)${N}"
       echo -e "  隧道服务:      $([[ "$cf_st" == "active" ]] && echo -e "${G}运行中${N}" || echo -e "${R}已停止(${cf_st})${N}")"
@@ -1520,6 +1520,10 @@ menu() {
 need_root
 
 case "${1:-}" in
+  setup_tunnel|setup_caddy)
+    shift
+    setup_caddy_proxy "$@"
+    ;;
   start)     svc_start ;;
   stop)      svc_stop ;;
   restart)   svc_restart ;;
