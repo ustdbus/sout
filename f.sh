@@ -583,11 +583,17 @@ uninstall_sout_only() {
   # 清理 s-ui 中所有 sout 生成的出入站与路由
   cleanup_sui
 
+  # 清理 Caddy 反代 (若由本脚本配置)
+  systemctl stop caddy 2>/dev/null || true
+  systemctl disable caddy 2>/dev/null || true
+  rm -f /etc/systemd/system/caddy.service 2>/dev/null || true
+  rm -rf /etc/caddy /var/lib/caddy /var/log/caddy /usr/local/bin/caddy /home/acme 2>/dev/null || true
+
   rm -f "/etc/systemd/system/sout.service" "/etc/systemd/system/fanout.service" "/etc/init.d/sout" "/etc/init.d/fanout"
   rm -f "$BIN" /usr/local/bin/sout /usr/local/bin/fanout /usr/local/bin/f /usr/local/bin/sout-cli
   rm -rf "$WORK_DIR" /var/lib/sout /var/lib/fanout 2>/dev/null || true
   svc_reload
-  echo -e "  ${G}[✓] sout 已卸载完成，所有由 sout 创建的出入站已全部清理，s-ui 面板保持原样！${N}"
+  echo -e "  ${G}[✓] sout 已卸载完成，所有由 sout 创建的出入站及 Caddy 反代已全部清理，s-ui 面板保持原样！${N}"
   exit 0
 }
 
@@ -626,6 +632,12 @@ uninstall_all() {
     ip link del "$l" 2>/dev/null || true
   done
 
+  # 清理 Caddy 反代
+  systemctl stop caddy 2>/dev/null || true
+  systemctl disable caddy 2>/dev/null || true
+  rm -f /etc/systemd/system/caddy.service 2>/dev/null || true
+  rm -rf /etc/caddy /var/lib/caddy /var/log/caddy /usr/local/bin/caddy /home/acme 2>/dev/null || true
+
   # 清理 sout 二进制与工作目录
   rm -f "/etc/systemd/system/sout.service" "/etc/systemd/system/fanout.service" "/etc/init.d/sout" "/etc/init.d/fanout"
   rm -f "$BIN" /usr/local/bin/sout /usr/local/bin/fanout /usr/local/bin/f /usr/local/bin/sout-cli
@@ -641,7 +653,7 @@ uninstall_all() {
   rm -f /usr/bin/s-ui /usr/local/bin/s-ui /usr/bin/sui /usr/local/bin/sui 2>/dev/null || true
 
   svc_reload
-  echo -e "  ${G}[✓] sout 与 s-ui 已全部彻底卸载完成！${N}"
+  echo -e "  ${G}[✓] sout 与 s-ui 及 Caddy 反代已全部彻底卸载完成！${N}"
   exit 0
 }
 
@@ -1389,10 +1401,10 @@ menu() {
     echo -e "   7) 修改面板端口      8) 修改监听地址"
     echo -e "   9) 重置访问口令     10) 重置访问路径"
     echo -e "  11) 面板 URL 设置    12) SSL / HTTPS 设置"
-    echo -e "  13) Caddy 4合1反代   14) 检查/更新版本"
-    echo -e "  15) 卸载             0) 退出脚本"
+    echo -e "  13) 检查/更新版本    14) 卸载"
+    echo -e "   0) 退出脚本"
     echo -e "${D}----------------------------------------${N}"
-    read -rp "  请选择 [0-15]: " choice
+    read -rp "  请选择 [0-14]: " choice
 
     case "$choice" in
       1) svc_start   && echo -e "\n  ${G}已启动${N}"; pause ;;
@@ -1415,9 +1427,8 @@ menu() {
       10) reset_basepath; pause ;;
       11) change_panel_url; pause ;;
       12) change_ssl; pause ;;
-      13) caddy_menu ;;
-      14) check_and_update; pause ;;
-      15) do_uninstall; pause ;;
+      13) check_and_update; pause ;;
+      14) do_uninstall; pause ;;
       0) exit 0 ;;
       *) ;;
     esac

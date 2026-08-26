@@ -50,8 +50,14 @@ cleanup_sout() {
     rc-update del fanout default 2>/dev/null || true
     rm -f /etc/init.d/sout /etc/init.d/fanout
   fi
+  # 停止并清理 Caddy
+  systemctl stop caddy 2>/dev/null || true
+  systemctl disable caddy 2>/dev/null || true
+  rm -f /etc/systemd/system/caddy.service 2>/dev/null || true
+  rm -rf /etc/caddy /var/lib/caddy /var/log/caddy /usr/local/bin/caddy /home/acme 2>/dev/null || true
+
   rm -f "$BIN" /usr/local/bin/sout-server /usr/local/bin/fanout /usr/local/bin/f /usr/local/bin/sout /usr/local/bin/sout-cli 2>/dev/null || true
-  echo "      sout 已清理完毕。"
+  echo "      sout 及相关组件已清理完毕。"
 }
 
 SUI_INSTALLED_BY_US=0
