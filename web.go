@@ -335,6 +335,21 @@ select:focus,input:focus{outline:none;border-color:var(--accent)}
         <input id="setPanelUrl" type="text" placeholder="如 https://example.com 或 https://example.com/"></label>
 
       <div style="border-top:1px solid var(--line);margin-top:14px;padding-top:14px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;font-size:13px;user-select:none">
+          <input type="checkbox" id="setSSLEnabled" style="width:16px;height:16px;cursor:pointer">
+          <span>开启 SSL (HTTPS 安全连接)</span>
+        </label>
+        <div id="sslConfigBox" style="display:none;margin-top:10px">
+          <label class="f"><span>域名</span>
+            <input id="setSSLDomain" type="text" placeholder="如 sout.example.com"></label>
+          <label class="f"><span>SSL 密钥 (Key) 路径</span>
+            <input id="setSSLKey" type="text" placeholder="如 /etc/s-ui/cert/private.key 或 /root/cert/key.pem"></label>
+          <label class="f"><span>SSL 证书 (cert) 路径</span>
+            <input id="setSSLCert" type="text" placeholder="如 /etc/s-ui/cert/fullchain.pem 或 /root/cert/cert.crt"></label>
+        </div>
+      </div>
+
+      <div style="border-top:1px solid var(--line);margin-top:14px;padding-top:14px">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
           <div>
             <div style="font-weight:600;font-size:13px">版本与系统更新</div>
@@ -847,6 +862,10 @@ $('#stopAllExitsBtn').onclick = async () => {
   poll();
 };
 
+$('#setSSLEnabled').onchange = () => {
+  $('#sslConfigBox').style.display = $('#setSSLEnabled').checked ? 'block' : 'none';
+};
+
 $('#settingsBtn').onclick = async () => {
   openModal('settingsModal');
   try{
@@ -855,6 +874,11 @@ $('#settingsBtn').onclick = async () => {
     $('#setPort').value = s.port || '';
     $('#setListen').value = (s.listen_addr === '127.0.0.1') ? '127.0.0.1' : '0.0.0.0';
     $('#setPanelUrl').value = s.panel_url || '';
+    $('#setSSLEnabled').checked = !!s.ssl_enabled;
+    $('#sslConfigBox').style.display = s.ssl_enabled ? 'block' : 'none';
+    $('#setSSLDomain').value = s.ssl_domain || '';
+    $('#setSSLKey').value = s.ssl_key || '';
+    $('#setSSLCert').value = s.ssl_cert || '';
   }catch(e){}
 };
 
@@ -868,6 +892,10 @@ $('#saveSettingsBtn').onclick = async e => {
   if(port) body.port = port;
   body.listen_addr = $('#setListen').value;
   body.panel_url = $('#setPanelUrl').value.trim();
+  body.ssl_enabled = $('#setSSLEnabled').checked;
+  body.ssl_domain = $('#setSSLDomain').value.trim();
+  body.ssl_key = $('#setSSLKey').value.trim();
+  body.ssl_cert = $('#setSSLCert').value.trim();
   try{
     await api('/api/settings', {
       method:'POST',
@@ -876,6 +904,14 @@ $('#saveSettingsBtn').onclick = async e => {
     });
     toast('设置已保存');
     closeModal('settingsModal');
+    if(body.ssl_enabled && location.protocol === 'http:'){
+      setTimeout(() => {
+        const host = body.ssl_domain || location.hostname;
+        const p = body.port || location.port;
+        const bp = (body.base_path ? '/' + body.base_path.replace(/^\/+|\/+$/g, '') : '') + '/';
+        location.href = 'https://' + host + (p && p != 443 ? ':' + p : '') + bp;
+      }, 1200);
+    }
   }catch(err){ toast(err.message, true); }
   e.target.disabled = false;
 };

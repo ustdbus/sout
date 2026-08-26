@@ -173,7 +173,7 @@ func main() {
 	mux.HandleFunc("/api/update/check", apiUpdateCheck)
 	mux.HandleFunc("/api/update/apply", apiUpdateApply)
 
-	log.Printf("管理界面: http://<本机IP>%s%s/", webCfg.listenAddrString(), currentBasePath())
+	log.Printf("管理界面: %s://<本机IP>%s%s/", webCfg.schemeString(), webCfg.listenAddrString(), currentBasePath())
 	log.Printf("SOCKS5 端口在 %d-%d 之间随机分配", randPortMin, randPortMax)
 	if err := srv.serve(); err != nil {
 		log.Fatal(err)
@@ -345,6 +345,10 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 		Port       *int    `json:"port"`
 		ListenAddr *string `json:"listen_addr"`
 		PanelURL   *string `json:"panel_url"`
+		SSLEnabled *bool   `json:"ssl_enabled"`
+		SSLDomain  *string `json:"ssl_domain"`
+		SSLCert    *string `json:"ssl_cert"`
+		SSLKey     *string `json:"ssl_key"`
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
@@ -375,13 +379,25 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 				webSettingsMu.Unlock()
 				_ = saveWebSettings()
 			}
-			if in.Port != nil || in.ListenAddr != nil {
+			if in.Port != nil || in.ListenAddr != nil || in.SSLEnabled != nil || in.SSLDomain != nil || in.SSLCert != nil || in.SSLKey != nil {
 				next := getWebSettings()
 				if in.Port != nil {
 					next.Port = *in.Port
 				}
 				if in.ListenAddr != nil {
 					next.ListenAddr = *in.ListenAddr
+				}
+				if in.SSLEnabled != nil {
+					next.SSLEnabled = *in.SSLEnabled
+				}
+				if in.SSLDomain != nil {
+					next.SSLDomain = strings.TrimSpace(*in.SSLDomain)
+				}
+				if in.SSLCert != nil {
+					next.SSLCert = strings.TrimSpace(*in.SSLCert)
+				}
+				if in.SSLKey != nil {
+					next.SSLKey = strings.TrimSpace(*in.SSLKey)
 				}
 				if err := srv.applyWebSettings(next); err != nil {
 					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -400,6 +416,11 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 			"port":         cfg.Port,
 			"listen_addr":  listen,
 			"panel_url":    cfg.PanelURL,
+			"ssl_enabled":  cfg.SSLEnabled,
+			"ssl_domain":   cfg.SSLDomain,
+			"ssl_cert":     cfg.SSLCert,
+			"ssl_key":      cfg.SSLKey,
+			"scheme":       cfg.schemeString(),
 			"has_password": true,
 			"version":      version,
 		})

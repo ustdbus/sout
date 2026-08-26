@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -11,11 +12,15 @@ import (
 	"sync"
 )
 
-// WebSettings 是面板的可持久化配置（端口、监听地址、自定义面板 URL 等）
+// WebSettings 是面板的可持久化配置（端口、监听地址、自定义面板 URL、SSL/HTTPS 等）
 type WebSettings struct {
 	Port       int    `json:"port"`
 	ListenAddr string `json:"listen_addr"`
 	PanelURL   string `json:"panel_url,omitempty"`
+	SSLEnabled bool   `json:"ssl_enabled"`
+	SSLDomain  string `json:"ssl_domain,omitempty"`
+	SSLCert    string `json:"ssl_cert,omitempty"`
+	SSLKey     string `json:"ssl_key,omitempty"`
 }
 
 var (
@@ -101,4 +106,29 @@ func validatePort(p int) error {
 
 func (s WebSettings) listenAddrString() string {
 	return net.JoinHostPort(s.ListenAddr, strconv.Itoa(s.Port))
+}
+
+func (s WebSettings) schemeString() string {
+	if s.SSLEnabled {
+		return "https"
+	}
+	return "http"
+}
+
+func validateSSL(certPath, keyPath string) error {
+	certPath = strings.TrimSpace(certPath)
+	keyPath = strings.TrimSpace(keyPath)
+	if certPath == "" || keyPath == "" {
+		return fmt.Errorf("开启 SSL 必须提供证书 (cert) 和私钥 (key) 文件路径")
+	}
+	if _, err := os.Stat(certPath); err != nil {
+		return fmt.Errorf("证书文件不存在或无法读取: %w", err)
+	}
+	if _, err := os.Stat(keyPath); err != nil {
+		return fmt.Errorf("私钥文件不存在或无法读取: %w", err)
+	}
+	if _, err := tls.LoadX509KeyPair(certPath, keyPath); err != nil {
+		return fmt.Errorf("证书或私钥格式解析失败: %w", err)
+	}
+	return nil
 }

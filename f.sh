@@ -59,6 +59,43 @@ web_panel_url() {
   echo ""
 }
 
+web_ssl_enabled() {
+  if [[ -f "$WORK_DIR/settings.json" ]]; then
+    if grep -q '"ssl_enabled"[[:space:]]*:[[:space:]]*true' "$WORK_DIR/settings.json"; then
+      echo "true"
+      return
+    fi
+  fi
+  echo "false"
+}
+
+web_ssl_domain() {
+  if [[ -f "$WORK_DIR/settings.json" ]]; then
+    local d
+    d=$(grep -oE '"ssl_domain"[[:space:]]*:[[:space:]]*"[^"]*"' "$WORK_DIR/settings.json" | cut -d'"' -f4)
+    [[ -n "$d" ]] && { echo "$d"; return; }
+  fi
+  echo ""
+}
+
+web_ssl_cert() {
+  if [[ -f "$WORK_DIR/settings.json" ]]; then
+    local c
+    c=$(grep -oE '"ssl_cert"[[:space:]]*:[[:space:]]*"[^"]*"' "$WORK_DIR/settings.json" | cut -d'"' -f4)
+    [[ -n "$c" ]] && { echo "$c"; return; }
+  fi
+  echo ""
+}
+
+web_ssl_key() {
+  if [[ -f "$WORK_DIR/settings.json" ]]; then
+    local k
+    k=$(grep -oE '"ssl_key"[[:space:]]*:[[:space:]]*"[^"]*"' "$WORK_DIR/settings.json" | cut -d'"' -f4)
+    [[ -n "$k" ]] && { echo "$k"; return; }
+  fi
+  echo ""
+}
+
 web_password() {
   if [[ -f "$WORK_DIR/password" ]]; then
     cat "$WORK_DIR/password" | tr -d ' \r\n'
@@ -88,7 +125,7 @@ pause() {
 }
 
 show_info() {
-  local st la port bp pw pip purl full_url
+  local st la port bp pw pip purl full_url ssl_en ssl_dom scheme
   st=$(svc_status)
   la=$(web_listen_addr)
   port=$(web_port)
@@ -96,6 +133,11 @@ show_info() {
   pw=$(web_password)
   pip=$(public_ip)
   purl=$(web_panel_url)
+  ssl_en=$(web_ssl_enabled)
+  ssl_dom=$(web_ssl_domain)
+
+  scheme="http"
+  [[ "$ssl_en" == "true" ]] && scheme="https"
 
   # 规范化路径与面板基础 URL
   bp="/${bp#/}"
@@ -127,21 +169,29 @@ show_info() {
   else
     echo -e "  面板对接:    ${R}未检测到 s-ui 面板${N}"
   fi
+
+  if [[ "$ssl_en" == "true" ]]; then
+    echo -e "  SSL 加密:    ${G}已开启 (HTTPS)${N}"
+  else
+    echo -e "  SSL 加密:    ${D}未开启 (HTTP)${N}"
+  fi
   
   if [[ "$la" == "127.0.0.1" ]]; then
     echo -e "  监听地址:    ${Y}127.0.0.1 (本地反向代理模式)${N}"
     if [[ -n "$full_url" ]]; then
       echo -e "  本地地址:    ${B}${full_url}${N}"
     else
-      echo -e "  本地地址:    ${B}http://127.0.0.1:${port}${bp}${N}"
+      echo -e "  本地地址:    ${B}${scheme}://127.0.0.1:${port}${bp}${N}"
       echo -e "  公网访问:    ${D}(仅能通过您配置的反向代理域名访问)${N}"
     fi
   else
     echo -e "  监听地址:    ${G}0.0.0.0 (所有公网网卡)${N}"
     if [[ -n "$full_url" ]]; then
       echo -e "  管理面板:    ${B}${full_url}${N}"
+    elif [[ "$ssl_en" == "true" && -n "$ssl_dom" ]]; then
+      echo -e "  管理面板:    ${B}https://${ssl_dom}:${port}${bp}${N}"
     else
-      echo -e "  管理面板:    ${B}http://${pip}:${port}${bp}${N}"
+      echo -e "  管理面板:    ${B}${scheme}://${pip}:${port}${bp}${N}"
     fi
   fi
   echo -e "  访问口令:    ${Y}${pw}${N}"
@@ -305,6 +355,128 @@ reset_basepath() {
     svc_restart
   fi
   echo -e "  ${G}新路径: /${bp}/${N}"
+}
+
+change_ssl() {
+  local cur_en cur_dom cur_cert cur_key
+  cur_en=$(web_ssl_enabled)
+  cur_dom=$(web_ssl_domain)
+  cur_cert=$(web_ssl_cert)
+  cur_key=$(web_ssl_key)
+
+  echo
+  echo -e "${B}========================================${N}"
+  echo -e "${B}  sout 原生 SSL / HTTPS 设置${N}"
+  echo -e "${B}========================================${N}"
+  if [[ "$cur_en" == "true" ]]; then
+    echo -e "  当前状态:      ${G}已开启 SSL (HTTPS)${N}"
+    echo -e "  域名:          ${B}${cur_dom:-(未设置)}${N}"
+    echo -e "  证书 (cert):   ${B}${cur_cert}${N}"
+    echo -e "  私钥 (key):    ${B}${cur_key}${N}"
+    echo -e "${D}----------------------------------------${N}"
+    echo "  1) 关闭 SSL (切换回 HTTP)"
+    echo "  2) 修改证书与私钥路径"
+    echo "  3) 修改域名"
+    echo "  0) 返回主菜单"
+    echo
+    read -rp "  请选择 [0-3]: " opt
+    case "$opt" in
+      1)
+        python3 -c "
+import json, os
+path = '$WORK_DIR/settings.json'
+data = {}
+if os.path.exists(path):
+    with open(path) as f: data = json.load(f)
+data['ssl_enabled'] = False
+with open(path, 'w') as f: json.dump(data, f, indent=2)
+"
+        svc_restart
+        echo -e "  ${Y}已关闭 SSL，面板已切换回 HTTP 访问${N}"
+        ;;
+      2)
+        echo
+        read -rp "  请输入新 SSL 证书 (cert) 绝对路径: " new_cert
+        read -rp "  请输入新 SSL 私钥 (key) 绝对路径: " new_key
+        [[ -z "$new_cert" || -z "$new_key" ]] && { echo "  路径不能为空，未修改"; return; }
+        if [[ ! -f "$new_cert" ]]; then
+          echo -e "  ${R}证书文件不存在: ${new_cert}${N}"
+          return
+        fi
+        if [[ ! -f "$new_key" ]]; then
+          echo -e "  ${R}私钥文件不存在: ${new_key}${N}"
+          return
+        fi
+        python3 -c "
+import json, os
+path = '$WORK_DIR/settings.json'
+data = {}
+if os.path.exists(path):
+    with open(path) as f: data = json.load(f)
+data['ssl_cert'] = '$new_cert'
+data['ssl_key'] = '$new_key'
+with open(path, 'w') as f: json.dump(data, f, indent=2)
+"
+        svc_restart
+        echo -e "  ${G}SSL 证书路径已更新并重启生效${N}"
+        ;;
+      3)
+        echo
+        read -rp "  请输入新域名 (如 sout.example.com): " new_dom
+        python3 -c "
+import json, os
+path = '$WORK_DIR/settings.json'
+data = {}
+if os.path.exists(path):
+    with open(path) as f: data = json.load(f)
+data['ssl_domain'] = '$new_dom'
+with open(path, 'w') as f: json.dump(data, f, indent=2)
+"
+        svc_restart
+        echo -e "  ${G}域名已更新为: ${new_dom}${N}"
+        ;;
+      *) ;;
+    esac
+  else
+    echo -e "  当前状态:      ${D}未开启 SSL (当前为 HTTP)${N}"
+    echo -e "${D}----------------------------------------${N}"
+    echo "  1) 开启 SSL (HTTPS)"
+    echo "  0) 返回主菜单"
+    echo
+    read -rp "  请选择 [0-1]: " opt
+    if [[ "$opt" == "1" ]]; then
+      echo
+      read -rp "  请输入绑定域名 (如 sout.example.com，可选留空): " new_dom
+      read -rp "  请输入 SSL 证书 (cert) 绝对路径: " new_cert
+      read -rp "  请输入 SSL 私钥 (key) 绝对路径: " new_key
+      if [[ -z "$new_cert" || -z "$new_key" ]]; then
+        echo -e "  ${R}证书与私钥路径不能为空！${N}"
+        return
+      fi
+      if [[ ! -f "$new_cert" ]]; then
+        echo -e "  ${R}证书文件不存在: ${new_cert}${N}"
+        return
+      fi
+      if [[ ! -f "$new_key" ]]; then
+        echo -e "  ${R}私钥文件不存在: ${new_key}${N}"
+        return
+      fi
+      python3 -c "
+import json, os
+path = '$WORK_DIR/settings.json'
+data = {}
+if os.path.exists(path):
+    with open(path) as f: data = json.load(f)
+data['ssl_enabled'] = True
+data['ssl_domain'] = '$new_dom'
+data['ssl_cert'] = '$new_cert'
+data['ssl_key'] = '$new_key'
+with open(path, 'w') as f: json.dump(data, f, indent=2)
+"
+      svc_restart
+      echo -e "  ${G}🎉 SSL 已成功开启！面板已切换为 HTTPS 安全加密访问。${N}"
+    fi
+  fi
 }
 
 cleanup_sui() {
@@ -588,10 +760,11 @@ menu() {
     echo -e "   5) 开关开机自启      6) 查看出口隧道"
     echo -e "   7) 修改面板端口      8) 修改监听地址"
     echo -e "   9) 重置访问口令     10) 重置访问路径"
-    echo -e "  11) 面板 URL 设置    12) 检查/更新版本"
-    echo -e "  13) 卸载             0) 退出脚本"
+    echo -e "  11) 面板 URL 设置    12) SSL / HTTPS 设置"
+    echo -e "  13) 检查/更新版本    14) 卸载"
+    echo -e "   0) 退出脚本"
     echo -e "${D}----------------------------------------${N}"
-    read -rp "  请选择 [0-13]: " choice
+    read -rp "  请选择 [0-14]: " choice
 
     case "$choice" in
       1) svc_start   && echo -e "\n  ${G}已启动${N}"; pause ;;
@@ -613,8 +786,9 @@ menu() {
       9) reset_password; pause ;;
       10) reset_basepath; pause ;;
       11) change_panel_url; pause ;;
-      12) check_and_update; pause ;;
-      13) do_uninstall; pause ;;
+      12) change_ssl; pause ;;
+      13) check_and_update; pause ;;
+      14) do_uninstall; pause ;;
       0) exit 0 ;;
       *) ;;
     esac
@@ -633,12 +807,13 @@ case "${1:-}" in
   list)      list_tunnels ;;
   listen)    change_listen_addr ;;
   url)       change_panel_url ;;
+  ssl)       change_ssl ;;
   update)    check_and_update ;;
   upgrade)   check_and_update ;;
   uninstall) do_uninstall ;;
   "")        menu ;;
   *)
-    echo "用法: sout [start|stop|restart|status|log|info|list|listen|url|update|uninstall]"
+    echo "用法: sout [start|stop|restart|status|log|info|list|listen|url|ssl|update|uninstall]"
     echo "直接在终端输入 sout 即可进入交互控制菜单"
     ;;
 esac
