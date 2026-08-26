@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -371,18 +372,14 @@ func (t *Tunnel) handleCustomForward(clientConn net.Conn, targetAddr string) {
 	}
 	dstPort := int(portBuf[0])<<8 | int(portBuf[1])
 
-	// 3. 连接远端上游 SOCKS5 并完成转发
-	targetConn, err := net.DialTimeout("tcp", targetAddr, 8*time.Second)
+	// 3. 连接远端上游 SOCKS5 并完成握手
+	dstAddr := net.JoinHostPort(dstHost, strconv.Itoa(dstPort))
+	targetConn, err := dialSocks5(targetAddr, t.CustomUser, t.CustomPass, dstAddr, 15*time.Second)
 	if err != nil {
 		clientConn.Write([]byte{0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0}) // Host unreachable
 		return
 	}
 	defer targetConn.Close()
-
-	if err := socks5ClientHandshake(targetConn, t.CustomUser, t.CustomPass, dstHost, dstPort); err != nil {
-		clientConn.Write([]byte{0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
-		return
-	}
 
 	// 响应客户端 CONNECT 成功
 	clientConn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})

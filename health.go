@@ -3,9 +3,6 @@ package main
 import (
 	"fmt"
 	"log"
-	"os/exec"
-	"strconv"
-	"strings"
 	"time"
 )
 
