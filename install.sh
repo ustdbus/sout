@@ -346,24 +346,68 @@ for _ in $(seq 1 10); do
   sleep 1
 done
 
+# 可选：询问用户是否立即配置 Caddy 4合1 反代
+caddy_prompt=""
+if [[ -t 0 ]]; then
+  echo
+  read -rp "  是否立即配置 Caddy 4合1 反代（共用 443 端口 + 自动申请与托管证书）？[y/N]: " caddy_prompt
+else
+  if [[ -c /dev/tty ]]; then
+    read -rp "  是否立即配置 Caddy 4合1 反代（共用 443 端口 + 自动申请与托管证书）？[y/N]: " caddy_prompt < /dev/tty || caddy_prompt="n"
+  fi
+fi
+
+if [[ "${caddy_prompt,,}" == "y" || "${caddy_prompt,,}" == "yes" ]]; then
+  if [[ -x /usr/local/bin/sout ]]; then
+    if [[ -c /dev/tty ]]; then
+      /usr/local/bin/sout caddy < /dev/tty || true
+    else
+      /usr/local/bin/sout caddy || true
+    fi
+  fi
+fi
+
 IP=$(curl -s --max-time 8 http://api.ipify.org || echo "<服务器IP>")
 BP=$(cat "${WORK_DIR}/basepath" 2>/dev/null || true)
 ACTUAL_PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' \
   "${WORK_DIR}/settings.json" 2>/dev/null | head -1)
 [[ -n $ACTUAL_PORT ]] && WEB_PORT="$ACTUAL_PORT"
 
-echo
-echo "================================================================"
-echo "  🎉 sout 插件安装部署完成！"
-echo "================================================================"
-echo "  [sout 动态家宽出口插件]"
-echo "  管理面板:  http://${IP}:${WEB_PORT}/${BP}/"
-echo "  访问口令:  $(cat "${WORK_DIR}/password" 2>/dev/null || echo "见 ${WORK_DIR}/password")"
-echo "  终端管理:  在终端输入 sout 呼出插件管理菜单"
-echo
-if check_sui; then
+CADDY_META="${WORK_DIR}/caddy_meta.json"
+if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$CADDY_META"; then
+  c_dom=$(grep -oE '"domain"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+  c_sout_p=$(grep -oE '"sout_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+  c_sui_p=$(grep -oE '"sui_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+  c_sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+  echo
+  echo "================================================================"
+  echo "  🎉 sout 插件安装部署完成！(Caddy 4合1 反代模式)"
+  echo "================================================================"
+  echo "  [sout 动态家宽出口插件]"
+  echo "  管理面板:  https://${c_dom}/${c_sout_p}/"
+  echo "  访问口令:  $(cat "${WORK_DIR}/password" 2>/dev/null || echo "见 ${WORK_DIR}/password")"
+  echo "  终端管理:  在终端输入 sout 呼出插件管理菜单"
+  echo
   echo "  [s-ui (Sing-Box) 节点面板]"
-  echo "  终端管理:  在终端输入 s-ui 即可配置 s-ui 账号/端口与节点设置"
+  echo "  管理面板:  https://${c_dom}/${c_sui_p}/"
+  echo "  订阅地址:  https://${c_dom}/${c_sub_p}/"
+  echo "  终端管理:  在终端输入 s-ui 即可配置节点"
+  echo "================================================================"
+  echo
+else
+  echo
+  echo "================================================================"
+  echo "  🎉 sout 插件安装部署完成！"
+  echo "================================================================"
+  echo "  [sout 动态家宽出口插件]"
+  echo "  管理面板:  http://${IP}:${WEB_PORT}/${BP}/"
+  echo "  访问口令:  $(cat "${WORK_DIR}/password" 2>/dev/null || echo "见 ${WORK_DIR}/password")"
+  echo "  终端管理:  在终端输入 sout 呼出插件管理菜单"
+  echo
+  if check_sui; then
+    echo "  [s-ui (Sing-Box) 节点面板]"
+    echo "  终端管理:  在终端输入 s-ui 即可配置 s-ui 账号/端口与节点设置"
+  fi
+  echo "================================================================"
+  echo
 fi
-echo "================================================================"
-echo
