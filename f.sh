@@ -148,7 +148,7 @@ get_sui_user() {
 }
 
 show_info() {
-  local st la port bp pw pip purl full_url ssl_en ssl_dom scheme c_en c_dom c_sout_p c_sui_p c_sub_p
+  local st la port bp pw pip purl full_url ssl_en ssl_dom scheme c_en c_dom c_sout_p c_sui_p c_sub_p c_mode
   st=$(svc_status)
   la=$(web_listen_addr)
   port=$(web_port)
@@ -163,7 +163,6 @@ show_info() {
   scheme="http"
   [[ "$ssl_en" == "true" ]] && scheme="https"
 
-  # 规范化路径与面板基础 URL
   bp="/${bp#/}"
   [[ "$bp" != */ ]] && bp="${bp}/"
   if [[ -n "$purl" ]]; then
@@ -198,12 +197,13 @@ show_info() {
   sui_u=$(get_sui_user)
 
   if [[ "$c_en" == "true" ]]; then
+    c_mode=$(grep -oE '"mode"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4 || echo "tunnel")
     c_dom=$(grep -oE '"domain"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4 || echo "")
     c_sout_p=$(grep -oE '"sout_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4 || echo "sout")
     c_sui_p=$(grep -oE '"sui_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4 || echo "sui")
     c_sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4 || echo "sub")
     local c_tun_p
-    c_tun_p=$(grep -oE '"tunnel_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ' || echo "8080")
+    c_tun_p=$(grep -oE '"tunnel_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ' || echo "8081")
     [[ -z "$c_tun_p" ]] && c_tun_p="8081"
 
     local cf_st="未运行"
@@ -213,7 +213,17 @@ show_info() {
       cf_st="${R}未运行${N}"
     fi
 
-    echo -e "  反代模式:    ${G}Cloudflare 隧道 4合1 模式 (已开启)${N}"
+    # 如果是临时隧道，且记录域名失效/需要更新时，动态从 journalctl 抓取最新域名
+    if [[ "$c_mode" == "quick_tunnel" ]]; then
+      local real_d
+      real_d=$(journalctl -u cloudflared -n 50 --no-pager 2>/dev/null | grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' | tail -1 | sed 's|https://||' | tr -d ' 
+')
+      [[ -n "$real_d" ]] && c_dom="$real_d"
+      echo -e "  反代模式:    ${G}Cloudflare 官方免费临时隧道 4合1 (已开启)${N}"
+    else
+      echo -e "  反代模式:    ${G}Cloudflare 隧道 4合1 模式 (已开启)${N}"
+    fi
+
     echo -e "  隧道服务:    ${cf_st} (本地回源: 127.0.0.1:${c_tun_p})"
     echo -e "  管理面板:    ${B}https://${c_dom}/${c_sout_p}/${N}"
     echo -e "  访问口令:    ${Y}${pw}${N}"
@@ -248,7 +258,6 @@ show_info() {
     fi
     echo -e "  访问口令:    ${Y}${pw}${N}"
 
-    # 独立端口模式下展示 s-ui 面板地址与账号密码
     local sui_db="/usr/local/s-ui/db/s-ui.db"
     if [[ -f "$sui_db" || -x /usr/local/s-ui/sui ]]; then
       local sui_port="8443"
@@ -942,15 +951,18 @@ install_cloudflared_bin() {
 
 setup_cloudflared_service() {
   local token="$1"
-  cat > /etc/systemd/system/cloudflared.service <<EOF
+  local tun_p="${2:-8081}"
+
+  if [[ -n "$token" ]]; then
+    cat > /etc/systemd/system/cloudflared.service <<EOF
 [Unit]
-Description=Cloudflare Tunnel Agent
+Description=Cloudflare Named Tunnel Agent
 After=network.target network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate run --token ${token}
+ExecStart=/usr/local/bin/cloudflared tunnel --protocol http2 --no-autoupdate run --token ${token}
 Restart=always
 RestartSec=5s
 LimitNOFILE=65536
@@ -958,9 +970,40 @@ LimitNOFILE=65536
 [Install]
 WantedBy=multi-user.target
 EOF
+  else
+    cat > /etc/systemd/system/cloudflared.service <<EOF
+[Unit]
+Description=Cloudflare Quick Tunnel Agent
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/cloudflared tunnel --url http://127.0.0.1:${tun_p} --no-autoupdate
+Restart=always
+RestartSec=5s
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  fi
+
   systemctl daemon-reload
   systemctl enable cloudflared >/dev/null 2>&1 || true
   systemctl restart cloudflared
+}
+
+get_quick_tunnel_domain() {
+  local max_wait=20
+  local d=""
+  for ((i=1; i<=max_wait; i++)); do
+    d=$(journalctl -u cloudflared -n 50 --no-pager 2>/dev/null | grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' | tail -1 | sed 's|https://||' | tr -d ' 
+')
+    [[ -n "$d" ]] && break
+    sleep 1
+  done
+  echo "$d"
 }
 
 rand_local_port() {
@@ -997,13 +1040,22 @@ is_caddy_enabled() {
 }
 
 setup_caddy_proxy() {
-  local domain="$1"
-  local tunnel_token="$2"
+  local domain="${1:-}"
+  local tunnel_token="${2:-}"
   local tunnel_port="${3:-8081}"
+
+  local is_quick="false"
+  if [[ -z "$domain" && -z "$tunnel_token" ]]; then
+    is_quick="true"
+  fi
 
   echo
   echo -e "${B}================================================================${N}"
-  echo -e "${B}  正在配置 Cloudflare 隧道 4合1 统一反代...${N}"
+  if [[ "$is_quick" == "true" ]]; then
+    echo -e "${G}  正在配置 Cloudflare 官方免费临时隧道 (免域名 / 免Token)...${N}"
+  else
+    echo -e "${B}  正在配置 Cloudflare 隧道 4合1 统一反代 (${domain})...${N}"
+  fi
   echo -e "${B}================================================================${N}"
 
   # 1. 确保 Caddy 与 cloudflared 安装
@@ -1024,7 +1076,7 @@ setup_caddy_proxy() {
   sub_path=$(rand_safe_path "sub")
   ws_path=$(rand_safe_path "vlws")
 
-  # 3. 写入纯净本地 Caddyfile (监听 127.0.0.1:${tunnel_port}，无公网端口与证书负担)
+  # 3. 写入纯净本地 Caddyfile (双栈通配监听 :${tunnel_port})
   mkdir -p /etc/caddy /var/log/caddy /var/lib/caddy
   cat > /etc/caddy/Caddyfile <<EOF
 {
@@ -1068,32 +1120,23 @@ EOF
 
   echo -e "  [+] 正在启动本地 Caddy 分流服务与 Cloudflare 隧道..."
   systemctl restart caddy
-  setup_cloudflared_service "$tunnel_token"
-  sleep 2
+  setup_cloudflared_service "$tunnel_token" "$tunnel_port"
+
+  if [[ "$is_quick" == "true" ]]; then
+    echo -e "  [+] 正在等待 Cloudflare 分配免费临时域名..."
+    domain=$(get_quick_tunnel_domain)
+    if [[ -z "$domain" ]]; then
+      echo -e "  ${Y}[!] 暂未即时获取到临时域名，稍后可通过 sout 查看。${N}"
+      domain="临时隧道连接中.trycloudflare.com"
+    else
+      echo -e "  ${G}[✓] 成功获取免费临时域名: https://${domain}${N}"
+    fi
+  fi
 
   # 4. 自动化配置 s-ui
   local sui_db="/usr/local/s-ui/db/s-ui.db"
-  local sui_admin_user="admin"
-  local sui_admin_pass=""
-  if [[ -f "${WORK_DIR}/sui_pass" ]]; then
-    sui_admin_pass=$(cat "${WORK_DIR}/sui_pass" 2>/dev/null || true)
-  fi
-  if [[ -z "$sui_admin_pass" ]]; then
-    sui_admin_pass=$(head -c 8 /dev/urandom | xxd -p | head -c 10)
-    echo "$sui_admin_pass" > "${WORK_DIR}/sui_pass"
-    chmod 600 "${WORK_DIR}/sui_pass"
-  fi
-  if [[ -f "${WORK_DIR}/sui_user" ]]; then
-    sui_admin_user=$(cat "${WORK_DIR}/sui_user" 2>/dev/null || echo "admin")
-  else
-    echo "$sui_admin_user" > "${WORK_DIR}/sui_user"
-    chmod 600 "${WORK_DIR}/sui_user"
-  fi
-
-  if [[ -x /usr/local/s-ui/sui ]]; then
-    echo -e "  [+] 正在自动配置 s-ui 管理员账号 (${sui_admin_user})..."
-    /usr/local/s-ui/sui admin -username "${sui_admin_user}" -password "${sui_admin_pass}" >/dev/null 2>&1 || true
-  fi
+  local sui_admin_user
+  sui_admin_user=$(get_sui_user)
 
   if [[ -f "$sui_db" ]]; then
     echo -e "  [+] 正在自动配置 s-ui 数据库 (路径分流与 VLESS-WS 节点)..."
@@ -1112,7 +1155,7 @@ ws_path = '/${ws_path}'
 con = sqlite3.connect(db)
 cur = con.cursor()
 
-# 1. 更新 settings (Caddy统一终结TLS，s-ui内部使用HTTP代理)
+# 1. 更新 settings
 settings_map = {
     'webPort': str(sui_port),
     'webListen': '127.0.0.1',
@@ -1265,10 +1308,12 @@ with open(path, 'w') as f:
 " 2>/dev/null || true
 
   # 6. 保存反代元数据
+  local meta_mode="tunnel"
+  [[ "$is_quick" == "true" ]] && meta_mode="quick_tunnel"
   cat > "$CADDY_META" <<METAEOF
 {
   "enabled": true,
-  "mode": "tunnel",
+  "mode": "${meta_mode}",
   "domain": "${domain}",
   "tunnel_token": "${tunnel_token}",
   "tunnel_port": ${tunnel_port},
@@ -1277,7 +1322,6 @@ with open(path, 'w') as f:
   "sui_port": ${sui_port},
   "sui_path": "${sui_path}",
   "sui_user": "${sui_admin_user}",
-  "sui_pass": "${sui_admin_pass}",
   "sub_port": ${sub_port},
   "sub_path": "${sub_path}",
   "node_port": ${node_port},
@@ -1290,7 +1334,11 @@ METAEOF
 
   echo
   echo -e "${G}================================================================${N}"
-  echo -e "${G}  🎉 Cloudflare 隧道 4合1 统一反代已成功开启！${N}"
+  if [[ "$is_quick" == "true" ]]; then
+    echo -e "${G}  🎉 Cloudflare 官方免费临时隧道 4合1 统一反代已成功开启！${N}"
+  else
+    echo -e "${G}  🎉 Cloudflare 隧道 4合1 统一反代已成功开启！${N}"
+  fi
   echo -e "${G}================================================================${N}"
   echo -e "  访问域名:      ${B}https://${domain}${N}"
   echo -e "  隧道服务:      ${G}cloudflared (运行中 / active)${N}"
@@ -1303,7 +1351,7 @@ METAEOF
   echo -e "  [2] s-ui 节点与分流管理面板"
   echo -e "      访问地址:  ${B}https://${domain}/${sui_path}/${N}"
   echo -e "      管理账号:  ${Y}${sui_admin_user}${N}"
-  echo -e "      管理密码:  ${Y}${sui_admin_pass}${N}"
+  echo -e "      管理密码:  ${D}[由您在 s-ui 中设置，已安全加密]${N}"
   echo
   echo -e "  [3] s-ui 客户端订阅地址:  ${B}https://${domain}/${sub_path}/${N}"
   echo -e "  [4] VLESS+WS+CDN 节点:    ${B}wss://${domain}:443/${ws_path}${N}"

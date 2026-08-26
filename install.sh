@@ -434,10 +434,14 @@ for _ in $(seq 1 10); do
   sleep 1
 done
 
-# 如果用户在第一步输入了隧道信息，此时自动执行隧道与 Caddy 4合1 初始化
-if [[ "$WANT_TUNNEL" == "y" && -n "$TUNNEL_DOMAIN" && -n "$TUNNEL_TOKEN" ]]; then
+# 如果用户选择开启隧道（无论是自定义域名+Token，还是直接回车开启免费临时隧道）
+if [[ "$WANT_TUNNEL" == "y" ]]; then
   echo
-  echo "  [+] 正在根据第一步输入的参数配置 Cloudflare 隧道 4合1 反代..."
+  if [[ -z "$TUNNEL_DOMAIN" && -z "$TUNNEL_TOKEN" ]]; then
+    echo "  [+] 检测到未输入域名与 Token，正在自动开启 Cloudflare 官方免费临时隧道..."
+  else
+    echo "  [+] 正在根据第一步输入的参数配置 Cloudflare 隧道 4合1 反代..."
+  fi
   if [[ -x /usr/local/bin/sout ]]; then
     /usr/local/bin/sout setup_tunnel "$TUNNEL_DOMAIN" "$TUNNEL_TOKEN" "$TUNNEL_PORT"
   fi
