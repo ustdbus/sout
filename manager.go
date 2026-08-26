@@ -19,13 +19,19 @@ type Manager struct {
 	workDir  string
 	maxSlots int
 	jobs     JobStore
+	engine   *embeddedEngine
 }
 
 func NewManager(maxSlots int, workDir string) *Manager {
+	engine, err := newEmbeddedEngine("127.0.0.1")
+	if err != nil {
+		log.Printf("初始化内嵌 sing-box 引擎警告: %v", err)
+	}
 	return &Manager{
 		tunnels:  map[int]*Tunnel{},
 		workDir:  workDir,
 		maxSlots: maxSlots,
+		engine:   engine,
 	}
 }
 
@@ -224,9 +230,6 @@ func (m *Manager) tryCandidates(t *Tunnel, notify bool) bool {
 			}
 			return true
 		}
-		if t.Kind != "custom" {
-			t.teardownNetns()
-		}
 	}
 	return false
 }
@@ -242,6 +245,7 @@ func (m *Manager) tunnelActive(t *Tunnel) bool {
 }
 
 func (m *Manager) tryNode(t *Tunnel) error {
+	t.setEngine(m.engine)
 	if t.Kind == "custom" {
 		t.CustomHost = t.Node.IP
 		t.CustomPort = t.Node.Port
@@ -249,23 +253,7 @@ func (m *Manager) tryNode(t *Tunnel) error {
 		t.CustomPass = t.Node.Pass
 		return t.startCustom()
 	}
-	if err := t.setupNetns(); err != nil {
-		return err
-	}
-	if err := t.startOpenVPN(m.workDir); err != nil {
-		return err
-	}
-	if t.listener == nil {
-		if err := t.serve(); err != nil {
-			return err
-		}
-	}
-	ip, err := t.probeExitIP()
-	if err != nil {
-		return err
-	}
-	t.ExitIP = ip
-	return nil
+	return t.start(m.workDir)
 }
 
 func (m *Manager) candidatesFor(t *Tunnel) []Node {
@@ -600,13 +588,9 @@ func (m *Manager) Shutdown() {
 	for _, t := range m.Tunnels() {
 		t.stop()
 	}
-}
-
-func prepareHost() error {
-	if err := exec.Command("sysctl", "-qw", "net.ipv4.ip_forward=1").Run(); err != nil {
-		log.Printf("提示: 尝试启用 net.ipv4.ip_forward 失败(%v)，若在容器/NAT小鸡中通常由宿主机接管，继续启动", err)
+	if m.engine != nil {
+		_ = m.engine.close()
 	}
-	return nil
 }
 
 func (m *Manager) nodeInUse(host string, exceptSlot int) bool {

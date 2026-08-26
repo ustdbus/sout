@@ -1,51 +1,55 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"net"
-	"os"
-	"os/exec"
-	"path/filepath"
+	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 )
 
 // SocksCred 是一条隧道的 SOCKS5 访问凭据。
-//
-// 每条隧道一套独立凭据：泄露一条不会连累其他出口，
-// 换节点时也能只重置这一条而不影响已分发的其他配置。
 type SocksCred struct {
 	User string `json:"user"`
 	Pass string `json:"pass"`
 }
 
-// Tunnel 是一条运行中的隧道：一个 netns + 一个 openvpn 进程 + 一个本地 SOCKS5 端口。
+// Tunnel 是一条运行中的隧道。
+// 在用户态架构下，VPN Gate 出口由内嵌的 sing-box 1.14 (gVisor) 提供免 TUN/免 root 的 OpenVPN endpoint 与本地认证 SOCKS5 监听。
 type Tunnel struct {
-	Slot       int       `json:"slot"`
-	Port       int       `json:"port"`
-	Node       Node      `json:"node"`
-	Status     string    `json:"status"` // starting | up | failed | stopped
-	ExitIP     string    `json:"exit_ip"`
-	Err        string    `json:"err,omitempty"`
-	Since      time.Time `json:"since"`
-	Cred       SocksCred `json:"cred"`
-	Kind       string    `json:"kind,omitempty"` // "vpngate" | "custom"
-	IPType     string    `json:"ip_type,omitempty"` // "residential" | "datacenter"
-	ISP        string    `json:"isp,omitempty"`
-	CustomHost string    `json:"custom_host,omitempty"`
-	CustomPort int       `json:"custom_port,omitempty"`
-	CustomUser   string    `json:"custom_user,omitempty"`
-	CustomPass   string    `json:"custom_pass,omitempty"`
-	TargetPoolType string    `json:"target_pool_type,omitempty"` // 用户指定的 "residential" | "datacenter" | "all"
-	TargetRegion   string    `json:"target_region,omitempty"`    // 用户指定的国家代码或源 (如 "US", "SRC:hookzof", "ALL")
-	TargetSourceID string    `json:"target_source_id,omitempty"` // 用户指定的源 ID (如 "builtin-vpngate", "src-xxx")
+	Slot           int       `json:"slot"`
+	Port           int       `json:"port"`
+	Node           Node      `json:"node"`
+	Status         string    `json:"status"` // starting | up | failed | stopped
+	ExitIP         string    `json:"exit_ip"`
+	Err            string    `json:"err,omitempty"`
+	Since          time.Time `json:"since"`
+	Cred           SocksCred `json:"cred"`
+	Kind           string    `json:"kind,omitempty"`    // "vpngate" | "custom"
+	IPType         string    `json:"ip_type,omitempty"` // "residential" | "datacenter"
+	ISP            string    `json:"isp,omitempty"`
+	CustomHost     string    `json:"custom_host,omitempty"`
+	CustomPort     int       `json:"custom_port,omitempty"`
+	CustomUser     string    `json:"custom_user,omitempty"`
+	CustomPass     string    `json:"custom_pass,omitempty"`
+	TargetPoolType string    `json:"target_pool_type,omitempty"` // "residential" | "datacenter" | "all"
+	TargetRegion   string    `json:"target_region,omitempty"`    // 国家代码或源 (如 "US", "JP", "ALL")
+	TargetSourceID string    `json:"target_source_id,omitempty"` // 源 ID
 	HistoryHosts   []string  `json:"history_hosts,omitempty"`
 
-	ns       string
+	engine   *embeddedEngine
 	listener net.Listener
-	ovpn     *exec.Cmd
 	mu       sync.Mutex
+}
+
+func (t *Tunnel) setEngine(engine *embeddedEngine) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.engine = engine
 }
 
 func (t *Tunnel) recordHost(oldHost string) {
@@ -62,380 +66,288 @@ func (t *Tunnel) recordHost(oldHost string) {
 	t.HistoryHosts = append(t.HistoryHosts, oldHost)
 }
 
-func (t *Tunnel) nsName() string { return fmt.Sprintf("fo%d", t.Slot) }
-func (t *Tunnel) subnet() string { return fmt.Sprintf("10.99.%d", t.Slot) }
-
-func run(name string, args ...string) error {
-	out, err := exec.Command(name, args...).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s %s: %v: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-// runQuiet 执行清理类命令，忽略"本来就不存在"这类错误。
-func runQuiet(name string, args ...string) {
-	_ = exec.Command(name, args...).Run()
-}
-
-// setupNetns 建立 netns 与 veth 链路，并配好 NAT 与转发放行。
-func (t *Tunnel) setupNetns() error {
-	ns, sub := t.nsName(), t.subnet()
-	veth, peer := fmt.Sprintf("fov%d", t.Slot), fmt.Sprintf("fop%d", t.Slot)
-
-	t.teardownNetns()
-
-	if err := run("ip", "netns", "add", ns); err != nil {
-		return err
-	}
-	if err := run("ip", "netns", "exec", ns, "ip", "link", "set", "lo", "up"); err != nil {
-		return err
-	}
-	if err := run("ip", "link", "add", veth, "type", "veth", "peer", "name", peer); err != nil {
-		return err
-	}
-	if err := run("ip", "link", "set", peer, "netns", ns); err != nil {
-		return err
-	}
-	if err := run("ip", "addr", "add", sub+".1/30", "dev", veth); err != nil {
-		return err
-	}
-	if err := run("ip", "link", "set", veth, "up"); err != nil {
-		return err
-	}
-	if err := run("ip", "netns", "exec", ns, "ip", "addr", "add", sub+".2/30", "dev", peer); err != nil {
-		return err
-	}
-	if err := run("ip", "netns", "exec", ns, "ip", "link", "set", peer, "up"); err != nil {
-		return err
-	}
-	if err := run("ip", "netns", "exec", ns, "ip", "route", "add", "default", "via", sub+".1"); err != nil {
-		return err
-	}
-
-	// netns 内的 DNS，仅用于 openvpn 解析远端主机名
-	nsDir := filepath.Join("/etc/netns", ns)
-	if err := os.MkdirAll(nsDir, 0755); err != nil {
-		return fmt.Errorf("创建 %s 失败: %w", nsDir, err)
-	}
-	if err := os.WriteFile(filepath.Join(nsDir, "resolv.conf"), []byte("nameserver 8.8.8.8\n"), 0644); err != nil {
-		return fmt.Errorf("写 resolv.conf 失败: %w", err)
-	}
-
-	cidr := sub + ".0/30"
-	ensureRule("nat", "POSTROUTING", "-s", cidr, "-j", "MASQUERADE")
-	ensureRuleInsert("filter", "FORWARD", "-s", cidr, "-j", "ACCEPT")
-	ensureRuleInsert("filter", "FORWARD", "-d", cidr, "-j", "ACCEPT")
-	return nil
-}
-
-// ensureRule 幂等追加一条 iptables 规则。
-func ensureRule(table, chain string, spec ...string) {
-	check := append([]string{"-w", "5", "-t", table, "-C", chain}, spec...)
-	if exec.Command("iptables", check...).Run() == nil {
-		return
-	}
-	add := append([]string{"-w", "5", "-t", table, "-A", chain}, spec...)
-	runQuiet("iptables", add...)
-}
-
-// ensureRuleInsert 幂等插入规则到链首。
-// FORWARD 链末尾常有兜底 REJECT，必须插到最前面才生效。
-func ensureRuleInsert(table, chain string, spec ...string) {
-	check := append([]string{"-w", "5", "-t", table, "-C", chain}, spec...)
-	if exec.Command("iptables", check...).Run() == nil {
-		return
-	}
-	ins := append([]string{"-w", "5", "-t", table, "-I", chain, "1"}, spec...)
-	runQuiet("iptables", ins...)
-}
-
-func (t *Tunnel) teardownNetns() {
-	ns, sub := t.nsName(), t.subnet()
-	cidr := sub + ".0/30"
-	runQuiet("ip", "netns", "del", ns)
-	runQuiet("ip", "link", "del", fmt.Sprintf("fov%d", t.Slot))
-	runQuiet("iptables", "-w", "5", "-t", "nat", "-D", "POSTROUTING", "-s", cidr, "-j", "MASQUERADE")
-	runQuiet("iptables", "-w", "5", "-D", "FORWARD", "-s", cidr, "-j", "ACCEPT")
-	runQuiet("iptables", "-w", "5", "-D", "FORWARD", "-d", cidr, "-j", "ACCEPT")
-}
-
-// startOpenVPN 在 netns 内拉起 openvpn，并等待 tun0 拿到地址。
-func (t *Tunnel) startOpenVPN(dir string) error {
-	ns := t.nsName()
-	cfgPath := filepath.Join(dir, ns+".ovpn")
-	if err := os.WriteFile(cfgPath, []byte(t.Node.Config), 0600); err != nil {
-		return fmt.Errorf("写配置失败: %w", err)
-	}
-	authPath := filepath.Join(dir, "auth.txt")
-	if err := os.WriteFile(authPath, []byte("vpn\nvpn\n"), 0600); err != nil {
-		return fmt.Errorf("写凭据失败: %w", err)
-	}
-
-	logPath := filepath.Join(dir, ns+".log")
-	cmd := exec.Command("ip", "netns", "exec", ns, "openvpn",
-		"--config", cfgPath,
-		"--auth-user-pass", authPath,
-		"--auth-nocache",
-		"--dev", "tun0",
-		"--connect-retry-max", "2",
-		"--connect-timeout", "20",
-		"--data-ciphers", "AES-128-CBC:AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305",
-		"--verb", "3",
-		"--log", logPath,
-	)
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("启动 openvpn 失败: %w", err)
-	}
-	t.ovpn = cmd
-	go cmd.Wait() // 回收子进程，避免僵尸
-
-	// openvpn 建好 tun0 前 SOCKS5 无法正常出网，这里等它就绪
-	deadline := time.Now().Add(40 * time.Second)
-	for time.Now().Before(deadline) {
-		if out, err := exec.Command("ip", "netns", "exec", ns, "ip", "-4", "addr", "show", "tun0").Output(); err == nil {
-			if strings.Contains(string(out), "inet ") {
-				return nil
-			}
-		}
-		if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
-			return fmt.Errorf("openvpn 提前退出，详见 %s", logPath)
-		}
-		time.Sleep(time.Second)
-	}
-	return fmt.Errorf("等待 tun0 就绪超时，详见 %s", logPath)
-}
-
-// serve 在母机上监听 SOCKS5 端口，出站连接则在 netns 内建立。
-// 监听必须留在母机侧：netns 内的 loopback 与母机彼此独立，
-// 监听在 netns 里的话外部根本连不上。
-func (t *Tunnel) serve() error {
-	// 端口要尽量保持不变，否则用户已经分发出去的客户端配置会失效。
-	// 进程刚重启时旧监听可能还在 TIME_WAIT，这里给几秒重试窗口。
-	var ln net.Listener
-	var err error
-	for i := 0; i < 6; i++ {
-		ln, err = net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", t.Port))
-		if err == nil {
-			break
-		}
-		time.Sleep(time.Second)
-	}
-	if err != nil {
-		// 确实被别的进程长期占用了，才换端口
-		port, perr := freeRandomPort(map[int]bool{t.Port: true})
-		if perr != nil {
-			return fmt.Errorf("监听 %d 失败且无备用端口: %w", t.Port, err)
-		}
-		ln, err = net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
-		if err != nil {
-			return fmt.Errorf("监听 %d 失败: %w", port, err)
-		}
-		t.Port = port
-	}
-	t.listener = ln
-	dial := dialerInNetns(t.nsName())
-
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			// 每次连接现取凭据：改口令后不必重建监听，新连接立刻按新凭据校验
-			cred := t.credential()
-			go serveSocks(conn, &cred, dial)
-		}
-	}()
-	return nil
-}
-
-// credential 取一份凭据副本，避免读写并发。
-func (t *Tunnel) credential() SocksCred {
+func (t *Tunnel) start(dir string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.Cred
-}
 
-// setCredential 换掉这条隧道的 SOCKS5 凭据。已建立的连接不受影响，
-// 新连接立即按新凭据校验。
-func (t *Tunnel) setCredential(c SocksCred) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.Cred = c
-}
-
-// startCustom 启动自定义 SOCKS5 转发隧道
-func (t *Tunnel) startCustom() error {
-	t.mu.Lock()
-	if t.listener != nil {
-		_ = t.listener.Close()
-		t.listener = nil
-	}
 	t.Status = "starting"
-	t.Err = "连接中..."
-	t.Since = time.Now()
-	t.mu.Unlock()
+	t.Err = ""
 
-	var ln net.Listener
-	var err error
-	for i := 0; i < 6; i++ {
-		ln, err = net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", t.Port))
-		if err == nil {
-			break
-		}
-		time.Sleep(500 * time.Millisecond)
+	if t.Kind == "custom" {
+		return t.startCustom()
 	}
-	if err != nil {
-		t.mu.Lock()
+
+	// VPN Gate 用户态 OpenVPN 隧道
+	if t.engine == nil {
 		t.Status = "failed"
-		t.Err = fmt.Sprintf("监听端口 %d 失败: %v", t.Port, err)
-		t.mu.Unlock()
-		return fmt.Errorf("监听本地端口 %d 失败: %w", t.Port, err)
-	}
-	t.listener = ln
-
-	remoteAddr := fmt.Sprintf("%s:%d", t.CustomHost, t.CustomPort)
-	dial := func(network, targetAddr string) (net.Conn, error) {
-		return dialSocks5(remoteAddr, t.CustomUser, t.CustomPass, targetAddr, 15*time.Second)
+		t.Err = "内嵌 sing-box 引擎未初始化"
+		return fmt.Errorf("%s", t.Err)
 	}
 
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			cred := t.credential()
-			go serveSocks(conn, &cred, dial)
-		}
-	}()
-
-	// 探测节点真实连通性与出口 IP
-	exitIP, ping, ipType, isp, err := ProbeCustomSocks(remoteAddr, t.CustomUser, t.CustomPass, 8*time.Second)
-	if err != nil {
-		t.mu.Lock()
+	if err := t.engine.addTunnel(t); err != nil {
 		t.Status = "failed"
-		t.Err = fmt.Sprintf("节点连接失败: %v", err)
-		t.mu.Unlock()
+		t.Err = fmt.Sprintf("启动用户态出口失败: %v", err)
 		return err
 	}
 
-	// 严格属性二验：如果用户明确指定了家宽或机房池，但实测结果不符，则判定失败并触发下一个候选节点
-	if t.TargetPoolType == "residential" && ipType == "datacenter" {
-		t.mu.Lock()
+	// 探测出口真实 IP
+	exitIP, err := t.probeExitIP()
+	if err != nil {
+		t.engine.removeTunnel(t)
 		t.Status = "failed"
-		t.Err = "节点实测为机房 IP (与目标家宽池不符)"
-		t.mu.Unlock()
-		return fmt.Errorf("节点实测为机房 IP (与目标家宽池不符): %s", exitIP)
-	}
-	if t.TargetPoolType == "datacenter" && ipType == "residential" {
-		t.mu.Lock()
-		t.Status = "failed"
-		t.Err = "节点实测为家宽 IP (与目标机房池不符)"
-		t.mu.Unlock()
-		return fmt.Errorf("节点实测为家宽 IP (与目标机房池不符): %s", exitIP)
+		t.Err = fmt.Sprintf("探测出口 IP 失败: %v", err)
+		return err
 	}
 
-	t.mu.Lock()
-	t.Status = "up"
 	t.ExitIP = exitIP
+	t.Status = "up"
+	t.Since = time.Now()
 	t.Err = ""
-	if ping > 0 {
-		t.Node.Ping = ping
-	}
-	if ipType != "" {
-		t.IPType = ipType
-		t.Node.IPType = ipType
-	}
-	if isp != "" {
-		t.ISP = isp
-		t.Node.ISP = isp
-	}
-	t.mu.Unlock()
-
 	return nil
 }
 
-// switchPort 动态切换隧道 SOCKS5 监听端口
-func (t *Tunnel) switchPort(newPort int) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	if newPort == t.Port && t.listener != nil {
-		return nil
-	}
-
-	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", newPort))
-	if err != nil {
-		return fmt.Errorf("无法监听端口 %d: %w", newPort, err)
-	}
-
-	oldLn := t.listener
-	t.listener = ln
-	t.Port = newPort
-
-	if oldLn != nil {
-		_ = oldLn.Close()
-	}
-
-	var dial func(network, targetAddr string) (net.Conn, error)
-	if t.Kind == "custom" {
-		remoteAddr := fmt.Sprintf("%s:%d", t.CustomHost, t.CustomPort)
-		dial = func(network, targetAddr string) (net.Conn, error) {
-			return dialSocks5(remoteAddr, t.CustomUser, t.CustomPass, targetAddr, 15*time.Second)
-		}
-	} else {
-		dial = dialerInNetns(t.nsName())
-	}
-
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			cred := t.credential()
-			go serveSocks(conn, &cred, dial)
-		}
-	}()
-
-	return nil
-}
-
-// probeExitIP 通过隧道查询出口 IP，用于确认这条隧道确实换了 IP。
-func (t *Tunnel) probeExitIP() (string, error) {
-	if t.Kind == "custom" {
-		remoteAddr := fmt.Sprintf("%s:%d", t.CustomHost, t.CustomPort)
-		ip, _, _, _, err := ProbeCustomSocks(remoteAddr, t.CustomUser, t.CustomPass, 10*time.Second)
-		return ip, err
-	}
-	out, err := exec.Command("ip", "netns", "exec", t.nsName(),
-		"curl", "-s", "--max-time", "15", "http://api.ipify.org").Output()
-	if err != nil {
-		return "", fmt.Errorf("查询出口 IP 失败: %w", err)
-	}
-	ip := strings.TrimSpace(string(out))
-	if net.ParseIP(ip) == nil {
-		return "", fmt.Errorf("出口 IP 返回异常: %q", ip)
-	}
-	return ip, nil
-}
-
-// stop 停止这条隧道并清理它占用的所有资源。
 func (t *Tunnel) stop() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.listener != nil {
-		t.listener.Close()
-		t.listener = nil
+
+	if t.Kind == "custom" {
+		if t.listener != nil {
+			_ = t.listener.Close()
+			t.listener = nil
+		}
+	} else {
+		if t.engine != nil {
+			t.engine.removeTunnel(t)
+		}
 	}
-	if t.ovpn != nil && t.ovpn.Process != nil {
-		_ = t.ovpn.Process.Kill()
-		t.ovpn = nil
-	}
-	if t.Kind != "custom" {
-		t.teardownNetns()
-	}
+
 	t.Status = "stopped"
+	t.ExitIP = ""
+}
+
+func (t *Tunnel) probeExitIP() (string, error) {
+	if t.Kind == "custom" {
+		return t.probeCustomExitIP()
+	}
+
+	// VPN Gate 出口通过用户态 sing-box 拨号探测
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+
+	// 尝试多个 IP 查询接口
+	for _, target := range []string{"api.ipify.org:80", "ifconfig.me:80", "icanhazip.com:80"} {
+		conn, err := t.engine.dialTunnel(ctx, t, "tcp", target)
+		if err != nil {
+			continue
+		}
+
+		host := strings.Split(target, ":")[0]
+		req := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nUser-Agent: curl/7.88.1\r\nAccept: */*\r\nConnection: close\r\n\r\n", host)
+		_ = conn.SetDeadline(time.Now().Add(6 * time.Second))
+		if _, err := conn.Write([]byte(req)); err != nil {
+			conn.Close()
+			continue
+		}
+
+		resp, err := io.ReadAll(conn)
+		conn.Close()
+		if err != nil {
+			continue
+		}
+
+		lines := strings.Split(string(resp), "\r\n\r\n")
+		if len(lines) >= 2 {
+			body := strings.TrimSpace(lines[1])
+			if ip := net.ParseIP(body); ip != nil && ip.To4() != nil {
+				return ip.String(), nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("所有出口 IP 探测源均无有效 IPv4 响应")
+}
+
+func (t *Tunnel) probeCustomExitIP() (string, error) {
+	// 自定义 SOCKS5 代理通过本地监听端口建立 HTTP 客户端探测
+	proxyURL, err := url.Parse(fmt.Sprintf("socks5://%s:%s@127.0.0.1:%d", t.Cred.User, t.Cred.Pass, t.Port))
+	if err != nil {
+		return "", err
+	}
+
+	transport := &http.Transport{
+		Proxy: http.ProxyURL(proxyURL),
+		DialContext: (&net.Dialer{
+			Timeout:   6 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+	}
+
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   10 * time.Second,
+	}
+
+	for _, u := range []string{"http://api.ipify.org", "http://ifconfig.me", "http://icanhazip.com"} {
+		resp, err := client.Get(u)
+		if err != nil {
+			continue
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			continue
+		}
+		ipStr := strings.TrimSpace(string(body))
+		if ip := net.ParseIP(ipStr); ip != nil && ip.To4() != nil {
+			return ip.String(), nil
+		}
+	}
+
+	return "", fmt.Errorf("自定义 SOCKS5 探测出口 IP 失败")
+}
+
+func (t *Tunnel) startCustom() error {
+	addr := fmt.Sprintf("127.0.0.1:%d", t.Port)
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Status = "failed"
+		t.Err = fmt.Sprintf("监听端口 %d 失败: %v", t.Port, err)
+		return err
+	}
+	t.listener = l
+
+	targetAddr := fmt.Sprintf("%s:%d", t.CustomHost, t.CustomPort)
+	go func() {
+		for {
+			clientConn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go t.handleCustomForward(clientConn, targetAddr)
+		}
+	}()
+
+	exitIP, err := t.probeExitIP()
+	if err != nil {
+		_ = l.Close()
+		t.listener = nil
+		t.Status = "failed"
+		t.Err = fmt.Sprintf("探测出口 IP 失败: %v", err)
+		return err
+	}
+
+	t.ExitIP = exitIP
+	t.Status = "up"
+	t.Since = time.Now()
+	t.Err = ""
+	return nil
+}
+
+func (t *Tunnel) handleCustomForward(clientConn net.Conn, targetAddr string) {
+	defer clientConn.Close()
+
+	// 1. 本地 SOCKS5 认证握手
+	buf := make([]byte, 256)
+	if _, err := io.ReadFull(clientConn, buf[:2]); err != nil || buf[0] != 0x05 {
+		return
+	}
+	nmethods := int(buf[1])
+	methods := make([]byte, nmethods)
+	if _, err := io.ReadFull(clientConn, methods); err != nil {
+		return
+	}
+
+	// 检查是否需要用户名密码认证
+	if t.Cred.User != "" && t.Cred.Pass != "" {
+		clientConn.Write([]byte{0x05, 0x02}) // USER/PASS
+
+		authBuf := make([]byte, 512)
+		if _, err := io.ReadFull(clientConn, authBuf[:2]); err != nil || authBuf[0] != 0x01 {
+			return
+		}
+		ulen := int(authBuf[1])
+		if _, err := io.ReadFull(clientConn, authBuf[2:2+ulen]); err != nil {
+			return
+		}
+		user := string(authBuf[2 : 2+ulen])
+
+		plenOffset := 2 + ulen
+		if _, err := io.ReadFull(clientConn, authBuf[plenOffset:plenOffset+1]); err != nil {
+			return
+		}
+		plen := int(authBuf[plenOffset])
+		passOffset := plenOffset + 1
+		if _, err := io.ReadFull(clientConn, authBuf[passOffset:passOffset+plen]); err != nil {
+			return
+		}
+		pass := string(authBuf[passOffset : passOffset+plen])
+
+		if user != t.Cred.User || pass != t.Cred.Pass {
+			clientConn.Write([]byte{0x01, 0x01}) // 认证失败
+			return
+		}
+		clientConn.Write([]byte{0x01, 0x00}) // 认证成功
+	} else {
+		clientConn.Write([]byte{0x05, 0x00}) // NO AUTH
+	}
+
+	// 2. 读取客户端请求
+	reqBuf := make([]byte, 4)
+	if _, err := io.ReadFull(clientConn, reqBuf); err != nil || reqBuf[0] != 0x05 || reqBuf[1] != 0x01 {
+		return // 仅支持 CONNECT
+	}
+
+	var dstHost string
+	switch reqBuf[3] {
+	case 0x01: // IPv4
+		ipBuf := make([]byte, 4)
+		if _, err := io.ReadFull(clientConn, ipBuf); err != nil {
+			return
+		}
+		dstHost = net.IP(ipBuf).String()
+	case 0x03: // Domain
+		lenBuf := make([]byte, 1)
+		if _, err := io.ReadFull(clientConn, lenBuf); err != nil {
+			return
+		}
+		dBuf := make([]byte, int(lenBuf[0]))
+		if _, err := io.ReadFull(clientConn, dBuf); err != nil {
+			return
+		}
+		dstHost = string(dBuf)
+	case 0x04: // IPv6
+		ipBuf := make([]byte, 16)
+		if _, err := io.ReadFull(clientConn, ipBuf); err != nil {
+			return
+		}
+		dstHost = net.IP(ipBuf).String()
+	default:
+		return
+	}
+
+	portBuf := make([]byte, 2)
+	if _, err := io.ReadFull(clientConn, portBuf); err != nil {
+		return
+	}
+	dstPort := int(portBuf[0])<<8 | int(portBuf[1])
+
+	// 3. 连接远端上游 SOCKS5 并完成转发
+	targetConn, err := net.DialTimeout("tcp", targetAddr, 8*time.Second)
+	if err != nil {
+		clientConn.Write([]byte{0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0}) // Host unreachable
+		return
+	}
+	defer targetConn.Close()
+
+	if err := socks5ClientHandshake(targetConn, t.CustomUser, t.CustomPass, dstHost, dstPort); err != nil {
+		clientConn.Write([]byte{0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		return
+	}
+
+	// 响应客户端 CONNECT 成功
+	clientConn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+
+	// 4. 双向流量转发
+	go io.Copy(targetConn, clientConn)
+	io.Copy(clientConn, targetConn)
 }

@@ -255,20 +255,19 @@ MGR=$(detect_mgr)
 [[ "$MGR" == "apt-get" ]] && iproute_pkg=iproute2 || iproute_pkg=iproute
 
 need_cmd=()
-for c in openvpn curl openssl tar iptables sqlite3; do
+for c in curl tar; do
   command -v "$c" >/dev/null || need_cmd+=("$c")
 done
-command -v ip >/dev/null || need_cmd+=(ip)
 
 if [[ ${#need_cmd[@]} -gt 0 ]]; then
-  echo "      缺少依赖命令: ${need_cmd[*]}"
+  echo "      缺少基础工具: ${need_cmd[*]}"
   if [[ -z "$MGR" ]]; then
-    echo "      无法识别包管理器，请手动安装上述依赖" >&2
+    echo "      无法识别包管理器，请手动安装上述工具" >&2
     exit 1
   fi
   pkgs=()
   for c in "${need_cmd[@]}"; do
-    if [[ "$c" == "ip" ]]; then pkgs+=("$iproute_pkg"); else pkgs+=("$(pkg_for "$c" "$MGR")"); fi
+    pkgs+=("$(pkg_for "$c" "$MGR")")
   done
   echo "      正在自动安装: ${pkgs[*]}"
   install_pkgs "$MGR" "${pkgs[@]}" || {
@@ -286,8 +285,8 @@ case "$ARCH" in
 esac
 
 if [[ -f main.go ]] && command -v go >/dev/null; then
-  echo "      检测到源码环境，正在本地编译..."
-  go build -trimpath -ldflags "-s -w" -o "$BIN" .
+  echo "      检测到源码环境，正在本地编译 (内嵌 sing-box 1.14 + gVisor)..."
+  CGO_ENABLED=0 go build -trimpath -tags "with_gvisor with_quic netgo osusergo" -ldflags "-s -w" -o "$BIN" .
 else
   echo "      正在拉取预编译包 (${GOARCH})..."
   TMP=$(mktemp -d)
@@ -321,20 +320,8 @@ else
   echo "      提示：未检测到 s-ui 面板，请配置 s-ui 以启用节点分流联动。"
 fi
 
-echo "[4/6] 配置网络转发与防火墙规则..."
-sysctl -qw net.ipv4.ip_forward=1 2>/dev/null || true
-(grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf 2>/dev/null \
-  || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf) 2>/dev/null || true
-if command -v iptables >/dev/null 2>&1; then
-  iptables -C FORWARD -s 10.99.0.0/16 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -s 10.99.0.0/16 -j ACCEPT 2>/dev/null || true
-  iptables -C FORWARD -d 10.99.0.0/16 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -d 10.99.0.0/16 -j ACCEPT 2>/dev/null || true
-  command -v netfilter-persistent >/dev/null 2>&1 && netfilter-persistent save >/dev/null 2>&1 || true
-fi
-
-# 解除 Ubuntu/Debian AppArmor 对 openvpn 访问工作目录配置的限制
-if command -v apparmor_parser >/dev/null 2>&1 && [[ -f /etc/apparmor.d/openvpn ]]; then
-  aa-disable openvpn 2>/dev/null || (mkdir -p /etc/apparmor.d/disable && ln -sf /etc/apparmor.d/openvpn /etc/apparmor.d/disable/ && apparmor_parser -R /etc/apparmor.d/openvpn 2>/dev/null) || true
-fi
+echo "[4/6] 准备用户态网络运行环境..."
+# 用户态 gVisor 协议栈完全在内存中运行，无需修改宿主路由与防火墙规则
 
 echo "[5/6] 部署服务与终端管理命令..."
 if [[ -f f.sh ]]; then

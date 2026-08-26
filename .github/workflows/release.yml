@@ -52,7 +52,7 @@ jobs:
             TAG="v1.0.0"
           fi
           mkdir -p dist/${{ matrix.pkg_name }}
-          go build -trimpath -ldflags "-s -w -X main.version=${TAG}" -o dist/${{ matrix.pkg_name }}/sout-server .
+          go build -trimpath -tags "with_gvisor with_quic netgo osusergo" -ldflags "-s -w -X main.version=${TAG}" -o dist/${{ matrix.pkg_name }}/sout-server .
           cp dist/${{ matrix.pkg_name }}/sout-server dist/${{ matrix.pkg_name }}/fanout
           cp f.sh dist/${{ matrix.pkg_name }}/
           cp sout.service dist/${{ matrix.pkg_name }}/

@@ -58,17 +58,11 @@ func main() {
 		}
 	}
 
-	// 避免 Debian/Ubuntu AppArmor 拦截 openvpn 访问动态配置文件
-	_ = exec.Command("apparmor_parser", "-R", "/etc/apparmor.d/openvpn").Run()
-
 	if err := os.MkdirAll(*workDir, 0700); err != nil {
 		log.Fatalf("创建工作目录失败: %v", err)
 	}
 	setPublicIPOverride(*publicIP)
 	go hostPublicIP() // 预热探测，别让首个请求阻塞
-	if err := prepareHost(); err != nil {
-		log.Fatal(err)
-	}
 
 	configurePanel(*workDir, *panelMode)
 	if p, err := openPanel(); err != nil {
