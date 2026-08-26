@@ -236,6 +236,7 @@ show_info() {
     echo -e "  反代模式:    ${G}Cloudflare 隧道 4合1 模式 (已开启)${N}"
     echo -e "  隧道服务:    ${cf_st} (本地回源: 127.0.0.1:${c_tun_p})"
     echo -e "  管理面板:    ${B}https://${c_dom}/${c_sout_p}/${N}"
+    echo -e "  访问口令:    ${Y}${pw}${N}"
     echo -e "  s-ui 面板:   ${B}https://${c_dom}/${c_sui_p}/${N}"
     echo -e "  s-ui 用户名: ${Y}${sui_u}${N}"
     echo -e "  s-ui 密  码: ${Y}${sui_p}${N}"
@@ -265,18 +266,21 @@ show_info() {
         echo -e "  管理面板:    ${B}${scheme}://${pip}:${port}${bp}${N}"
       fi
     fi
+    echo -e "  访问口令:    ${Y}${pw}${N}"
 
     # 独立端口模式下展示 s-ui 面板地址与账号密码
     local sui_db="/usr/local/s-ui/db/s-ui.db"
-    if [[ -f "$sui_db" ]]; then
+    if [[ -f "$sui_db" || -x /usr/local/s-ui/sui ]]; then
       local sui_port="8443"
       local sui_path="/app/"
-      if command -v sqlite3 >/dev/null 2>&1; then
-        local p_val path_val
-        p_val=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPort' LIMIT 1;" 2>/dev/null || true)
-        path_val=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPath' LIMIT 1;" 2>/dev/null || true)
-        [[ -n "$p_val" ]] && sui_port="$p_val"
-        [[ -n "$path_val" ]] && sui_path="$path_val"
+      if [[ -f "$sui_db" ]]; then
+        if command -v sqlite3 >/dev/null 2>&1; then
+          local p_val path_val
+          p_val=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPort' LIMIT 1;" 2>/dev/null || true)
+          path_val=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPath' LIMIT 1;" 2>/dev/null || true)
+          [[ -n "$p_val" ]] && sui_port="$p_val"
+          [[ -n "$path_val" ]] && sui_path="$path_val"
+        fi
       fi
       sui_path="/${sui_path#/}"
       [[ "$sui_path" != */ ]] && sui_path="${sui_path}/"
@@ -285,7 +289,6 @@ show_info() {
       echo -e "  s-ui 密  码: ${Y}${sui_p}${N}"
     fi
   fi
-  echo -e "  访问口令:    ${Y}${pw}${N}"
   echo -e "  s-ui 唤起命令: ${C}s-ui${N}"
   echo -e "  sout 唤起命令: ${C}sout${N}"
   echo
