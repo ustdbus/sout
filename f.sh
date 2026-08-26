@@ -998,7 +998,7 @@ EOF
     }
 }
 
-:443, https://${domain}:443 {
+:443 {
     tls /home/acme/${domain}/fullchain.pem /home/acme/${domain}/privkey.pem {
         protocols tls1.2 tls1.3
     }
