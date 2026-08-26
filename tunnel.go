@@ -298,7 +298,7 @@ func (t *Tunnel) startCustom() error {
 		}
 	}()
 
-	exitIP, err := t.probeExitIP()
+	exitIP, err := t.probeExitIP(8 * time.Second)
 	if err != nil {
 		_ = l.Close()
 		t.listener = nil
