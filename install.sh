@@ -50,16 +50,73 @@ cleanup_sout() {
     rc-update del fanout default 2>/dev/null || true
     rm -f /etc/init.d/sout /etc/init.d/fanout
   fi
-  # 停止并清理 Caddy
+  # 停止并清理 Caddy 与 cloudflared
   systemctl stop caddy 2>/dev/null || true
   systemctl disable caddy 2>/dev/null || true
-  rm -f /etc/systemd/system/caddy.service 2>/dev/null || true
-  rm -rf /etc/caddy /var/lib/caddy /var/log/caddy /usr/local/bin/caddy /home/acme 2>/dev/null || true
+  systemctl stop cloudflared 2>/dev/null || true
+  systemctl disable cloudflared 2>/dev/null || true
+  rm -f /etc/systemd/system/caddy.service /etc/systemd/system/cloudflared.service 2>/dev/null || true
+  rm -rf /etc/caddy /var/lib/caddy /var/log/caddy /usr/local/bin/caddy /usr/local/bin/cloudflared 2>/dev/null || true
 
   rm -f "$BIN" /usr/local/bin/sout-server /usr/local/bin/fanout /usr/local/bin/f /usr/local/bin/sout /usr/local/bin/sout-cli 2>/dev/null || true
   echo "      sout 及相关组件已清理完毕。"
 }
 
+# ==============================================================================
+# [第一步] 一开始首先询问 Cloudflare 隧道 4合1 反代配置
+# ==============================================================================
+WANT_TUNNEL="n"
+TUNNEL_DOMAIN=""
+TUNNEL_TOKEN=""
+TUNNEL_PORT="8080"
+
+ask_tunnel_setup() {
+  echo
+  echo "================================================================"
+  echo "  💡 提示：NAT 机推荐开启 Cloudflare 隧道进行代理，正常 VPS 可不启用，自行在 Cloudflare 中配置回源。"
+  echo "================================================================"
+  local prompt_choice=""
+  if [[ -t 0 ]]; then
+    read -rp "  是否配置 Cloudflare 隧道 4合1 统一反代？[y/N]: " prompt_choice
+  else
+    if [[ -c /dev/tty ]]; then
+      read -rp "  是否配置 Cloudflare 隧道 4合1 统一反代？[y/N]: " prompt_choice < /dev/tty || prompt_choice="n"
+    fi
+  fi
+
+  if [[ "${prompt_choice,,}" == "y" || "${prompt_choice,,}" == "yes" ]]; then
+    WANT_TUNNEL="y"
+    echo
+    echo "  [Cloudflare 隧道参数设置]"
+    if [[ -t 0 ]]; then
+      read -rp "  1. 请输入您的访问域名 (如 djj.20023.bond): " TUNNEL_DOMAIN
+      read -rp "  2. 请输入 Cloudflare 隧道 Token (eyJh...): " TUNNEL_TOKEN
+      read -rp "  3. 请输入本地回源端口 [默认 8080]: " TUNNEL_PORT
+    else
+      if [[ -c /dev/tty ]]; then
+        read -rp "  1. 请输入您的访问域名 (如 djj.20023.bond): " TUNNEL_DOMAIN < /dev/tty
+        read -rp "  2. 请输入 Cloudflare 隧道 Token (eyJh...): " TUNNEL_TOKEN < /dev/tty
+        read -rp "  3. 请输入本地回源端口 [默认 8080]: " TUNNEL_PORT < /dev/tty
+      fi
+    fi
+    TUNNEL_DOMAIN=$(echo "$TUNNEL_DOMAIN" | tr -d ' \r\n')
+    TUNNEL_TOKEN=$(echo "$TUNNEL_TOKEN" | tr -d ' \r\n')
+    TUNNEL_PORT=$(echo "$TUNNEL_PORT" | tr -d ' \r\n')
+    TUNNEL_PORT="${TUNNEL_PORT:-8080}"
+    if [[ -z "$TUNNEL_DOMAIN" || -z "$TUNNEL_TOKEN" ]]; then
+      echo "  [!] 域名或 Token 不能为空，已取消隧道预配置，后续可通过 sout caddy 随时配置。"
+      WANT_TUNNEL="n"
+    else
+      echo "  [✓] 隧道参数已保存，将在核心组件就绪后自动启动并绑定！"
+    fi
+  fi
+}
+
+ask_tunnel_setup
+
+# ==============================================================================
+# [第二步] 询问 / 检测并安装官方 s-ui 面板
+# ==============================================================================
 SUI_INSTALLED_BY_US=0
 
 ensure_sui() {
@@ -154,12 +211,8 @@ SEEOF
 }
 
 svc_install() {
+  echo "      正在注册系统服务 (${INIT_SYS})..."
   if [[ "$INIT_SYS" == systemd ]]; then
-    # 停止并清理旧版 fanout.service
-    systemctl stop fanout 2>/dev/null || true
-    systemctl disable fanout 2>/dev/null || true
-    rm -f /etc/systemd/system/fanout.service 2>/dev/null || true
-
     cat > /etc/systemd/system/sout.service <<SVCEOF
 [Unit]
 Description=sout - s-ui 动态家宽出口插件 (VPN Gate)
@@ -169,41 +222,45 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=${BIN} -dir ${WORK_DIR}
+WorkingDirectory=${WORK_DIR}
 Restart=always
 RestartSec=3
-LimitNOFILE=65535
-StandardOutput=journal
-StandardError=journal
+LimitNOFILE=65536
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 
 [Install]
 WantedBy=multi-user.target
 SVCEOF
-    ln -sf /etc/systemd/system/sout.service /etc/systemd/system/fanout.service 2>/dev/null || true
     systemctl daemon-reload
+    rm -f /etc/systemd/system/fanout.service 2>/dev/null || true
   else
-    cat > /etc/init.d/sout <<INITEOF
+    cat > /etc/init.d/sout <<'OPENRCEOF'
 #!/sbin/openrc-run
 name="sout"
 description="sout - s-ui 动态家宽出口插件"
-command="${BIN}"
-command_args="-dir ${WORK_DIR}"
-command_background=true
+command="/usr/local/bin/sout-server"
+command_args="-dir /var/lib/sout"
+command_background="yes"
 pidfile="/run/sout.pid"
 output_log="/var/log/sout.log"
-error_log="/var/log/sout.log"
-respawn_delay=5
-respawn_max=0
-supervisor=supervise-daemon
-depend() { need net; after firewall; }
-INITEOF
+error_log="/var/log/sout.err"
+
+depend() {
+  need net
+  after firewall
+}
+OPENRCEOF
     chmod +x /etc/init.d/sout
-    ln -sf /etc/init.d/sout /etc/init.d/fanout 2>/dev/null || true
+    rm -f /etc/init.d/fanout 2>/dev/null || true
   fi
 }
 
 svc_enable_start() {
+  echo "      正在启动服务..."
   if [[ "$INIT_SYS" == systemd ]]; then
-    systemctl enable --now sout
+    systemctl enable sout >/dev/null 2>&1 || true
+    systemctl restart sout
   else
     rc-update add sout default >/dev/null 2>&1 || true
     rc-service sout restart
@@ -212,71 +269,92 @@ svc_enable_start() {
 
 svc_is_active() {
   if [[ "$INIT_SYS" == systemd ]]; then
-    systemctl is-active --quiet sout
+    systemctl is-active sout >/dev/null 2>&1
   else
     rc-service sout status >/dev/null 2>&1
   fi
 }
 
 svc_logs_hint() {
-  [[ "$INIT_SYS" == systemd ]] && echo "journalctl -u sout -n 30" || echo "cat /var/log/sout.log"
+  if [[ "$INIT_SYS" == systemd ]]; then
+    echo "journalctl -u sout -n 30 --no-pager"
+  else
+    echo "tail -n 30 /var/log/sout.err"
+  fi
 }
 
-echo "[1/6] 检查系统基础依赖..."
-
-pkg_for() {
-  local cmd="$1" mgr="$2"
-  case "$cmd" in
-    openvpn)  echo openvpn ;;
-    curl)     echo curl ;;
-    openssl)  echo openssl ;;
-    tar)      echo tar ;;
-    ip)       case "$mgr" in apk) echo iproute2 ;; pacman) echo iproute2 ;; *) echo iproute ;; esac ;;
-    iptables) echo iptables ;;
-    sqlite3)  case "$mgr" in yum|dnf) echo sqlite ;; *) echo sqlite3 ;; esac ;;
-    unzip)    echo unzip ;;
-  esac
-}
-
-detect_mgr() {
-  for m in apt-get dnf yum pacman apk zypper; do
-    command -v "$m" >/dev/null && { echo "$m"; return; }
-  done
-  echo ""
+detect_pkg_mgr() {
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "apt"
+  elif command -v dnf >/dev/null 2>&1; then
+    echo "dnf"
+  elif command -v yum >/dev/null 2>&1; then
+    echo "yum"
+  elif command -v pacman >/dev/null 2>&1; then
+    echo "pacman"
+  elif command -v zypper >/dev/null 2>&1; then
+    echo "zypper"
+  elif command -v apk >/dev/null 2>&1; then
+    echo "apk"
+  else
+    echo "unknown"
+  fi
 }
 
 install_pkgs() {
-  local mgr="$1"; shift
+  local mgr="$1"
+  shift
+  local pkgs=("$@")
   case "$mgr" in
-    apt-get)
-      apt-get update -qq
-      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@"
+    apt)
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -qq && apt-get install -y -qq "${pkgs[@]}"
       ;;
-    dnf)    dnf install -y -q "$@" ;;
-    yum)    yum install -y -q "$@" ;;
-    pacman) pacman -Sy --noconfirm --needed "$@" ;;
-    apk)    apk add --no-cache "$@" ;;
-    zypper) zypper --non-interactive install -y "$@" ;;
+    dnf)
+      dnf install -y -q "${pkgs[@]}"
+      ;;
+    yum)
+      yum install -y -q "${pkgs[@]}"
+      ;;
+    pacman)
+      pacman -Sy --noconfirm "${pkgs[@]}"
+      ;;
+    zypper)
+      zypper --non-interactive install -y "${pkgs[@]}"
+      ;;
+    apk)
+      apk add --no-cache "${pkgs[@]}"
+      ;;
+    *)
+      return 1
+      ;;
   esac
 }
 
-MGR=$(detect_mgr)
-[[ "$MGR" == "apt-get" ]] && iproute_pkg=iproute2 || iproute_pkg=iproute
+echo
+echo "================================================================"
+echo "  🚀 开始安装部署 sout - s-ui 动态家宽出口插件"
+echo "================================================================"
 
-need_cmd=()
-for c in curl tar python3 sqlite3; do
-  command -v "$c" >/dev/null || need_cmd+=("$c")
+echo "[1/6] 检查系统依赖..."
+MGR=$(detect_pkg_mgr)
+needed=()
+for cmd in curl tar ip ss; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    needed+=("$cmd")
+  fi
 done
 
-if [[ ${#need_cmd[@]} -gt 0 ]]; then
-  echo "      缺少基础工具: ${need_cmd[*]}"
-  if [[ -z "$MGR" ]]; then
-    echo "      无法识别包管理器，请手动安装上述工具" >&2
-    exit 1
-  fi
+if [[ ${#needed[@]} -gt 0 ]]; then
+  echo "      发现缺失命令: ${needed[*]}，正在匹配软件包..."
   pkgs=()
-  for c in "${need_cmd[@]}"; do
-    pkgs+=("$(pkg_for "$c" "$MGR")")
+  for cmd in "${needed[@]}"; do
+    case "$cmd" in
+      curl) pkgs+=("curl") ;;
+      tar)  pkgs+=("tar") ;;
+      ip)   [[ "$MGR" == "apk" ]] && pkgs+=("iproute2") || pkgs+=("iproute2") ;;
+      ss)   [[ "$MGR" == "apk" ]] && pkgs+=("iproute2") || pkgs+=("iproute2") ;;
+    esac
   done
   echo "      正在自动安装: ${pkgs[*]}"
   install_pkgs "$MGR" "${pkgs[@]}" || {
@@ -355,34 +433,18 @@ for _ in $(seq 1 10); do
   sleep 1
 done
 
-# 可选：仅在 s-ui 是由本脚本全新安装时，才主动引导配置 Caddy 4合1 反代
-caddy_prompt=""
-if [[ "$SUI_INSTALLED_BY_US" == "1" ]]; then
+# 如果用户在第一步输入了隧道信息，此时自动执行隧道与 Caddy 4合1 初始化
+if [[ "$WANT_TUNNEL" == "y" && -n "$TUNNEL_DOMAIN" && -n "$TUNNEL_TOKEN" ]]; then
   echo
-  echo "  💡 提示：强烈推荐开启 Cloudflare 隧道 4合1 统一反代（免开端口 / 免证书 / 杜绝525报错）"
-  if [[ -t 0 ]]; then
-    read -rp "  是否立即配置 Cloudflare 隧道 4合1 统一反代？[y/N]: " caddy_prompt
-  else
-    if [[ -c /dev/tty ]]; then
-      read -rp "  是否立即配置 Cloudflare 隧道 4合1 统一反代？[y/N]: " caddy_prompt < /dev/tty || caddy_prompt="n"
-    fi
-  fi
-
-  if [[ "${caddy_prompt,,}" == "y" || "${caddy_prompt,,}" == "yes" ]]; then
-    if [[ -x /usr/local/bin/sout ]]; then
-      if [[ -c /dev/tty ]]; then
-        /usr/local/bin/sout caddy < /dev/tty || true
-      else
-        /usr/local/bin/sout caddy || true
-      fi
-    fi
+  echo "  [+] 正在根据第一步输入的参数配置 Cloudflare 隧道 4合1 反代..."
+  if [[ -x /usr/local/bin/sout ]]; then
+    bash -c "source /usr/local/bin/sout; setup_caddy_proxy '$TUNNEL_DOMAIN' '$TUNNEL_TOKEN' '$TUNNEL_PORT'" || true
   fi
 fi
 
 IP=$(curl -s --max-time 8 http://api.ipify.org || echo "<服务器IP>")
 BP=$(cat "${WORK_DIR}/basepath" 2>/dev/null || true)
-ACTUAL_PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' \
-  "${WORK_DIR}/settings.json" 2>/dev/null | head -1)
+ACTUAL_PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*//p'   "${WORK_DIR}/settings.json" 2>/dev/null | head -1)
 [[ -n $ACTUAL_PORT ]] && WEB_PORT="$ACTUAL_PORT"
 
 CADDY_META="${WORK_DIR}/caddy_meta.json"
@@ -408,10 +470,57 @@ if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$
   echo "  s-ui 密码:    ${c_sui_w:-见 caddy_meta.json}"
   echo "  订阅链接:    https://${c_dom}/${c_sub_p}/"
   echo "  s-ui 唤起命令:  s-ui"
-  echo "  证书存放路径:  /home/acme"
   echo "================================================================"
   echo
 else
+  # 读取 s-ui 独立模式下的端口、路径与管理员账号密码
+  sui_u="admin"
+  sui_p=""
+  sui_port="8443"
+  sui_path="/app/"
+  sui_db="/usr/local/s-ui/db/s-ui.db"
+  if [[ -f "$sui_db" ]]; then
+    if command -v sqlite3 >/dev/null 2>&1; then
+      sui_u=$(sqlite3 "$sui_db" "SELECT username FROM users LIMIT 1;" 2>/dev/null || echo "admin")
+      local_db_p=$(sqlite3 "$sui_db" "SELECT password FROM users LIMIT 1;" 2>/dev/null || true)
+      local_p_val=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPort' LIMIT 1;" 2>/dev/null || true)
+      [[ -n "$local_p_val" ]] && sui_port="$local_p_val"
+      local_path_val=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPath' LIMIT 1;" 2>/dev/null || true)
+      [[ -n "$local_path_val" ]] && sui_path="$local_path_val"
+      if [[ "$local_db_p" =~ ^\$2[ayb]\$ ]]; then
+        sui_p=$(cat "${WORK_DIR}/sui_pass" 2>/dev/null || echo "(已加密，如遗忘可通过 s-ui 命令行重置)")
+      else
+        sui_p="${local_db_p:-见 s-ui 提示}"
+      fi
+    elif command -v python3 >/dev/null 2>&1; then
+      python_out=$(python3 -c "
+import sqlite3
+con = sqlite3.connect('$sui_db')
+cur = con.cursor()
+u = cur.execute('SELECT username, password FROM users LIMIT 1').fetchone()
+port = '8443'
+path = '/app/'
+for r in cur.execute('SELECT key, value FROM settings WHERE key in ("webPort", "webPath")').fetchall():
+    if r[0] == 'webPort': port = r[1]
+    if r[0] == 'webPath': path = r[1]
+print(f'{u[0] if u else "admin"}|{u[1] if u else ""}|{port}|{path}')
+con.close()
+" 2>/dev/null || true)
+      if [[ -n "$python_out" ]]; then
+        sui_u=$(echo "$python_out" | cut -d'|' -f1)
+        sui_p_raw=$(echo "$python_out" | cut -d'|' -f2)
+        sui_port=$(echo "$python_out" | cut -d'|' -f3)
+        sui_path=$(echo "$python_out" | cut -d'|' -f4)
+        if [[ "$sui_p_raw" =~ ^\$2[ayb]\$ ]]; then
+          sui_p=$(cat "${WORK_DIR}/sui_pass" 2>/dev/null || echo "(已加密，如遗忘可通过 s-ui 命令行重置)")
+        else
+          sui_p="${sui_p_raw:-见 s-ui 提示}"
+        fi
+      fi
+    fi
+  fi
+  [[ -z "$sui_p" ]] && sui_p=$(cat "${WORK_DIR}/sui_pass" 2>/dev/null || echo "(见 s-ui 命令行)")
+
   echo
   echo "================================================================"
   echo "  🎉 sout 插件安装部署完成！"
@@ -423,9 +532,11 @@ else
   echo
   if check_sui; then
     echo "  [s-ui (Sing-Box) 节点面板]"
+    echo "  s-ui 面板:  http://${IP}:${sui_port}${sui_path}"
+    echo "  s-ui 用户名:  ${sui_u:-admin}"
+    echo "  s-ui 密码:    ${sui_p}"
     echo "  s-ui 唤起命令:  s-ui"
   fi
-  echo "  证书存放路径:  /home/acme"
   echo "================================================================"
   echo
 fi
