@@ -845,7 +845,7 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 			inboundsJSON := fmt.Sprintf("[%d]", templateID)
 
 			insertSQL := fmt.Sprintf(
-				"INSERT INTO clients (enable, name, remark, config, inbounds, created_at) VALUES (1, '%s', '%s', CAST('%s' AS BLOB), CAST('%s' AS BLOB), %d);",
+				"INSERT INTO clients (enable, name, remark, config, inbounds, links, created_at) VALUES (1, '%s', '%s', CAST('%s' AS BLOB), CAST('%s' AS BLOB), CAST('[]' AS BLOB), %d);",
 				clientName, clientRemark, strings.ReplaceAll(string(cfgBytes), "'", "''"), inboundsJSON, time.Now().Unix(),
 			)
 			_ = s.sqliteQuery(insertSQL)
