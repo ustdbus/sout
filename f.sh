@@ -1157,7 +1157,7 @@ EOF
     if [[ -z "$sui_token" ]]; then
       echo -e "  ${Y}[!] 未找到 s-ui API Token，跳过自动配置（请先启动 sout 生成 Token）${N}"
     else
-      echo -e "  [+] 正在通过 s-ui API 自动配置 (路径分流与 VLESS-WS 节点)..."
+      echo -e "  [+] 正在通过 s-ui API 自动配置 (路径分流与 vmess-argo 节点)..."
       SUI_API="http://127.0.0.1:${sui_port}/${sui_path}/apiv2" \
       SUI_TOKEN="$sui_token" \
         SUI_DB="$sui_db" \
@@ -1217,10 +1217,10 @@ api('POST', 'save', {
     'data': json.dumps(settings_data),
 })
 
-# 2. 通过 s-ui API 创建/更新 VLESS-WS-CDN 入站
+# 2. 通过 s-ui API 创建/更新 vmess-argo 入站
 inbounds_resp = api('GET', 'inbounds')
 inbound_rows = inbounds_resp.get('obj', {}).get('inbounds') or []
-node_tag = 'vless-ws-cdn'
+node_tag = 'vmess-argo'
 existing_inbound_id = None
 for row in inbound_rows:
     if row.get('tag') == node_tag:
@@ -1244,7 +1244,7 @@ addrs_data = [{
 }]
 inbound_payload = {
     'id': existing_inbound_id or 0,
-    'type': 'vless',
+    'type': 'vmess',
     'tag': node_tag,
     'tls_id': 0,
     'listen': '127.0.0.1',
@@ -1274,7 +1274,7 @@ for row in inbounds_resp.get('obj', {}).get('inbounds') or []:
         inbound_id = row.get('id')
         break
 if not inbound_id:
-    raise SystemExit('创建 VLESS-WS-CDN 入站失败')
+    raise SystemExit('创建 vmess-argo 入站失败')
 
 # 4. 通过 s-ui API 保存 admin 客户端，由 s-ui 自动生成订阅链接（含 ed/fp）
 clients_resp = api('GET', 'clients')
@@ -1289,10 +1289,9 @@ client_payload = {
     'name': os.environ.get('SUI_ADMIN_USER', 'admin'),
     'remark': '默认用户',
     'config': {
-        'vless': {
+        'vmess': {
             'name': os.environ.get('SUI_ADMIN_USER', 'admin'),
-            'uuid': client_uuid,
-            'flow': ''
+            'uuid': client_uuid
         }
     },
     'inbounds': [inbound_id],
@@ -1392,7 +1391,6 @@ METAEOF
   echo -e "      管理密码:  ${D}[由您在 s-ui 中设置，已安全加密]${N}"
   echo
     echo -e "  [3] sout 订阅地址:  ${B}https://${domain}/${sout_path}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")${N}"
-  echo -e "  [4] VLESS+WS+CDN 节点:    ${B}wss://${domain}:443/${ws_path}${N}"
   echo -e "${G}================================================================${N}"
   echo
 }
@@ -1523,7 +1521,6 @@ caddy_menu() {
             echo -e "  [1] sout 管理面板:  ${B}https://${dom}/${sout_p}/${N}"
             echo -e "  [2] s-ui 管理面板:  ${B}https://${dom}/${sui_p}/${N}"
               echo -e "  [3] sout 订阅地址:  ${B}https://${dom}/${sout_p}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")${N}"
-            echo -e "  [4] VLESS-WS 节点:  ${B}wss://${dom}:443/${ws_p}${N}"
             echo -e "  访问口令:          ${Y}$(cat "${WORK_DIR}/password" 2>/dev/null || echo "未设置")${N}"
           fi
           pause ;;

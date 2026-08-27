@@ -423,6 +423,7 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 			"ssl_key":      cfg.SSLKey,
 			"scheme":       cfg.schemeString(),
 			"has_password": true,
+			"password": auth.currentPassword(),
 			"version":      version,
 		})
 	}

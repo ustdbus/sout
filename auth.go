@@ -72,6 +72,12 @@ func randomToken(n int) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+func (a *Auth) currentPassword() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.password
+}
+
 func (a *Auth) check(pw string) bool {
 	a.mu.RLock()
 	cur := a.password
@@ -144,10 +150,6 @@ func (a *Auth) Wrap(next http.Handler) http.Handler {
 				return
 			}
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "访问口令不正确"})
-			return
-		}
-		if r.URL.Path == "/sub" || r.URL.Path == "/sub/" {
-			next.ServeHTTP(w, r)
 			return
 		}
 		if c, err := r.Cookie(sessionCookie); err == nil && a.valid(c.Value) {

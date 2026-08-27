@@ -173,11 +173,11 @@ api('POST', 'save', {
     'data': json.dumps(settings_data),
 })
 
-# 更新 VLESS-WS-CDN 入站 addrs（域名变化）
+# 更新 vmess-argo 入站 addrs（域名变化）
 inbounds_resp = api('GET', 'inbounds')
 inbound_id = None
 for row in inbounds_resp.get('obj', {}).get('inbounds') or []:
-    if row.get('tag') == 'vless-ws-cdn':
+    if row.get('tag') == 'vmess-argo':
         inbound_id = row.get('id')
         break
 if inbound_id:
@@ -538,7 +538,6 @@ EOF
   echo "      管理密码:  [由您在 s-ui 中设置，已安全加密]"
   echo
     echo "  [3] sout 订阅地址:  https://${domain}/${sout_p}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")"
-  echo "  [4] VLESS+WS+CDN 节点:    wss://${domain}:443/${ws_p}"
   echo "================================================================"
   echo
 }

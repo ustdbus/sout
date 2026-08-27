@@ -847,9 +847,13 @@ $('#saveCredBtn').onclick = async e => {
   e.target.disabled = false;
 };
 
-$('#exportAll').onclick = () => {
-  const subURL = new URL('sub', location.href).href;
-  window.open(subURL, '_blank');
+$('#exportAll').onclick = async () => {
+  try {
+    const s = await api('/api/settings');
+    const subURL = new URL('sub=' + encodeURIComponent(s.password || ''), location.href);
+    window.open(subURL, '_blank');
+    closeModal('exportModal');
+  } catch(e) { toast(e.message, true); }
 };
 $('#copyAllLinksBtn').onclick = () => copy($('#allLinksBox').value);
 
