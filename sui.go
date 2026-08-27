@@ -431,18 +431,22 @@ func (s *SUI) Inbounds(live map[string]bool) ([]Inbound, error) {
 		return nil, err
 	}
 
-	var rawWrap struct {
-		Inbounds []struct {
-			ID         int             `json:"id"`
-			Type       string          `json:"type"`
-			Tag        string          `json:"tag"`
-			Listen     string          `json:"listen"`
-			ListenPort int             `json:"listen_port"`
-			OutJson    json.RawMessage `json:"out_json"`
-		} `json:"inbounds"`
+	type inbItem struct {
+		ID         int             `json:"id"`
+		Type       string          `json:"type"`
+		Tag        string          `json:"tag"`
+		Listen     string          `json:"listen"`
+		ListenPort int             `json:"listen_port"`
+		OutJson    json.RawMessage `json:"out_json"`
 	}
-	if err := json.Unmarshal(obj, &rawWrap); err != nil {
-		return nil, fmt.Errorf("解析入站列表失败: %w", err)
+	var inboundsList []inbItem
+	var rawWrap struct {
+		Inbounds []inbItem `json:"inbounds"`
+	}
+	if err := json.Unmarshal(obj, &rawWrap); err == nil && len(rawWrap.Inbounds) > 0 {
+		inboundsList = rawWrap.Inbounds
+	} else {
+		_ = json.Unmarshal(obj, &inboundsList)
 	}
 
 	clientRowsJSON, _ := s.sqliteJSONQuery("SELECT id, name, remark, enable, inbounds, links, config FROM clients;")
@@ -455,7 +459,7 @@ func (s *SUI) Inbounds(live map[string]bool) ([]Inbound, error) {
 	}
 
 	var list []Inbound
-	for _, item := range rawWrap.Inbounds {
+	for _, item := range inboundsList {
 		if isResidentialBranch(item.Tag) {
 			continue // 忽略旧版克隆入站
 		}
@@ -629,17 +633,24 @@ func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {
 		return err
 	}
 
-	var rawWrap struct {
-		Outbounds []struct {
-			ID   int    `json:"id"`
-			Tag  string `json:"tag"`
-			Type string `json:"type"`
-		} `json:"outbounds"`
+	type outboundItem struct {
+		ID   int    `json:"id"`
+		Tag  string `json:"tag"`
+		Type string `json:"type"`
 	}
-	_ = json.Unmarshal(outboundsObj, &rawWrap)
+
+	var list []outboundItem
+	var rawWrap struct {
+		Outbounds []outboundItem `json:"outbounds"`
+	}
+	if err := json.Unmarshal(outboundsObj, &rawWrap); err == nil && len(rawWrap.Outbounds) > 0 {
+		list = rawWrap.Outbounds
+	} else {
+		_ = json.Unmarshal(outboundsObj, &list)
+	}
 
 	existingFanoutTags := make(map[string]int)
-	for _, ob := range rawWrap.Outbounds {
+	for _, ob := range list {
 		if isSUIOutboundTag(ob.Tag) {
 			existingFanoutTags[ob.Tag] = ob.ID
 		}
@@ -768,13 +779,19 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 	if err != nil {
 		return nil, err
 	}
+	var inboundsList []map[string]any
 	var rawWrap struct {
 		Inbounds []map[string]any `json:"inbounds"`
 	}
-	if err := json.Unmarshal(inboundsObj, &rawWrap); err != nil || len(rawWrap.Inbounds) == 0 {
+	if err := json.Unmarshal(inboundsObj, &rawWrap); err == nil && len(rawWrap.Inbounds) > 0 {
+		inboundsList = rawWrap.Inbounds
+	} else {
+		_ = json.Unmarshal(inboundsObj, &inboundsList)
+	}
+	if len(inboundsList) == 0 {
 		return nil, fmt.Errorf("未找到模板入站 %d", templateID)
 	}
-	tpl := rawWrap.Inbounds[0]
+	tpl := inboundsList[0]
 	origTag, _ := tpl["tag"].(string)
 	if origTag == "" {
 		origTag = fmt.Sprintf("inbound-%d", templateID)
