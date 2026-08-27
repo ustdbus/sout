@@ -175,6 +175,7 @@ func DetectSUI(workDir string) (*SUI, error) {
 		s := newSUI(cachedSUIToken)
 		if s.tokenValid() {
 			s.cleanLegacyClonedInbounds()
+			_ = s.cleanStaleRoutesAndClients(nil)
 			s.syncSUIDatabaseLinks(hostPublicIP())
 			return s, nil
 		}
@@ -202,6 +203,7 @@ func DetectSUI(workDir string) (*SUI, error) {
 				saveTokenFile(workDir, suiTokenFile, existingToken)
 			}
 			s.cleanLegacyClonedInbounds()
+			_ = s.cleanStaleRoutesAndClients(nil)
 			s.syncSUIDatabaseLinks(hostPublicIP())
 			return s, nil
 		}
@@ -571,7 +573,7 @@ func (s *SUI) BindUserRoute(userName string, hostname string, tunnels []*Tunnel)
 		}
 		if isSUIOutboundTag(outbound) {
 			// 如果该出站已经在当前活跃隧道中失效/不存在，直接丢弃该悬空规则
-			if len(validOutboundTags) > 2 && !validOutboundTags[outbound] && outbound != (suiTagPrefix+sanitizeTag(hostname)) {
+			if !validOutboundTags[outbound] && outbound != (suiTagPrefix+sanitizeTag(hostname)) {
 				continue
 			}
 			users := toSUITagSlice(ruleMap["auth_user"])
@@ -1714,7 +1716,118 @@ func (s *SUI) ResetClient(id int, email string, tunnels []*Tunnel) error {
 }
 
 func (s *SUI) OnTunnelsChanged(tunnels []*Tunnel) error {
-	return s.syncOutbounds(tunnels)
+	if err := s.syncOutbounds(tunnels); err != nil {
+		return err
+	}
+	return s.cleanStaleRoutesAndClients(tunnels)
+}
+
+func isSplitUser(u string) bool {
+	return strings.HasPrefix(u, "soutu") || strings.HasPrefix(u, "sout-u-") || strings.HasPrefix(u, "fanoutu") || strings.HasPrefix(u, "fanout-u-")
+}
+
+// cleanStaleRoutesAndClients 自动清理不存在于活跃隧道中的残余路由规则与分流用户
+func (s *SUI) cleanStaleRoutesAndClients(tunnels []*Tunnel) error {
+	activeTags := make(map[string]bool)
+	for _, t := range tunnels {
+		if t.Status == "up" && t.Node.HostName != "" {
+			activeTags[suiTagPrefix+sanitizeTag(t.Node.HostName)] = true
+		}
+	}
+
+	// 1. 清理 SQLite 中的失效分流客户端
+	clientRowsJSON, _ := s.sqliteJSONQuery("SELECT id, name FROM clients WHERE name LIKE 'soutu%' OR name LIKE 'sout-u-%' OR name LIKE 'fanoutu%' OR name LIKE 'fanout-u-%';")
+	var clients []struct {
+		ID   int    `json:"id"`
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal(clientRowsJSON, &clients)
+	for _, c := range clients {
+		matched := false
+		for tag := range activeTags {
+			hostPart := strings.TrimPrefix(tag, suiTagPrefix)
+			if strings.HasSuffix(c.Name, hostPart) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			_ = s.sqliteQuery(fmt.Sprintf("DELETE FROM clients WHERE id = %d;", c.ID))
+		}
+	}
+
+	// 2. 清理 sing-box 路由规则中失效的 sout/fanout 分流项
+	configObj, err := s.callAPI(http.MethodGet, "config", nil)
+	if err == nil {
+		var cfg map[string]any
+		if err := json.Unmarshal(configObj, &cfg); err == nil {
+			rawConfig, _ := cfg["config"].(map[string]any)
+			if rawConfig == nil {
+				rawConfig = cfg
+			}
+			route, _ := rawConfig["route"].(map[string]any)
+			if route != nil {
+				rules, _ := route["rules"].([]any)
+				var cleanRules []any
+				changed := false
+				for _, r := range rules {
+					ruleMap, ok := r.(map[string]any)
+					if !ok {
+						cleanRules = append(cleanRules, r)
+						continue
+					}
+					outbound, _ := ruleMap["outbound"].(string)
+					// 如果该规则指向 sout 出站但当前已无该活跃隧道，直接丢弃
+					if isSUIOutboundTag(outbound) && !activeTags[outbound] {
+						changed = true
+						continue
+					}
+					// 检查 auth_user 中是否包含失效的分流用户
+					users := toSUITagSlice(ruleMap["auth_user"])
+					if len(users) > 0 {
+						var validUsers []string
+						for _, u := range users {
+							if isSplitUser(u) {
+								userMatched := false
+								for tag := range activeTags {
+									hostPart := strings.TrimPrefix(tag, suiTagPrefix)
+									if strings.HasSuffix(u, hostPart) {
+										userMatched = true
+										break
+									}
+								}
+								if userMatched {
+									validUsers = append(validUsers, u)
+								}
+							} else {
+								validUsers = append(validUsers, u)
+							}
+						}
+						if len(validUsers) != len(users) {
+							changed = true
+							if len(validUsers) == 0 {
+								continue
+							}
+							ruleMap["auth_user"] = validUsers
+						}
+					}
+					cleanRules = append(cleanRules, ruleMap)
+				}
+				if changed {
+					route["rules"] = cleanRules
+					rawConfig["route"] = route
+					configBytes, _ := json.Marshal(rawConfig)
+					form := url.Values{
+						"object": {"config"},
+						"action": {"edit"},
+						"data":   {string(configBytes)},
+					}
+					_, _ = s.callAPI(http.MethodPost, "save", form)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (s *SUI) Close() {}
