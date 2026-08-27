@@ -1150,145 +1150,163 @@ EOF
   local sui_admin_user
   sui_admin_user=$(get_sui_user)
 
-  if [[ -f "$sui_db" ]]; then
-    echo -e "  [+] 正在自动配置 s-ui 数据库 (路径分流与 VLESS-WS 节点)..."
-    python3 << PYEOF
-import sqlite3, json, os, uuid, urllib.parse
+    if [[ -f "$sui_db" ]]; then
+    local sui_token
+    sui_token=$(cat "${WORK_DIR}/sui-token" 2>/dev/null || true)
+    if [[ -z "$sui_token" ]]; then
+      echo -e "  ${Y}[!] 未找到 s-ui API Token，跳过自动配置（请先启动 sout 生成 Token）${N}"
+    else
+      echo -e "  [+] 正在通过 s-ui API 自动配置 (路径分流与 VLESS-WS 节点)..."
+      SUI_API="http://127.0.0.1:${sui_port}/${sui_path}/apiv2" \
+      SUI_TOKEN="$sui_token" \
+      DOMAIN="$domain" \
+      SUI_PORT="$sui_port" \
+      SUI_PATH="/${sui_path}/" \
+      SUB_PORT="$sub_port" \
+      SUB_PATH="/${sub_path}/" \
+      NODE_PORT="$node_port" \
+      WS_PATH="/${ws_path}" \
+      SUI_ADMIN_USER="$sui_admin_user" \
+      python3 <<'PYEOF'
+import json, os, uuid, urllib.request, urllib.parse
 
-db = '$sui_db'
-domain = '$domain'
-sui_port = $sui_port
-sui_path = '/${sui_path}/'
-sub_port = $sub_port
-sub_path = '/${sub_path}/'
-node_port = $node_port
-ws_path = '/${ws_path}'
+BASE = os.environ['SUI_API']
+TOKEN = os.environ['SUI_TOKEN']
 
-con = sqlite3.connect(db)
-cur = con.cursor()
+def api(method, endpoint, form=None):
+    url = BASE.rstrip('/') + '/' + endpoint.lstrip('/')
+    data = urllib.parse.urlencode(form).encode() if form else None
+    headers = {'Token': TOKEN}
+    if data is not None:
+        headers['Content-Type'] = 'application/x-www-form-urlencoded'
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return json.loads(resp.read().decode('utf-8'))
 
-# 1. 更新 settings
-settings_map = {
-    'webPort': str(sui_port),
+# 1. 更新 s-ui settings，全部走 s-ui API
+settings_data = {
+    'webPort': str(os.environ.get('SUI_PORT', '')),
     'webListen': '127.0.0.1',
-    'webPath': sui_path,
-    'webURI': f'https://{domain}{sui_path}',
-    'subPort': str(sub_port),
+    'webPath': os.environ['SUI_PATH'],
+    'webURI': f'https://{os.environ["DOMAIN"]}{os.environ["SUI_PATH"]}',
+    'subPort': str(os.environ.get('SUB_PORT', '')),
     'subListen': '127.0.0.1',
-    'subPath': sub_path,
-    'subURI': f'https://{domain}{sub_path}',
+    'subPath': os.environ['SUB_PATH'],
+    'subURI': f'https://{os.environ["DOMAIN"]}{os.environ["SUB_PATH"]}',
     'webCertFile': '',
     'webKeyFile': '',
     'subCertFile': '',
-    'subKeyFile': ''
+    'subKeyFile': '',
 }
+api('POST', 'save', {
+    'object': 'settings',
+    'action': 'set',
+    'data': json.dumps(settings_data),
+})
 
-for k, v in settings_map.items():
-    cur.execute('SELECT id FROM settings WHERE key = ?', (k,))
-    if cur.fetchone():
-        cur.execute('UPDATE settings SET value = ? WHERE key = ?', (v, k))
-    else:
-        cur.execute('INSERT INTO settings (key, value) VALUES (?, ?)', (k, v))
-
-# 2. 自动收敛所有原本监听 443 的入站节点至本地端口
-cur.execute('SELECT id, tag, options, addrs FROM inbounds')
-for inb_id, inb_tag, inb_opts, inb_addrs in cur.fetchall():
-    try:
-        opts_s = inb_opts.decode('utf-8') if isinstance(inb_opts, bytes) else str(inb_opts)
-        opts_j = json.loads(opts_s)
-        if 'sniff' in opts_j: del opts_j['sniff']
-        if 'sniff_override_destination' in opts_j: del opts_j['sniff_override_destination']
-        if opts_j.get('listen_port') == 443 or opts_j.get('listen') in ('::', '0.0.0.0', '*'):
-            if 'transport' in opts_j and opts_j['transport'].get('type') == 'ws':
-                opts_j['listen'] = '127.0.0.1'
-                opts_j['listen_port'] = 43641
-                b_opts = json.dumps(opts_j, indent=2).encode('utf-8')
-                b_addrs = inb_addrs if isinstance(inb_addrs, bytes) else (str(inb_addrs).encode('utf-8') if inb_addrs else b'[]')
-                cur.execute('UPDATE inbounds SET tls_id = 0, options = ?, addrs = ? WHERE id = ?',
-                            (b_opts, b_addrs, inb_id))
-    except:
-        pass
-
-# 3. 配置/更新 VLESS-WS CDN 节点
+# 2. 通过 s-ui API 创建/更新 VLESS-WS-CDN 入站
+inbounds_resp = api('GET', 'inbounds')
+inbound_rows = inbounds_resp.get('obj', {}).get('inbounds') or []
 node_tag = 'vless-ws-cdn'
-client_uuid = str(uuid.uuid4())
+existing_inbound_id = None
+for row in inbound_rows:
+    if row.get('tag') == node_tag:
+        existing_inbound_id = row.get('id')
+        break
 
-addrs_data = [
-    {
-        'server': domain,
-        'server_port': 443,
-        'tls': {
-            'disable_sni': False,
+client_uuid = str(uuid.uuid4())
+addrs_data = [{
+    'server': os.environ['DOMAIN'],
+    'server_port': 443,
+    'tls': {
+        'disable_sni': False,
+        'enabled': True,
+        'insecure': False,
+        'server_name': os.environ['DOMAIN'],
+        'utls': {
             'enabled': True,
-            'insecure': False,
-            'server_name': domain,
-            'utls': {
-                'enabled': True,
-                'fingerprint': 'chrome'
-            }
+            'fingerprint': 'chrome'
         }
     }
-]
-addrs_blob = json.dumps(addrs_data, indent=2).encode('utf-8')
-
-options_dict = {
+}]
+inbound_payload = {
+    'id': existing_inbound_id or 0,
+    'type': 'vless',
+    'tag': node_tag,
+    'tls_id': 0,
     'listen': '127.0.0.1',
-    'listen_port': node_port,
-    'users': [
-        {
-            'flow': '',
-            'name': 'admin',
-            'uuid': client_uuid
-        }
-    ],
+    'listen_port': int(os.environ['NODE_PORT']),
+    'addrs': addrs_data,
     'transport': {
         'early_data_header_name': 'Sec-WebSocket-Protocol',
         'max_early_data': 2560,
         'headers': {
-            'Host': domain
+            'Host': os.environ['DOMAIN']
         },
-        'path': ws_path,
+        'path': os.environ['WS_PATH'],
         'type': 'ws'
     }
 }
-options_blob = json.dumps(options_dict, indent=2).encode('utf-8')
+api('POST', 'save', {
+    'object': 'inbounds',
+    'action': 'edit' if existing_inbound_id else 'new',
+    'data': json.dumps(inbound_payload),
+})
 
-cur.execute('SELECT id FROM inbounds WHERE tag = ?', (node_tag,))
-inb_row = cur.fetchone()
-if inb_row:
-    cur.execute('UPDATE inbounds SET type = ?, tls_id = 0, addrs = ?, options = ? WHERE id = ?',
-                ('vless', addrs_blob, options_blob, inb_row[0]))
-else:
-    cur.execute('INSERT INTO inbounds (type, tag, tls_id, addrs, options) VALUES (?, ?, 0, ?, ?)',
-                ('vless', node_tag, addrs_blob, options_blob))
-    inb_id = cur.lastrowid
+# 3. 重新查询入站 id（新建后需要）
+inbounds_resp = api('GET', 'inbounds')
+inbound_id = None
+for row in inbounds_resp.get('obj', {}).get('inbounds') or []:
+    if row.get('tag') == node_tag:
+        inbound_id = row.get('id')
+        break
+if not inbound_id:
+    raise SystemExit('创建 VLESS-WS-CDN 入站失败')
 
-node_uri = f'vless://{client_uuid}@{domain}:443?type=ws&path={urllib.parse.quote(ws_path)}&host={domain}&security=tls&sni={domain}#{urllib.parse.quote(node_tag)}'
-links_data = [
-    {
-        'remark': node_tag,
-        'type': 'local',
-        'uri': node_uri
-    }
-]
-links_blob = json.dumps(links_data, indent=2).encode('utf-8')
-
-client_cfg = json.dumps({'vless': {'name': 'admin', 'uuid': client_uuid, 'flow': ''}}).encode('utf-8')
-inbounds_blob = json.dumps([inb_id]).encode('utf-8')
-cur.execute('SELECT id FROM clients WHERE name = ?', ('admin',))
-c_row = cur.fetchone()
-if c_row:
-    cur.execute('UPDATE clients SET enable = 1, config = ?, inbounds = ?, links = ? WHERE id = ?',
-                (client_cfg, inbounds_blob, links_blob, c_row[0]))
-else:
-    cur.execute("INSERT INTO clients (enable, name, remark, config, inbounds, links, created_at) VALUES (1, ?, ?, ?, ?, ?, strftime('%s', 'now'))",
-                ('admin', '默认用户', client_cfg, inbounds_blob, links_blob))
-
-cur.execute("UPDATE clients SET links = CAST('[]' AS BLOB) WHERE links IS NULL OR length(links) = 0")
-
-con.commit()
-con.close()
+# 4. 通过 s-ui API 保存 admin 客户端，由 s-ui 自动生成订阅链接（含 ed/fp）
+clients_resp = api('GET', 'clients')
+admin = None
+for row in clients_resp.get('obj', {}).get('clients') or []:
+    if row.get('name') == os.environ.get('SUI_ADMIN_USER', 'admin'):
+        admin = row
+        break
+client_payload = {
+    'id': admin.get('id', 0) if admin else 0,
+    'enable': True,
+    'name': os.environ.get('SUI_ADMIN_USER', 'admin'),
+    'remark': '默认用户',
+    'config': {
+        'vless': {
+            'name': os.environ.get('SUI_ADMIN_USER', 'admin'),
+            'uuid': client_uuid,
+            'flow': ''
+        }
+    },
+    'inbounds': [inbound_id],
+    'links': [],
+    'volume': 0,
+    'expiry': 0,
+    'down': 0,
+    'up': 0,
+    'desc': '',
+    'group': '',
+    'delayStart': False,
+    'autoReset': False,
+    'resetDays': 0,
+    'nextReset': 0,
+    'totalUp': 0,
+    'totalDown': 0,
+    'createdAt': 0,
+    'onlineAt': 0,
+}
+api('POST', 'save', {
+    'object': 'clients',
+    'action': 'edit' if admin else 'new',
+    'data': json.dumps(client_payload),
+})
 PYEOF
+      systemctl restart s-ui 2>/dev/null || true
+    fi
     systemctl restart s-ui 2>/dev/null || true
   fi
 

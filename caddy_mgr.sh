@@ -120,47 +120,93 @@ except Exception: pass
       systemctl restart sout 2>/dev/null || true
     fi
 
-    if [[ -f "$SUI_DB" ]]; then
-      python3 -c "
-import sqlite3, json
-try:
-    con = sqlite3.connect('$SUI_DB')
-    cur = con.cursor()
-    cur.execute("SELECT value FROM settings WHERE key='webPath'")
-    wp = cur.fetchone()
-    wp_str = wp[0] if wp else '/app/'
-    cur.execute("SELECT value FROM settings WHERE key='subPath'")
-    sp = cur.fetchone()
-    sp_str = sp[0] if sp else '/sub/'
-    
-    cur.execute("UPDATE settings SET value=? WHERE key='webURI'", (f'https://$CUR_DOMAIN{wp_str}',))
-    cur.execute("UPDATE settings SET value=? WHERE key='subURI'", (f'https://$CUR_DOMAIN{sp_str}',))
+      if [[ -f "$SUI_DB" ]]; then
+        sui_token=$(cat "/var/lib/sout/sui-token" 2>/dev/null || true)
+        if [[ -n "$sui_token" ]]; then
+          SUI_TOKEN="$sui_token" SUI_DB="$SUI_DB" CUR_DOMAIN="$CUR_DOMAIN" python3 <<'PY'
+import json, os, sqlite3, urllib.request, urllib.parse
 
-    cur.execute("SELECT id, options, addrs FROM inbounds WHERE tag='vless-ws-cdn'")
-    row = cur.fetchone()
-    if row:
-        inb_id, opts, addrs = row
-        addrs_data = [{
-            'server': '$CUR_DOMAIN',
-            'server_port': 443,
-            'tls': {
-                'disable_sni': False,
+TOKEN = os.environ['SUI_TOKEN']
+con = sqlite3.connect(os.environ['SUI_DB'])
+cur = con.cursor()
+cur.execute("SELECT value FROM settings WHERE key='webPath'")
+wp = cur.fetchone()
+wp_str = wp[0] if wp else '/app/'
+cur.execute("SELECT value FROM settings WHERE key='subPath'")
+sp = cur.fetchone()
+sp_str = sp[0] if sp else '/sub/'
+cur.execute("SELECT value FROM settings WHERE key='webPort'")
+wport = cur.fetchone()
+wport = wport[0] if wport and wport[0] else '8443'
+con.close()
+
+if not wp_str.startswith('/'):
+    wp_str = '/' + wp_str
+if not wp_str.endswith('/'):
+    wp_str += '/'
+if not sp_str.startswith('/'):
+    sp_str = '/' + sp_str
+if not sp_str.endswith('/'):
+    sp_str += '/'
+
+BASE = f'http://127.0.0.1:{wport}{wp_str}apiv2'
+domain = os.environ['CUR_DOMAIN']
+
+def api(method, endpoint, form=None):
+    url = BASE.rstrip('/') + '/' + endpoint.lstrip('/')
+    data = urllib.parse.urlencode(form).encode() if form else None
+    headers = {'Token': TOKEN}
+    if data is not None:
+        headers['Content-Type'] = 'application/x-www-form-urlencoded'
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return json.loads(resp.read().decode('utf-8'))
+
+# 更新 webURI/subURI
+settings_data = {
+    'webURI': f'https://{domain}{wp_str}',
+    'subURI': f'https://{domain}{sp_str}',
+}
+api('POST', 'save', {
+    'object': 'settings',
+    'action': 'set',
+    'data': json.dumps(settings_data),
+})
+
+# 更新 VLESS-WS-CDN 入站 addrs（域名变化）
+inbounds_resp = api('GET', 'inbounds')
+inbound_id = None
+for row in inbounds_resp.get('obj', {}).get('inbounds') or []:
+    if row.get('tag') == 'vless-ws-cdn':
+        inbound_id = row.get('id')
+        break
+if inbound_id:
+    addrs_data = [{
+        'server': domain,
+        'server_port': 443,
+        'tls': {
+            'disable_sni': False,
+            'enabled': True,
+            'insecure': False,
+            'server_name': domain,
+            'utls': {
                 'enabled': True,
-                'insecure': False,
-                'server_name': '$CUR_DOMAIN',
-                'utls': {
-                    'enabled': True,
-                    'fingerprint': 'chrome'
-                }
+                'fingerprint': 'chrome'
             }
-        }]
-        cur.execute("UPDATE inbounds SET addrs=? WHERE id=?", (json.dumps(addrs_data, indent=2).encode('utf-8'), inb_id))
-    con.commit()
-    con.close()
-except Exception: pass
-" 2>/dev/null || true
-      systemctl restart s-ui 2>/dev/null || true
-    fi
+        }
+    }]
+    api('POST', 'save', {
+        'object': 'inbounds',
+        'action': 'edit',
+        'data': json.dumps({
+            'id': inbound_id,
+            'addrs': addrs_data,
+        }),
+    })
+PY
+          systemctl restart s-ui 2>/dev/null || true
+        fi
+      fi
   fi
   sleep 3
 done
@@ -372,23 +418,52 @@ EOF
     fi
   fi
 
-  # 配置 s-ui 面板
-  local sui_u="admin"
-  if [[ -f "$SUI_DB" ]]; then
-    if command -v sqlite3 >/dev/null 2>&1; then
-      sui_u=$(sqlite3 "$SUI_DB" "SELECT username FROM users LIMIT 1;" 2>/dev/null || echo "admin")
-      sqlite3 "$SUI_DB" "UPDATE settings SET value='127.0.0.1' WHERE key='webListen';" 2>/dev/null || true
-      sqlite3 "$SUI_DB" "UPDATE settings SET value='${sui_port}' WHERE key='webPort';" 2>/dev/null || true
-      sqlite3 "$SUI_DB" "UPDATE settings SET value='/${sui_p}/' WHERE key='webPath';" 2>/dev/null || true
-      sqlite3 "$SUI_DB" "UPDATE settings SET value='https://${domain}/${sui_p}/' WHERE key='webURI';" 2>/dev/null || true
-      sqlite3 "$SUI_DB" "UPDATE settings SET value='127.0.0.1' WHERE key='subListen';" 2>/dev/null || true
-      sqlite3 "$SUI_DB" "UPDATE settings SET value='${sub_port}' WHERE key='subPort';" 2>/dev/null || true
-      sqlite3 "$SUI_DB" "UPDATE settings SET value='/${sub_p}/' WHERE key='subPath';" 2>/dev/null || true
-      sqlite3 "$SUI_DB" "UPDATE settings SET value='https://${domain}/${sub_p}/' WHERE key='subURI';" 2>/dev/null || true
+    # 配置 s-ui 面板（通过 s-ui API，避免直接写库）
+    local sui_u="admin"
+    if [[ -f "$SUI_DB" ]]; then
+      local sui_token
+      sui_token=$(cat "/var/lib/sout/sui-token" 2>/dev/null || true)
+      if [[ -z "$sui_token" ]]; then
+        echo "  [!] 未找到 s-ui API Token，跳过 s-ui 设置更新"
+      else
+        SUI_API="http://127.0.0.1:${sui_port}/${sui_p}/apiv2" \
+        SUI_TOKEN="$sui_token" \
+        DOMAIN="$domain" \
+        SUI_PORT="$sui_port" \
+        SUB_PORT="$sub_port" \
+        SUI_PATH="/${sui_p}/" \
+        SUB_PATH="/${sub_p}/" \
+        python3 <<'PY'
+import json, os, urllib.request, urllib.parse
+BASE = os.environ['SUI_API']
+TOKEN = os.environ['SUI_TOKEN']
+settings_data = {
+    'webPort': str(os.environ.get('SUI_PORT', '')),
+    'webListen': '127.0.0.1',
+    'webPath': os.environ['SUI_PATH'],
+    'webURI': f'https://{os.environ["DOMAIN"]}{os.environ["SUI_PATH"]}',
+    'subPort': str(os.environ.get('SUB_PORT', '')),
+    'subListen': '127.0.0.1',
+    'subPath': os.environ['SUB_PATH'],
+    'subURI': f'https://{os.environ["DOMAIN"]}{os.environ["SUB_PATH"]}',
+    'webCertFile': '',
+    'webKeyFile': '',
+    'subCertFile': '',
+    'subKeyFile': '',
+}
+form = urllib.parse.urlencode({
+    'object': 'settings',
+    'action': 'set',
+    'data': json.dumps(settings_data),
+}).encode()
+req = urllib.request.Request(BASE.rstrip('/') + '/save', data=form, headers={'Token': TOKEN, 'Content-Type': 'application/x-www-form-urlencoded'})
+with urllib.request.urlopen(req, timeout=20) as resp:
+    resp.read()
+PY
+        systemctl restart s-ui 2>/dev/null || true
+      fi
     fi
-    systemctl restart s-ui 2>/dev/null || true
-  fi
-  [[ -z "$sui_u" ]] && sui_u="admin"
+    [[ -z "$sui_u" ]] && sui_u="admin"
 
   # 配置 sout 服务
   local sout_json="${WORK_DIR}/settings.json"
@@ -470,13 +545,45 @@ remove_caddy_proxy() {
     systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || true
   fi
 
-  # 恢复 s-ui 为公网监听
-  if [[ -f "$SUI_DB" ]] && command -v sqlite3 >/dev/null 2>&1; then
-    sqlite3 "$SUI_DB" "UPDATE settings SET value='' WHERE key='webListen';" 2>/dev/null || true
-    sqlite3 "$SUI_DB" "UPDATE settings SET value='8443' WHERE key='webPort';" 2>/dev/null || true
-    sqlite3 "$SUI_DB" "UPDATE settings SET value='/app/' WHERE key='webPath';" 2>/dev/null || true
-    systemctl restart s-ui 2>/dev/null || true
-  fi
+    # 恢复 s-ui 为公网监听（读取当前端口/路径后通过 API 修改，避免直接写库）
+    if [[ -f "$SUI_DB" ]]; then
+      local sui_token
+      sui_token=$(cat "/var/lib/sout/sui-token" 2>/dev/null || true)
+      if [[ -n "$sui_token" ]]; then
+        SUI_TOKEN="$sui_token" SUI_DB="$SUI_DB" python3 <<'PY'
+import json, os, sqlite3, urllib.request, urllib.parse
+con = sqlite3.connect(os.environ['SUI_DB'])
+cur = con.cursor()
+cur.execute("SELECT value FROM settings WHERE key='webPort'")
+port_row = cur.fetchone()
+port = port_row[0] if port_row and port_row[0] else '8443'
+cur.execute("SELECT value FROM settings WHERE key='webPath'")
+path_row = cur.fetchone()
+path = path_row[0] if path_row and path_row[0] else '/app/'
+if not path.startswith('/'):
+    path = '/' + path
+if not path.endswith('/'):
+    path += '/'
+con.close()
+BASE = f'http://127.0.0.1:{port}{path}apiv2'
+TOKEN = os.environ['SUI_TOKEN']
+settings_data = {
+    'webListen': '',
+    'webPort': '8443',
+    'webPath': '/app/',
+}
+form = urllib.parse.urlencode({
+    'object': 'settings',
+    'action': 'set',
+    'data': json.dumps(settings_data),
+}).encode()
+req = urllib.request.Request(BASE.rstrip('/') + '/save', data=form, headers={'Token': TOKEN, 'Content-Type': 'application/x-www-form-urlencoded'})
+with urllib.request.urlopen(req, timeout=20) as resp:
+    resp.read()
+PY
+        systemctl restart s-ui 2>/dev/null || true
+      fi
+    fi
 
   echo "  [✓] 已恢复为独立端口直连模式。"
 }

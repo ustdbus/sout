@@ -354,6 +354,92 @@ type suiDBClient struct {
 	Config   json.RawMessage `json:"config"`
 }
 
+// apiClient 是 s-ui API 返回的客户端模型（GET /apiv2/clients）
+type apiClient struct {
+	ID       int             `json:"id"`
+	Enable   bool            `json:"enable"`
+	Name     string          `json:"name"`
+	Config   json.RawMessage `json:"config"`
+	Inbounds json.RawMessage `json:"inbounds"`
+	Links    json.RawMessage `json:"links"`
+	Remark   string          `json:"remark"`
+	Desc     string          `json:"desc"`
+	Group    string          `json:"group"`
+	Volume   int64           `json:"volume"`
+	Expiry   int64           `json:"expiry"`
+	Up       int64           `json:"up"`
+	Down     int64           `json:"down"`
+	DelayStart bool          `json:"delayStart"`
+	AutoReset bool           `json:"autoReset"`
+	ResetDays int            `json:"resetDays"`
+	NextReset int64          `json:"nextReset"`
+	TotalUp   int64          `json:"totalUp"`
+	TotalDown int64          `json:"totalDown"`
+	CreatedAt int64          `json:"createdAt"`
+	OnlineAt  int64          `json:"onlineAt"`
+}
+
+// apiSaveClient 调用 s-ui 自身的客户端保存接口，由 s-ui 生成/更新订阅链接。
+func (s *SUI) apiSaveClient(act string, client map[string]any) error {
+	dataBytes, err := json.Marshal(client)
+	if err != nil {
+		return err
+	}
+	form := url.Values{
+		"object": {"clients"},
+		"action": {act},
+		"data":   {string(dataBytes)},
+	}
+	_, err = s.callAPI(http.MethodPost, "save", form)
+	return err
+}
+
+// apiDeleteClient 调用 s-ui API 删除客户端，避免直接操作 SQLite。
+func (s *SUI) apiDeleteClient(id int) error {
+	dataBytes, _ := json.Marshal(id)
+	form := url.Values{
+		"object": {"clients"},
+		"action": {"del"},
+		"data":   {string(dataBytes)},
+	}
+	_, err := s.callAPI(http.MethodPost, "save", form)
+	return err
+}
+
+// apiClients 通过 s-ui API 获取客户端列表；id>0 时返回单个客户端的完整信息。
+func (s *SUI) apiClients(id int) ([]map[string]any, error) {
+	endpoint := "clients"
+	if id > 0 {
+		endpoint = fmt.Sprintf("clients?id=%d", id)
+	}
+	obj, err := s.callAPI(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	var raw struct {
+		Clients []map[string]any `json:"clients"`
+	}
+	if err := json.Unmarshal(obj, &raw); err != nil {
+		return nil, err
+	}
+	return raw.Clients, nil
+}
+
+// apiClientByName 在 s-ui 客户端列表中按名称查找。
+func (s *SUI) apiClientByName(name string) (map[string]any, bool, error) {
+	clients, err := s.apiClients(0)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, c := range clients {
+		if n, _ := c["name"].(string); n == name {
+			return c, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+
 func (s *SUI) getDBInboundIDs(inboundsRaw json.RawMessage) []int {
 	var ids []int
 	if len(inboundsRaw) == 0 {
@@ -841,66 +927,116 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		clientName := fmt.Sprintf("soutu%d%s", templateID, sanitizeTag(host))
 		clientRemark := fmt.Sprintf("%s%s", cName, poolName)
 
-		existingClientID := s.sqliteQuery(fmt.Sprintf("SELECT id FROM clients WHERE name='%s' LIMIT 1;", clientName))
-		if existingClientID == "" {
-			newUUID := generateUUID()
-			newPass := generateRandomToken(10)
+		existing, existingOK, err := s.apiClientByName(clientName)
+		if err != nil {
+			return createdPorts, fmt.Errorf("查询分流客户端失败: %w", err)
+		}
+		clientID := 0
+		var existingFull map[string]any
+		if existingOK {
+			if idVal, ok := existing["id"].(float64); ok {
+				clientID = int(idVal)
+			}
+			full, ferr := s.apiClients(clientID)
+			if ferr == nil && len(full) > 0 {
+				existingFull = full[0]
+			}
+		}
+		preserveCred := false
+		newUUID := generateUUID()
+		newPass := generateRandomToken(10)
 
-			// 精准深拷贝原生主客户端模版的 config，仅替换实际存在的协议字段
-			clientCfgObj := make(map[string]map[string]any)
-			tmplJSON, _ := s.sqliteJSONQuery(fmt.Sprintf("SELECT config FROM clients WHERE enable=1 AND %d IN (SELECT json_each.value FROM json_each(clients.inbounds)) LIMIT 1;", templateID))
-			if string(tmplJSON) == "[]" || len(tmplJSON) == 0 {
-				tmplJSON, _ = s.sqliteJSONQuery("SELECT config FROM clients WHERE enable=1 AND name NOT LIKE 'soutu%' AND name NOT LIKE 'sout-u-%' AND name NOT LIKE 'fanoutu%' AND name NOT LIKE 'fanout-u-%' LIMIT 1;")
+		// 精准深拷贝原生主客户端模版的 config，仅替换实际存在的协议字段
+		clientCfgObj := make(map[string]map[string]any)
+		if existingFull != nil {
+			if rawCfg, ok := existingFull["config"]; ok {
+				rawBytes, _ := json.Marshal(rawCfg)
+				_ = json.Unmarshal(rawBytes, &clientCfgObj)
+				preserveCred = true
 			}
-			var tmplClients []suiDBClient
-			_ = json.Unmarshal(tmplJSON, &tmplClients)
-			if len(tmplClients) > 0 {
-				clientCfgObj = parseSUIClientConfig(tmplClients[0].Config)
+		}
+		tmplJSON, _ := s.sqliteJSONQuery(fmt.Sprintf("SELECT config FROM clients WHERE enable=1 AND %d IN (SELECT json_each.value FROM json_each(clients.inbounds)) LIMIT 1;", templateID))
+		if string(tmplJSON) == "[]" || len(tmplJSON) == 0 {
+			tmplJSON, _ = s.sqliteJSONQuery("SELECT config FROM clients WHERE enable=1 AND name NOT LIKE 'soutu%' AND name NOT LIKE 'sout-u-%' AND name NOT LIKE 'fanoutu%' AND name NOT LIKE 'fanout-u-%' LIMIT 1;")
+		}
+		var tmplClients []suiDBClient
+		_ = json.Unmarshal(tmplJSON, &tmplClients)
+		if len(tmplClients) > 0 && len(clientCfgObj) == 0 {
+			clientCfgObj = parseSUIClientConfig(tmplClients[0].Config)
+		}
+		if len(clientCfgObj) == 0 {
+			clientCfgObj = map[string]map[string]any{
+				"vless": {
+					"name": clientName,
+					"uuid": newUUID,
+					"flow": baseFlow,
+				},
 			}
-			if len(clientCfgObj) == 0 {
-				clientCfgObj = map[string]map[string]any{
-					"vless": {
-						"name": clientName,
-						"uuid": newUUID,
-						"flow": baseFlow,
-					},
+		} else {
+			// 仅遍历模板中真实存在的协议并替换凭据，绝不塞入未使用的冗余协议
+			for proto, vals := range clientCfgObj {
+				if vals == nil {
+					vals = make(map[string]any)
 				}
-			} else {
-				// 仅遍历模板中真实存在的协议并替换凭据，绝不塞入未使用的冗余协议
-				for proto, vals := range clientCfgObj {
-					if vals == nil {
-						vals = make(map[string]any)
-					}
-					if _, hasName := vals["name"]; hasName {
-						vals["name"] = clientName
-					}
-					if _, hasUser := vals["username"]; hasUser {
-						vals["username"] = clientName
-					}
-					if _, hasUUID := vals["uuid"]; hasUUID {
+				if _, hasName := vals["name"]; hasName {
+					vals["name"] = clientName
+				}
+				if _, hasUser := vals["username"]; hasUser {
+					vals["username"] = clientName
+				}
+				if _, hasUUID := vals["uuid"]; hasUUID {
+					if !preserveCred {
 						vals["uuid"] = newUUID
 					}
-					if _, hasPass := vals["password"]; hasPass {
+				}
+				if _, hasPass := vals["password"]; hasPass {
+					if !preserveCred {
 						vals["password"] = newPass
 					}
-					if _, hasAuth := vals["auth_str"]; hasAuth {
+				}
+				if _, hasAuth := vals["auth_str"]; hasAuth {
+					if !preserveCred {
 						vals["auth_str"] = newPass
 					}
-					if proto == "vless" {
-						vals["flow"] = baseFlow
-					}
-					clientCfgObj[proto] = vals
 				}
+				if proto == "vless" {
+					vals["flow"] = baseFlow
+				}
+				clientCfgObj[proto] = vals
 			}
+		}
 
-			cfgBytes, _ := json.Marshal(clientCfgObj)
-			inboundsJSON := fmt.Sprintf("[%d]", templateID)
-
-			insertSQL := fmt.Sprintf(
-				"INSERT INTO clients (enable, name, remark, config, inbounds, links, created_at) VALUES (1, '%s', '%s', CAST('%s' AS BLOB), CAST('%s' AS BLOB), CAST('[]' AS BLOB), %d);",
-				clientName, clientRemark, strings.ReplaceAll(string(cfgBytes), "'", "''"), inboundsJSON, time.Now().Unix(),
-			)
-			_ = s.sqliteQuery(insertSQL)
+		// 通过 s-ui 自身 API 保存/更新分流客户端，由 s-ui 自动生成订阅链接（含 ed/fp 等参数）
+		act := "new"
+		clientPayload := map[string]any{
+			"id":         0,
+			"enable":     true,
+			"name":       clientName,
+			"remark":     clientRemark,
+			"config":     clientCfgObj,
+			"inbounds":   []int{templateID},
+			"links":      []any{},
+			"volume":     0,
+			"expiry":     0,
+			"down":       0,
+			"up":         0,
+			"desc":       "",
+			"group":      "",
+			"delayStart": false,
+			"autoReset":  false,
+			"resetDays":  0,
+			"nextReset":  0,
+			"totalUp":    0,
+			"totalDown":  0,
+			"createdAt":  0,
+			"onlineAt":   0,
+		}
+		if existingOK {
+			clientPayload["id"] = clientID
+			act = "edit"
+		}
+		if err := s.apiSaveClient(act, clientPayload); err != nil {
+			return createdPorts, fmt.Errorf("保存分流客户端 (%s) 失败: %w", clientName, err)
 		}
 
 		if err := s.BindUserRoute(clientName, host, tunnels); err != nil {
@@ -914,43 +1050,45 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 	return createdPorts, nil
 }
 
-// syncSUIDatabaseLinks 为 sout 创建的分流客户端同步生成基于原生模版的 clients.links
+// syncSUIDatabaseLinks 通过 s-ui API 重新保存分流客户端，让 s-ui 自己生成权威订阅链接
 func (s *SUI) syncSUIDatabaseLinks(publicHost string) {
-	clientRowsJSON, _ := s.sqliteJSONQuery("SELECT id, name, remark, enable, inbounds, links, config FROM clients WHERE enable=1;")
-	var clients []suiDBClient
-	_ = json.Unmarshal(clientRowsJSON, &clients)
-
-	for _, client := range clients {
-		isSplitClient := strings.HasPrefix(client.Name, "soutu") || strings.HasPrefix(client.Name, "sout-u-") || strings.HasPrefix(client.Name, "fanoutu") || strings.HasPrefix(client.Name, "fanout-u-")
-		if !isSplitClient {
-			// 严格保留原生主客户端由 s-ui 自身生成的权威 links，不进行任何重写覆盖
+	// s-ui 自身会在 /apiv2/save object=clients 时自动生成 clients.links（含 ed/fp 等参数）。
+	// 这里只对旧的/直连 SQLite 插入过的分流客户端做一次 API 重保存迁移，让 s-ui 重新生成权威链接。
+	allClients, err := s.apiClients(0)
+	if err != nil {
+		return
+	}
+	for _, raw := range allClients {
+		name, _ := raw["name"].(string)
+		if !isSplitUser(name) {
 			continue
 		}
-
-		inboundIDs := s.getDBInboundIDs(client.Inbounds)
-		var clientLinks []SUIClientLink
-		for _, inbID := range inboundIDs {
-			branchRemark := s.sqliteQuery(fmt.Sprintf("SELECT tag FROM inbounds WHERE id = %d;", inbID))
-			if client.Remark != "" {
-				branchRemark = fmt.Sprintf("%s (%s)", branchRemark, client.Remark)
-			}
-			links := s.InboundBranchLinks(inbID, client.ID, branchRemark, publicHost)
-			for _, linkURI := range links {
-				if linkURI != "" {
-					clientLinks = append(clientLinks, SUIClientLink{
-						Remark: branchRemark,
-						Type:   "local",
-						URI:    linkURI,
-					})
+		idVal, _ := raw["id"].(float64)
+		id := int(idVal)
+		if id <= 0 {
+			continue
+		}
+		full, err := s.apiClients(id)
+		if err != nil || len(full) == 0 {
+			continue
+		}
+		client := full[0]
+		// 保留非 local 链接（外部/订阅链接），local 部分交给 s-ui 重新生成
+		if links, ok := client["links"].([]any); ok {
+			var preserved []any
+			for _, item := range links {
+				if m, ok := item.(map[string]any); ok {
+					if typ, _ := m["type"].(string); typ != "local" {
+						preserved = append(preserved, item)
+					}
 				}
 			}
+			client["links"] = preserved
+		} else {
+			client["links"] = []any{}
 		}
-		if len(clientLinks) > 0 {
-			linksJSON, err := json.MarshalIndent(clientLinks, "", "  ")
-			if err == nil {
-				escapedJSON := strings.ReplaceAll(string(linksJSON), "'", "''")
-				_ = s.sqliteQuery(fmt.Sprintf("UPDATE clients SET links = CAST('%s' AS BLOB) WHERE id = %d;", escapedJSON, client.ID))
-			}
+		if err := s.apiSaveClient("edit", client); err != nil {
+			log.Printf("重新生成分流客户端 %s 的 s-ui 链接失败: %v", name, err)
 		}
 	}
 }
@@ -993,17 +1131,40 @@ func (s *SUI) DeleteBranchesByHost(host string, tunnels []*Tunnel) error {
 		return err
 	}
 	oldHostTag := sanitizeTag(host)
+
+	deleteByName := func(userName string) {
+		if client, ok, err := s.apiClientByName(userName); err != nil {
+			log.Printf("查询待删除分流客户端 %s 失败: %v", userName, err)
+			return
+		} else if ok {
+			if idVal, ok := client["id"].(float64); ok {
+				_ = s.apiDeleteClient(int(idVal))
+			}
+		}
+		_ = s.BindUserRoute(userName, "", tunnels)
+	}
+
 	for userName, boundHost := range boundMap {
 		if boundHost == host || boundHost == oldHostTag {
-			_ = s.sqliteQuery(fmt.Sprintf("DELETE FROM clients WHERE name = '%s';", userName))
-			_ = s.BindUserRoute(userName, "", tunnels)
+			deleteByName(userName)
 		}
 	}
-	// 双重保障：清理 SQLite 中以该 hostTag 结尾的所有 sout/fanout client
-	_ = s.sqliteQuery(fmt.Sprintf("DELETE FROM clients WHERE (name LIKE 'soutu%%' OR name LIKE 'sout-u-%%' OR name LIKE 'fanoutu%%' OR name LIKE 'fanout-u-%%') AND (name LIKE '%%%s');", oldHostTag))
-	s.syncSUIDatabaseLinks(hostPublicIP())
+
+	// 双重保障：通过 s-ui API 清理以该 hostTag 结尾的所有 sout/fanout client
+	clients, err := s.apiClients(0)
+	if err == nil {
+		for _, c := range clients {
+			name, _ := c["name"].(string)
+			if isSplitUser(name) && strings.HasSuffix(name, oldHostTag) {
+				if idVal, ok := c["id"].(float64); ok {
+					_ = s.apiDeleteClient(int(idVal))
+				}
+			}
+		}
+	}
 	invalidateInbounds()
 	return nil
+}
 }
 
 func (s *SUI) ResyncOutbound(t *Tunnel, tunnels []*Tunnel) error {
@@ -1015,7 +1176,7 @@ func (s *SUI) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
 	for _, id := range ids {
 		clientName := s.sqliteQuery(fmt.Sprintf("SELECT name FROM clients WHERE id = %d AND (name LIKE 'soutu%%' OR name LIKE 'sout-u-%%' OR name LIKE 'fanoutu%%' OR name LIKE 'fanout-u-%%');", id))
 		if clientName != "" {
-			_ = s.sqliteQuery(fmt.Sprintf("DELETE FROM clients WHERE id = %d;", id))
+			_ = s.apiDeleteClient(id)
 			_ = s.BindUserRoute(clientName, "", tunnels)
 			continue
 		}
@@ -1029,7 +1190,6 @@ func (s *SUI) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
 				"data":   {string(tagBytes)},
 			}
 			_, _ = s.callAPI(http.MethodPost, "save", form)
-			_ = s.sqliteQuery(fmt.Sprintf("DELETE FROM inbounds WHERE id = %d;", id))
 			_ = s.BindUserRoute(inbTag, "", tunnels)
 		}
 	}
@@ -1123,6 +1283,7 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 			Headers             map[string]string `json:"headers"`
 			ServiceName         string            `json:"service_name"`
 			EarlyDataHeaderName string            `json:"early_data_header_name"`
+			MaxEarlyData        int               `json:"max_early_data"`
 		} `json:"transport"`
 		Users []struct {
 			Name string `json:"name"`
@@ -1154,6 +1315,10 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 			ServerName string `json:"server_name"`
 			Insecure   bool   `json:"insecure"`
 			DisableSNI bool   `json:"disable_sni"`
+			UTLS       struct {
+				Enabled     bool   `json:"enabled"`
+				Fingerprint string `json:"fingerprint"`
+			} `json:"utls"`
 		} `json:"tls"`
 	}
 	var addrs []AddrItem
@@ -1234,7 +1399,15 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 			}
 			v.Set("type", tp)
 			if out.Transport.Path != "" {
-				v.Set("path", out.Transport.Path)
+				path := out.Transport.Path
+				if out.Transport.MaxEarlyData > 0 && out.Transport.EarlyDataHeaderName == "Sec-WebSocket-Protocol" {
+					sep := "?"
+					if strings.Contains(path, "?") {
+						sep = "&"
+					}
+					path = fmt.Sprintf("%s%sed=%d", path, sep, out.Transport.MaxEarlyData)
+				}
+				v.Set("path", path)
 			}
 			if out.Transport.Headers != nil && out.Transport.Headers["Host"] != "" {
 				v.Set("host", out.Transport.Headers["Host"])
@@ -1265,8 +1438,12 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 				if sniToUse != "" && !addr.TLS.DisableSNI {
 					v.Set("sni", sniToUse)
 				}
-				if out.TLS.UTLS.Fingerprint != "" {
-					v.Set("fp", out.TLS.UTLS.Fingerprint)
+				fp := out.TLS.UTLS.Fingerprint
+				if fp == "" {
+					fp = addr.TLS.UTLS.Fingerprint
+				}
+				if fp != "" {
+					v.Set("fp", fp)
 				}
 				if flow, ok := clientCfg["vless"]["flow"].(string); ok && flow != "" && tp == "tcp" {
 					v.Set("flow", flow)
@@ -1589,10 +1766,9 @@ func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, 
 		}
 	}
 
-	isSplitClient := strings.HasPrefix(client.Name, "soutu") || strings.HasPrefix(client.Name, "sout-u-") || strings.HasPrefix(client.Name, "fanoutu") || strings.HasPrefix(client.Name, "fanout-u-")
 
-	// 2. 如果不是 split client，且自身 links 字段包含有效链接，直接取用 s-ui 权威生成的 links
-	if !isSplitClient && len(client.Links) > 0 {
+	// 2. 如果客户端自身已由 s-ui 生成有效 links（分流客户端现在也由 s-ui 生成），直接取用
+	if len(client.Links) > 0 {
 		linksArr := parseSUIClientLinks(client.Links)
 		for _, item := range linksArr {
 			if item.Remark == inbTag || item.Remark == baseInbTag || getBaseTag(item.Remark) == baseInbTag {
@@ -1735,26 +1911,30 @@ func (s *SUI) cleanStaleRoutesAndClients(tunnels []*Tunnel) error {
 		}
 	}
 
-	// 1. 清理 SQLite 中的失效分流客户端
-	clientRowsJSON, _ := s.sqliteJSONQuery("SELECT id, name FROM clients WHERE name LIKE 'soutu%' OR name LIKE 'sout-u-%' OR name LIKE 'fanoutu%' OR name LIKE 'fanout-u-%';")
-	var clients []struct {
-		ID   int    `json:"id"`
-		Name string `json:"name"`
-	}
-	_ = json.Unmarshal(clientRowsJSON, &clients)
-	for _, c := range clients {
-		matched := false
-		for tag := range activeTags {
-			hostPart := strings.TrimPrefix(tag, suiTagPrefix)
-			if strings.HasSuffix(c.Name, hostPart) {
-				matched = true
-				break
+	// 1. 通过 s-ui API 清理失效分流客户端
+	clients, err := s.apiClients(0)
+	if err == nil {
+		for _, c := range clients {
+			name, _ := c["name"].(string)
+			if !isSplitUser(name) {
+				continue
+			}
+			matched := false
+			for tag := range activeTags {
+				hostPart := strings.TrimPrefix(tag, suiTagPrefix)
+				if strings.HasSuffix(name, hostPart) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				if idVal, ok := c["id"].(float64); ok {
+					_ = s.apiDeleteClient(int(idVal))
+				}
 			}
 		}
-		if !matched {
-			_ = s.sqliteQuery(fmt.Sprintf("DELETE FROM clients WHERE id = %d;", c.ID))
-		}
 	}
+
 
 	// 2. 清理 sing-box 路由规则中失效的 sout/fanout 分流项
 	configObj, err := s.callAPI(http.MethodGet, "config", nil)
