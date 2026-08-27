@@ -1165,7 +1165,6 @@ func (s *SUI) DeleteBranchesByHost(host string, tunnels []*Tunnel) error {
 	invalidateInbounds()
 	return nil
 }
-}
 
 func (s *SUI) ResyncOutbound(t *Tunnel, tunnels []*Tunnel) error {
 	return s.syncOutbounds(tunnels)
