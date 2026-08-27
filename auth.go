@@ -135,7 +135,7 @@ func (a *Auth) Wrap(next http.Handler) http.Handler {
 			a.handleLogin(w, r)
 			return
 		}
-		if r.URL.Path == "/sub" {
+		if r.URL.Path == "/sub" || r.URL.Path == "/sub/" {
 			next.ServeHTTP(w, r)
 			return
 		}

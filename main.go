@@ -140,6 +140,7 @@ func main() {
 	mux.HandleFunc("/api/custom/source/import", apiCustomSourceImport(mgr))
 
 	mux.HandleFunc("/sub", handleSub(mgr))
+	mux.HandleFunc("/sub/", handleSub(mgr))
 
 	auth, created, err := NewAuth(*workDir)
 	if err != nil {

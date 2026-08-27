@@ -382,10 +382,11 @@ setup_caddy_proxy() {
         reverse_proxy 127.0.0.1:${sui_port}
     }
 
-    # 3. s-ui 订阅端口
-    handle /${sub_p}* {
-        reverse_proxy 127.0.0.1:${sub_port}
-    }
+      # 3. sout 订阅接口（重写到 sout 面板的 /sub）
+      handle /${sub_p}* {
+          rewrite * /${sout_p}/sub{uri}
+          reverse_proxy 127.0.0.1:${sout_port}
+      }
 
     # 4. VLESS + WebSocket 节点 (实时零缓冲透传)
     handle /${ws_p}* {
@@ -536,7 +537,7 @@ EOF
   echo "      管理账号:  ${sui_u}"
   echo "      管理密码:  [由您在 s-ui 中设置，已安全加密]"
   echo
-  echo "  [3] s-ui 客户端订阅地址:  https://${domain}/${sub_p}/"
+  echo "  [3] sout 订阅地址:  https://${domain}/${sub_p}/"
   echo "  [4] VLESS+WS+CDN 节点:    wss://${domain}:443/${ws_p}"
   echo "================================================================"
   echo

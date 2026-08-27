@@ -451,6 +451,9 @@ if [[ "$WANT_TUNNEL" == "y" ]]; then
   if [[ -x /usr/local/bin/sout ]]; then
     /usr/local/bin/sout setup_tunnel "$TUNNEL_DOMAIN" "$TUNNEL_TOKEN" "$TUNNEL_PORT"
   fi
+if [[ "$WANT_TUNNEL" == "y" ]]; then
+  exit 0
+fi
 fi
 
 IP=$(curl -s4m 5 https://api.ipify.org || curl -s4m 5 https://ifconfig.me || echo "127.0.0.1")
