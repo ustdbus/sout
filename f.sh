@@ -132,6 +132,8 @@ pause() {
 }
 
 CADDY_META="${WORK_DIR}/caddy_meta.json"
+DOMAIN_FILE="${WORK_DIR}/tunnel_domain"
+QUICK_SCRIPT="/usr/local/bin/sout-quick-tunnel"
 
 get_sui_user() {
   local sui_db="/usr/local/s-ui/db/s-ui.db"
@@ -961,6 +963,122 @@ install_cloudflared_bin() {
   return 0
 }
 
+# 生成临时隧道守护脚本：cloudflared quick tunnel 每次重启都会更换随机域名，
+# 此守护进程负责在域名变化时全字段同步 s-ui / sout / Caddy 配置，
+# 确保订阅与节点链接始终指向最新域名，避免旧域名失效导致 521/530。
+create_quick_tunnel_daemon() {
+  cat > "$QUICK_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+PORT="${1:-8081}"
+LOG_FILE="/var/log/cloudflared_quick.log"
+DOMAIN_FILE="/var/lib/sout/tunnel_domain"
+META_FILE="/var/lib/sout/caddy_meta.json"
+SUI_DB="/usr/local/s-ui/db/s-ui.db"
+
+mkdir -p /var/lib/sout /var/log
+> "$LOG_FILE"
+
+/usr/local/bin/cloudflared tunnel --url "http://127.0.0.1:${PORT}" --no-autoupdate 2>&1 | tee -a "$LOG_FILE" &
+CF_PID=$!
+
+sync_all_domains() {
+  local new_domain="$1"
+  echo "$new_domain" > "$DOMAIN_FILE"
+
+  # 1. 同步 Caddy 元信息
+  if [[ -f "$META_FILE" ]]; then
+    python3 - "$new_domain" <<'PYEOF'
+import json, sys
+domain = sys.argv[1]
+path = "/var/lib/sout/caddy_meta.json"
+try:
+    with open(path) as f:
+        d = json.load(f)
+    d["domain"] = domain
+    with open(path, "w") as f:
+        json.dump(d, f, indent=2)
+except Exception:
+    pass
+PYEOF
+  fi
+
+  # 2. 同步 sout 面板地址
+  python3 - "$new_domain" <<'PYEOF'
+import json, sys
+domain = sys.argv[1]
+path = "/var/lib/sout/settings.json"
+try:
+    with open(path) as f:
+        d = json.load(f)
+    d["panel_url"] = "https://" + domain
+    with open(path, "w") as f:
+        json.dump(d, f, indent=2)
+except Exception:
+    pass
+PYEOF
+  systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || true
+
+  # 3. 全字段同步 s-ui 数据库（settings / inbounds.addrs+options+out_json / clients.links+config）
+  if [[ -f "$SUI_DB" ]]; then
+    python3 - "$new_domain" "$SUI_DB" <<'PYEOF'
+import sqlite3, re, sys
+domain = sys.argv[1]
+db = sys.argv[2]
+pat = re.compile(r"[a-zA-Z0-9-]+\.trycloudflare\.com")
+
+def fix_blob(b):
+    if b is None:
+        return b
+    s = b.decode("utf-8", "ignore") if isinstance(b, bytes) else str(b)
+    ns = pat.sub(domain, s)
+    return ns.encode("utf-8") if ns != s else b
+
+try:
+    con = sqlite3.connect(db)
+    cur = con.cursor()
+
+    # settings: webURI / subURI 等含域名字段
+    cur.execute("SELECT key, value FROM settings WHERE value LIKE '%trycloudflare.com%'")
+    for k, v in cur.fetchall():
+        nv = pat.sub(domain, v)
+        if nv != v:
+            cur.execute("UPDATE settings SET value=? WHERE key=?", (nv, k))
+
+    # inbounds: addrs / options / out_json 全字段替换
+    cur.execute("SELECT id, addrs, options, out_json FROM inbounds")
+    for inb_id, addrs, opts, outj in cur.fetchall():
+        cur.execute("UPDATE inbounds SET addrs=?, options=?, out_json=? WHERE id=?",
+                    (fix_blob(addrs), fix_blob(opts), fix_blob(outj), inb_id))
+
+    # clients: links / config 全字段替换
+    cur.execute("SELECT id, links, config FROM clients")
+    for cid, links, cfg in cur.fetchall():
+        cur.execute("UPDATE clients SET links=?, config=? WHERE id=?",
+                    (fix_blob(links), fix_blob(cfg), cid))
+
+    con.commit()
+    con.close()
+except Exception:
+    pass
+PYEOF
+    systemctl restart s-ui 2>/dev/null || true
+  fi
+}
+
+CUR_DOMAIN=""
+while kill -0 "$CF_PID" 2>/dev/null; do
+  NEW_DOMAIN=$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' "$LOG_FILE" | tail -1 | sed 's|https://||' | tr -d ' \r\n')
+  if [[ -n "$NEW_DOMAIN" && "$NEW_DOMAIN" != "$CUR_DOMAIN" ]]; then
+    CUR_DOMAIN="$NEW_DOMAIN"
+    sync_all_domains "$CUR_DOMAIN"
+  fi
+  sleep 3
+done
+wait "$CF_PID"
+EOF
+  chmod +x "$QUICK_SCRIPT"
+}
+
 setup_cloudflared_service() {
   local token="$1"
   local tun_p="${2:-8081}"
@@ -983,15 +1101,16 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 EOF
   else
+    create_quick_tunnel_daemon
     cat > /etc/systemd/system/cloudflared.service <<EOF
 [Unit]
-Description=Cloudflare Quick Tunnel Agent
+Description=Cloudflare Quick Tunnel Dynamic Daemon
 After=network.target network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/cloudflared tunnel --url http://127.0.0.1:${tun_p} --no-autoupdate
+ExecStart=${QUICK_SCRIPT} ${tun_p}
 Restart=always
 RestartSec=5s
 LimitNOFILE=65536
@@ -1009,6 +1128,10 @@ EOF
 get_quick_tunnel_domain() {
   local max_wait=20
   local d=""
+  if [[ -f "$DOMAIN_FILE" ]]; then
+    d=$(cat "$DOMAIN_FILE" | tr -d ' \r\n')
+    [[ -n "$d" ]] && { echo "$d"; return; }
+  fi
   for ((i=1; i<=max_wait; i++)); do
     d=$(journalctl -u cloudflared -n 50 --no-pager 2>/dev/null | grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' | tail -1 | sed 's|https://||' | tr -d ' 
 ')

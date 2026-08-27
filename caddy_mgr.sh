@@ -121,44 +121,47 @@ except Exception: pass
     fi
 
     if [[ -f "$SUI_DB" ]]; then
-      python3 -c "
-import sqlite3, json
-try:
-    con = sqlite3.connect('$SUI_DB')
-    cur = con.cursor()
-    cur.execute("SELECT value FROM settings WHERE key='webPath'")
-    wp = cur.fetchone()
-    wp_str = wp[0] if wp else '/app/'
-    cur.execute("SELECT value FROM settings WHERE key='subPath'")
-    sp = cur.fetchone()
-    sp_str = sp[0] if sp else '/sub/'
-    
-    cur.execute("UPDATE settings SET value=? WHERE key='webURI'", (f'https://$CUR_DOMAIN{wp_str}',))
-    cur.execute("UPDATE settings SET value=? WHERE key='subURI'", (f'https://$CUR_DOMAIN{sp_str}',))
+      python3 - "$CUR_DOMAIN" "$SUI_DB" <<'PYEOF'
+import sqlite3, re, sys
+domain = sys.argv[1]
+db = sys.argv[2]
+pat = re.compile(r"[a-zA-Z0-9-]+\.trycloudflare\.com")
 
-    cur.execute("SELECT id, options, addrs FROM inbounds WHERE tag='vless-ws-cdn'")
-    row = cur.fetchone()
-    if row:
-        inb_id, opts, addrs = row
-        addrs_data = [{
-            'server': '$CUR_DOMAIN',
-            'server_port': 443,
-            'tls': {
-                'disable_sni': False,
-                'enabled': True,
-                'insecure': False,
-                'server_name': '$CUR_DOMAIN',
-                'utls': {
-                    'enabled': True,
-                    'fingerprint': 'chrome'
-                }
-            }
-        }]
-        cur.execute("UPDATE inbounds SET addrs=? WHERE id=?", (json.dumps(addrs_data, indent=2).encode('utf-8'), inb_id))
+def fix_blob(b):
+    if b is None:
+        return b
+    s = b.decode("utf-8", "ignore") if isinstance(b, bytes) else str(b)
+    ns = pat.sub(domain, s)
+    return ns.encode("utf-8") if ns != s else b
+
+try:
+    con = sqlite3.connect(db)
+    cur = con.cursor()
+
+    # settings: webURI / subURI 等含域名字段
+    cur.execute("SELECT key, value FROM settings WHERE value LIKE '%trycloudflare.com%'")
+    for k, v in cur.fetchall():
+        nv = pat.sub(domain, v)
+        if nv != v:
+            cur.execute("UPDATE settings SET value=? WHERE key=?", (nv, k))
+
+    # inbounds: addrs / options / out_json 全字段替换
+    cur.execute("SELECT id, addrs, options, out_json FROM inbounds")
+    for inb_id, addrs, opts, outj in cur.fetchall():
+        cur.execute("UPDATE inbounds SET addrs=?, options=?, out_json=? WHERE id=?",
+                    (fix_blob(addrs), fix_blob(opts), fix_blob(outj), inb_id))
+
+    # clients: links / config 全字段替换
+    cur.execute("SELECT id, links, config FROM clients")
+    for cid, links, cfg in cur.fetchall():
+        cur.execute("UPDATE clients SET links=?, config=? WHERE id=?",
+                    (fix_blob(links), fix_blob(cfg), cid))
+
     con.commit()
     con.close()
-except Exception: pass
-" 2>/dev/null || true
+except Exception:
+    pass
+PYEOF
       systemctl restart s-ui 2>/dev/null || true
     fi
   fi
