@@ -3,7 +3,7 @@
 # sout 4合1 Cloudflare 隧道统一反向代理管理模块 (Caddy + Cloudflared)
 # 支持模式：
 # 1. 自定义命名隧道 (带域名 + Token)
-# 2. Cloudflare 官方免费临时隧道 (无需域名/无需Token，直接回车即开即用)
+# 2. Cloudflare 官方免费临时隧道 (无需域名/无需Token，直接回车即开即用，动态实时同步)
 # ================================================================
 
 CADDY_DIR="/etc/caddy"
@@ -11,6 +11,8 @@ CADDY_FILE="/etc/caddy/Caddyfile"
 WORK_DIR="/var/lib/sout"
 CADDY_META="/var/lib/sout/caddy_meta.json"
 SUI_DB="/usr/local/s-ui/db/s-ui.db"
+DOMAIN_FILE="/var/lib/sout/tunnel_domain"
+QUICK_SCRIPT="/usr/local/bin/sout-quick-tunnel"
 
 get_arch() {
   local arch
@@ -72,10 +74,102 @@ install_cloudflared() {
   fi
 }
 
+create_quick_tunnel_daemon() {
+  cat > "$QUICK_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+PORT="${1:-8081}"
+LOG_FILE="/var/log/cloudflared_quick.log"
+DOMAIN_FILE="/var/lib/sout/tunnel_domain"
+META_FILE="/var/lib/sout/caddy_meta.json"
+SUI_DB="/usr/local/s-ui/db/s-ui.db"
+
+mkdir -p /var/lib/sout /var/log
+> "$LOG_FILE"
+
+/usr/local/bin/cloudflared tunnel --url "http://127.0.0.1:${PORT}" --no-autoupdate 2>&1 | tee -a "$LOG_FILE" &
+CF_PID=$!
+
+CUR_DOMAIN=""
+while kill -0 "$CF_PID" 2>/dev/null; do
+  NEW_DOMAIN=$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' "$LOG_FILE" | tail -1 | sed 's|https://||' | tr -d ' 
+')
+  if [[ -n "$NEW_DOMAIN" && "$NEW_DOMAIN" != "$CUR_DOMAIN" ]]; then
+    CUR_DOMAIN="$NEW_DOMAIN"
+    echo "$CUR_DOMAIN" > "$DOMAIN_FILE"
+
+    if [[ -f "$META_FILE" ]]; then
+      python3 -c "
+import json
+try:
+    with open('$META_FILE') as f: d = json.load(f)
+    d['domain'] = '$CUR_DOMAIN'
+    with open('$META_FILE', 'w') as f: json.dump(d, f, indent=2)
+except Exception: pass
+" 2>/dev/null || true
+    fi
+
+    if [[ -f /var/lib/sout/settings.json ]]; then
+      python3 -c "
+import json
+try:
+    with open('/var/lib/sout/settings.json') as f: d = json.load(f)
+    d['panel_url'] = 'https://$CUR_DOMAIN'
+    with open('/var/lib/sout/settings.json', 'w') as f: json.dump(d, f, indent=2)
+except Exception: pass
+" 2>/dev/null || true
+      systemctl restart sout 2>/dev/null || true
+    fi
+
+    if [[ -f "$SUI_DB" ]]; then
+      python3 -c "
+import sqlite3, json
+try:
+    con = sqlite3.connect('$SUI_DB')
+    cur = con.cursor()
+    cur.execute("SELECT value FROM settings WHERE key='webPath'")
+    wp = cur.fetchone()
+    wp_str = wp[0] if wp else '/app/'
+    cur.execute("SELECT value FROM settings WHERE key='subPath'")
+    sp = cur.fetchone()
+    sp_str = sp[0] if sp else '/sub/'
+    
+    cur.execute("UPDATE settings SET value=? WHERE key='webURI'", (f'https://$CUR_DOMAIN{wp_str}',))
+    cur.execute("UPDATE settings SET value=? WHERE key='subURI'", (f'https://$CUR_DOMAIN{sp_str}',))
+
+    cur.execute("SELECT id, options, addrs FROM inbounds WHERE tag='vless-ws-cdn'")
+    row = cur.fetchone()
+    if row:
+        inb_id, opts, addrs = row
+        addrs_data = [{
+            'server': '$CUR_DOMAIN',
+            'server_port': 443,
+            'tls': {
+                'disable_sni': False,
+                'enabled': True,
+                'fingerprint': 'chrome',
+                'insecure': False,
+                'server_name': '$CUR_DOMAIN'
+            }
+        }]
+        cur.execute("UPDATE inbounds SET addrs=? WHERE id=?", (json.dumps(addrs_data, indent=2).encode('utf-8'), inb_id))
+    con.commit()
+    con.close()
+except Exception: pass
+" 2>/dev/null || true
+      systemctl restart s-ui 2>/dev/null || true
+    fi
+  fi
+  sleep 3
+done
+wait "$CF_PID"
+EOF
+  chmod +x "$QUICK_SCRIPT"
+}
+
 setup_cloudflared_service() {
   local token="$1"
   local tun_p="${2:-8081}"
-  
+
   if [[ -n "$token" ]]; then
     cat > /etc/systemd/system/cloudflared.service <<EOF
 [Unit]
@@ -94,15 +188,16 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 EOF
   else
+    create_quick_tunnel_daemon
     cat > /etc/systemd/system/cloudflared.service <<EOF
 [Unit]
-Description=Cloudflare Quick Tunnel Agent
+Description=Cloudflare Quick Tunnel Dynamic Daemon
 After=network.target network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/cloudflared tunnel --url http://127.0.0.1:${tun_p} --no-autoupdate
+ExecStart=${QUICK_SCRIPT} ${tun_p}
 Restart=always
 RestartSec=5s
 LimitNOFILE=65536
@@ -167,7 +262,12 @@ get_quick_tunnel_domain() {
   local max_wait=20
   local d=""
   for ((i=1; i<=max_wait; i++)); do
-    d=$(journalctl -u cloudflared -n 50 --no-pager 2>/dev/null | grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' | tail -1 | sed 's|https://||' | tr -d ' 
+    if [[ -f "$DOMAIN_FILE" ]]; then
+      d=$(cat "$DOMAIN_FILE" | tr -d ' 
+')
+      [[ -n "$d" ]] && break
+    fi
+    d=$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' /var/log/cloudflared_quick.log 2>/dev/null | tail -1 | sed 's|https://||' | tr -d ' 
 ')
     [[ -n "$d" ]] && break
     sleep 1
@@ -277,8 +377,11 @@ EOF
       sqlite3 "$SUI_DB" "UPDATE settings SET value='127.0.0.1' WHERE key='webListen';" 2>/dev/null || true
       sqlite3 "$SUI_DB" "UPDATE settings SET value='${sui_port}' WHERE key='webPort';" 2>/dev/null || true
       sqlite3 "$SUI_DB" "UPDATE settings SET value='/${sui_p}/' WHERE key='webPath';" 2>/dev/null || true
+      sqlite3 "$SUI_DB" "UPDATE settings SET value='https://${domain}/${sui_p}/' WHERE key='webURI';" 2>/dev/null || true
+      sqlite3 "$SUI_DB" "UPDATE settings SET value='127.0.0.1' WHERE key='subListen';" 2>/dev/null || true
       sqlite3 "$SUI_DB" "UPDATE settings SET value='${sub_port}' WHERE key='subPort';" 2>/dev/null || true
       sqlite3 "$SUI_DB" "UPDATE settings SET value='/${sub_p}/' WHERE key='subPath';" 2>/dev/null || true
+      sqlite3 "$SUI_DB" "UPDATE settings SET value='https://${domain}/${sub_p}/' WHERE key='subURI';" 2>/dev/null || true
     fi
     systemctl restart s-ui 2>/dev/null || true
   fi
@@ -355,7 +458,7 @@ remove_caddy_proxy() {
   systemctl disable cloudflared 2>/dev/null || true
   systemctl stop caddy 2>/dev/null || true
   systemctl disable caddy 2>/dev/null || true
-  rm -f "$CADDY_META"
+  rm -f "$CADDY_META" "$DOMAIN_FILE" "$QUICK_SCRIPT" /var/log/cloudflared_quick.log 2>/dev/null || true
 
   # 恢复 sout 为独立公网监听
   if [[ -f "${WORK_DIR}/settings.json" ]]; then

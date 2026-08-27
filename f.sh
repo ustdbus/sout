@@ -637,14 +637,32 @@ except Exception as e:
 uninstall_sout_only() {
   local yes
   echo
-  read -rp "  确定仅卸载 sout 并清理其生成的出入站分流吗？(保留 s-ui 面板) [y/N]: " yes
+  read -rp "  确定仅卸载 sout 插件服务吗？(保留 s-ui 面板及其节点配置) [y/N]: " yes
   [[ ${yes,,} == y ]] || { echo "  已取消"; return; }
 
-  echo "  正在停止并清理 sout 服务..."
+  echo "  正在停止并卸载 sout 及反代服务..."
   svc_stop >/dev/null 2>&1 || true
   svc_disable >/dev/null 2>&1 || true
   systemctl stop fanout 2>/dev/null || true
   systemctl disable fanout 2>/dev/null || true
+
+  # 彻底清理 Caddy 与 cloudflared 隧道
+  systemctl stop caddy 2>/dev/null || true
+  systemctl disable caddy 2>/dev/null || true
+  systemctl stop cloudflared 2>/dev/null || true
+  systemctl disable cloudflared 2>/dev/null || true
+  rm -f /etc/systemd/system/caddy.service /etc/systemd/system/cloudflared.service 2>/dev/null || true
+  rm -rf /etc/caddy /var/lib/caddy /var/log/caddy /usr/local/bin/caddy /usr/local/bin/cloudflared /usr/local/bin/sout-quick-tunnel /var/log/cloudflared* 2>/dev/null || true
+
+  # 恢复 s-ui 为公网直连监听
+  local sui_db="/usr/local/s-ui/db/s-ui.db"
+  if [[ -f "$sui_db" ]] && command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "$sui_db" "UPDATE settings SET value='' WHERE key='webListen';" 2>/dev/null || true
+    sqlite3 "$sui_db" "UPDATE settings SET value='8443' WHERE key='webPort';" 2>/dev/null || true
+    sqlite3 "$sui_db" "UPDATE settings SET value='/app/' WHERE key='webPath';" 2>/dev/null || true
+    systemctl restart s-ui 2>/dev/null || true
+  fi
+
   for ns in $(ip netns list 2>/dev/null | awk '{print $1}' | grep -E '^(fo|so)[0-9]'); do
     ip netns del "$ns" 2>/dev/null || true
   done
@@ -652,20 +670,12 @@ uninstall_sout_only() {
     ip link del "$l" 2>/dev/null || true
   done
 
-  # 清理 s-ui 中所有 sout 生成的出入站与路由
-  cleanup_sui
-
-  # 清理 Caddy 反代 (若由本脚本配置)
-  systemctl stop caddy 2>/dev/null || true
-  systemctl disable caddy 2>/dev/null || true
-  rm -f /etc/systemd/system/caddy.service 2>/dev/null || true
-  rm -rf /etc/caddy /var/lib/caddy /var/log/caddy /usr/local/bin/caddy /home/acme 2>/dev/null || true
-
   rm -f "/etc/systemd/system/sout.service" "/etc/systemd/system/fanout.service" "/etc/init.d/sout" "/etc/init.d/fanout"
   rm -f "$BIN" /usr/local/bin/sout /usr/local/bin/fanout /usr/local/bin/f /usr/local/bin/sout-cli
   rm -rf "$WORK_DIR" /var/lib/sout /var/lib/fanout 2>/dev/null || true
+
   svc_reload
-  echo -e "  ${G}[✓] sout 已卸载完成，所有由 sout 创建的出入站及 Caddy 反代已全部清理，s-ui 面板保持原样！${N}"
+  echo -e "  ${G}[✓] sout 插件及反代组件已彻底清理完成，s-ui 面板已恢复公网直连模式！${N}"
   exit 0
 }
 
@@ -692,7 +702,7 @@ uninstall_all() {
   read -rp "  ⚠️ 确定彻底卸载 sout 和 s-ui 吗？所有节点与服务将被完全清理！[y/N]: " yes
   [[ ${yes,,} == y ]] || { echo "  已取消"; return; }
 
-  echo "  正在停止并清理所有服务与组件..."
+  echo "  正在停止并彻底清理所有服务与组件..."
   svc_stop >/dev/null 2>&1 || true
   svc_disable >/dev/null 2>&1 || true
   systemctl stop fanout 2>/dev/null || true
@@ -704,18 +714,20 @@ uninstall_all() {
     ip link del "$l" 2>/dev/null || true
   done
 
-  # 清理 Caddy 反代
+  # 彻底清理 Caddy 与 cloudflared 反代隧道组件
   systemctl stop caddy 2>/dev/null || true
   systemctl disable caddy 2>/dev/null || true
-  rm -f /etc/systemd/system/caddy.service 2>/dev/null || true
-  rm -rf /etc/caddy /var/lib/caddy /var/log/caddy /usr/local/bin/caddy /home/acme 2>/dev/null || true
+  systemctl stop cloudflared 2>/dev/null || true
+  systemctl disable cloudflared 2>/dev/null || true
+  rm -f /etc/systemd/system/caddy.service /etc/systemd/system/cloudflared.service 2>/dev/null || true
+  rm -rf /etc/caddy /var/lib/caddy /var/log/caddy /usr/local/bin/caddy /usr/local/bin/cloudflared /usr/local/bin/sout-quick-tunnel /var/log/cloudflared* /home/acme 2>/dev/null || true
 
-  # 清理 sout 二进制与工作目录
+  # 彻底清理 sout 二进制与工作目录
   rm -f "/etc/systemd/system/sout.service" "/etc/systemd/system/fanout.service" "/etc/init.d/sout" "/etc/init.d/fanout"
   rm -f "$BIN" /usr/local/bin/sout /usr/local/bin/fanout /usr/local/bin/f /usr/local/bin/sout-cli
   rm -rf "$WORK_DIR" /var/lib/sout /var/lib/fanout 2>/dev/null || true
 
-  # 清理 s-ui
+  # 彻底清理 s-ui
   systemctl stop s-ui 2>/dev/null || true
   systemctl disable s-ui 2>/dev/null || true
   rm -f /etc/systemd/system/s-ui.service /etc/init.d/s-ui 2>/dev/null || true
@@ -725,7 +737,7 @@ uninstall_all() {
   rm -f /usr/bin/s-ui /usr/local/bin/s-ui /usr/bin/sui /usr/local/bin/sui 2>/dev/null || true
 
   svc_reload
-  echo -e "  ${G}[✓] sout 与 s-ui 及 Caddy 反代已全部彻底卸载完成！${N}"
+  echo -e "  ${G}[✓] 所有组件 (sout, s-ui, Caddy, cloudflared) 已彻底卸载干净，系统已完全恢复初始状态！${N}"
   exit 0
 }
 
