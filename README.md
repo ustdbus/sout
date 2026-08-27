@@ -5,12 +5,13 @@
 </p>
 
 ---
+## 一键安装
 
-## 声明与致谢
+在 Linux 服务器（Ubuntu / Debian / CentOS / Alpine 等）上执行：
 
-> **致谢与引用说明**：
-> 本项目基于开源项目 [byJoey/fanout](https://github.com/byJoey/fanout) 进行了深度重构与二次开发。
-> 感谢原作者 [@byJoey](https://github.com/byJoey) 的出色工作与开源贡献！
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/ustdbus/sout/main/install.sh)
+```
 
 ---
 
@@ -57,15 +58,6 @@
 
 ---
 
-## 一键安装
-
-在 Linux 服务器（Ubuntu / Debian / CentOS / Alpine 等）上执行：
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ustdbus/sout/main/install.sh)
-```
-
----
 
 ## 快捷管理
 
@@ -187,5 +179,8 @@ sout uninstall
 
 ## 开源协议与鸣谢
 
+
+> 本项目基于开源项目 [byJoey/fanout](https://github.com/byJoey/fanout) 进行了深度重构与二次开发。
+
 - 上游原作者：[byJoey/fanout](https://github.com/byJoey/fanout)
-- 维护与二次开发：[ustdbus/sout](https://github.com/ustdbus/sout)
+- 二次开发：[ustdbus/sout](https://github.com/ustdbus/sout)
