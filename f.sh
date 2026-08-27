@@ -230,7 +230,7 @@ show_info() {
     echo -e "  s-ui 面板:   ${B}https://${c_dom}/${c_sui_p}/${N}"
     echo -e "  s-ui 用户名: ${Y}${sui_u}${N}"
     echo -e "  s-ui 密  码: ${D}[由您在 s-ui 中设置，已安全加密]${N}"
-    echo -e "  订阅链接:    ${B}https://${c_dom}/${c_sub_p}/${N}"
+      echo -e "  订阅链接:    ${B}https://${c_dom}/${c_sout_p}/sub=${pw}${N}"
   else
     if [[ "$ssl_en" == "true" ]]; then
       echo -e "  SSL 加密:    ${G}已开启 (HTTPS)${N}"
@@ -1391,7 +1391,7 @@ METAEOF
   echo -e "      管理账号:  ${Y}${sui_admin_user}${N}"
   echo -e "      管理密码:  ${D}[由您在 s-ui 中设置，已安全加密]${N}"
   echo
-  echo -e "  [3] sout 订阅地址:  ${B}https://${domain}/${sub_path}/${N}"
+    echo -e "  [3] sout 订阅地址:  ${B}https://${domain}/${sout_path}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")${N}"
   echo -e "  [4] VLESS+WS+CDN 节点:    ${B}wss://${domain}:443/${ws_path}${N}"
   echo -e "${G}================================================================${N}"
   echo
@@ -1522,7 +1522,7 @@ caddy_menu() {
             echo
             echo -e "  [1] sout 管理面板:  ${B}https://${dom}/${sout_p}/${N}"
             echo -e "  [2] s-ui 管理面板:  ${B}https://${dom}/${sui_p}/${N}"
-            echo -e "  [3] sout 订阅地址:  ${B}https://${dom}/${sub_p}/${N}"
+              echo -e "  [3] sout 订阅地址:  ${B}https://${dom}/${sout_p}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")${N}"
             echo -e "  [4] VLESS-WS 节点:  ${B}wss://${dom}:443/${ws_p}${N}"
             echo -e "  访问口令:          ${Y}$(cat "${WORK_DIR}/password" 2>/dev/null || echo "未设置")${N}"
           fi

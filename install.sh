@@ -486,7 +486,7 @@ if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$
   echo "  s-ui 用户名:  ${c_sui_u:-admin}"
   echo "  s-ui 密  码:  [由您在 s-ui 中设置，已安全加密]"
   echo "  💡 提示:      如遗忘密码，可在终端运行 s-ui 随时重置"
-  echo "  订阅链接:    https://${c_dom}/${c_sub_p}/"
+    echo "  订阅链接:    https://${c_dom}/${c_sout_p}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")"
   echo "  s-ui 唤起命令:  s-ui"
   echo "================================================================"
   echo

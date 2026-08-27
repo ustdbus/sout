@@ -135,6 +135,17 @@ func (a *Auth) Wrap(next http.Handler) http.Handler {
 			a.handleLogin(w, r)
 			return
 		}
+
+		if strings.HasPrefix(r.URL.Path, "/sub=") {
+			pw := strings.TrimPrefix(r.URL.Path, "/sub=")
+			if a.check(pw) {
+				r.URL.Path = "/sub"
+				next.ServeHTTP(w, r)
+				return
+			}
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "访问口令不正确"})
+			return
+		}
 		if r.URL.Path == "/sub" || r.URL.Path == "/sub/" {
 			next.ServeHTTP(w, r)
 			return

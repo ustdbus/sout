@@ -537,7 +537,7 @@ EOF
   echo "      管理账号:  ${sui_u}"
   echo "      管理密码:  [由您在 s-ui 中设置，已安全加密]"
   echo
-  echo "  [3] sout 订阅地址:  https://${domain}/${sub_p}/"
+    echo "  [3] sout 订阅地址:  https://${domain}/${sout_p}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")"
   echo "  [4] VLESS+WS+CDN 节点:    wss://${domain}:443/${ws_p}"
   echo "================================================================"
   echo
