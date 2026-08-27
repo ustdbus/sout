@@ -612,7 +612,6 @@ func (s *SUI) BindUserRoute(userName string, hostname string, tunnels []*Tunnel)
 		return fmt.Errorf("保存路由配置失败: %w", err)
 	}
 
-	s.restartSingBox()
 	return nil
 }
 
