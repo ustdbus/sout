@@ -1184,6 +1184,8 @@ for inb_id, inb_tag, inb_opts, inb_addrs in cur.fetchall():
     try:
         opts_s = inb_opts.decode('utf-8') if isinstance(inb_opts, bytes) else str(inb_opts)
         opts_j = json.loads(opts_s)
+        if 'sniff' in opts_j: del opts_j['sniff']
+        if 'sniff_override_destination' in opts_j: del opts_j['sniff_override_destination']
         if opts_j.get('listen_port') == 443 or opts_j.get('listen') in ('::', '0.0.0.0', '*'):
             if 'transport' in opts_j and opts_j['transport'].get('type') == 'ws':
                 opts_j['listen'] = '127.0.0.1'
@@ -1201,21 +1203,12 @@ client_uuid = str(uuid.uuid4())
 
 addrs_data = [
     {
-        'server': '45.89.235.139',
-        'server_port': 443,
-        'tls': {
-            'disable_sni': False,
-            'enabled': True,
-            'insecure': False,
-            'server_name': domain
-        }
-    },
-    {
         'server': domain,
         'server_port': 443,
         'tls': {
             'disable_sni': False,
             'enabled': True,
+            'fingerprint': 'chrome',
             'insecure': False,
             'server_name': domain
         }
@@ -1226,8 +1219,6 @@ addrs_blob = json.dumps(addrs_data, indent=2).encode('utf-8')
 options_dict = {
     'listen': '127.0.0.1',
     'listen_port': node_port,
-    'sniff': True,
-    'sniff_override_destination': True,
     'users': [
         {
             'flow': '',
