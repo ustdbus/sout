@@ -428,14 +428,26 @@ EOF
       else
         SUI_API="http://127.0.0.1:${sui_port}/${sui_p}/apiv2" \
         SUI_TOKEN="$sui_token" \
+          SUI_DB="$SUI_DB" \
         DOMAIN="$domain" \
         SUI_PORT="$sui_port" \
         SUB_PORT="$sub_port" \
         SUI_PATH="/${sui_p}/" \
         SUB_PATH="/${sub_p}/" \
         python3 <<'PY'
-import json, os, urllib.request, urllib.parse
-BASE = os.environ['SUI_API']
+import json, os, sqlite3, urllib.request, urllib.parse
+con = sqlite3.connect(os.environ['SUI_DB'])
+cur = con.cursor()
+cur.execute("SELECT value FROM settings WHERE key='webPort'")
+cur_port_row = cur.fetchone()
+cur_port = cur_port_row[0] if cur_port_row and cur_port_row[0] else '8443'
+cur.execute("SELECT value FROM settings WHERE key='webPath'")
+cur_path_row = cur.fetchone()
+cur_path = cur_path_row[0] if cur_path_row and cur_path_row[0] else '/app/'
+if not cur_path.startswith('/'): cur_path = '/' + cur_path
+if not cur_path.endswith('/'): cur_path += '/'
+con.close()
+BASE = f'http://127.0.0.1:{cur_port}{cur_path}apiv2'
 TOKEN = os.environ['SUI_TOKEN']
 settings_data = {
     'webPort': str(os.environ.get('SUI_PORT', '')),

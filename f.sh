@@ -1159,6 +1159,7 @@ EOF
       echo -e "  [+] 正在通过 s-ui API 自动配置 (路径分流与 VLESS-WS 节点)..."
       SUI_API="http://127.0.0.1:${sui_port}/${sui_path}/apiv2" \
       SUI_TOKEN="$sui_token" \
+        SUI_DB="$sui_db" \
       DOMAIN="$domain" \
       SUI_PORT="$sui_port" \
       SUI_PATH="/${sui_path}/" \
@@ -1168,9 +1169,20 @@ EOF
       WS_PATH="/${ws_path}" \
       SUI_ADMIN_USER="$sui_admin_user" \
       python3 <<'PYEOF'
-import json, os, uuid, urllib.request, urllib.parse
+import json, os, sqlite3, uuid, urllib.request, urllib.parse
 
-BASE = os.environ['SUI_API']
+con = sqlite3.connect(os.environ['SUI_DB'])
+cur = con.cursor()
+cur.execute("SELECT value FROM settings WHERE key='webPort'")
+cur_port_row = cur.fetchone()
+cur_port = cur_port_row[0] if cur_port_row and cur_port_row[0] else '8443'
+cur.execute("SELECT value FROM settings WHERE key='webPath'")
+cur_path_row = cur.fetchone()
+cur_path = cur_path_row[0] if cur_path_row and cur_path_row[0] else '/app/'
+if not cur_path.startswith('/'): cur_path = '/' + cur_path
+if not cur_path.endswith('/'): cur_path += '/'
+con.close()
+BASE = f'http://127.0.0.1:{cur_port}{cur_path}apiv2'
 TOKEN = os.environ['SUI_TOKEN']
 
 def api(method, endpoint, form=None):
