@@ -146,9 +146,12 @@ try:
             'tls': {
                 'disable_sni': False,
                 'enabled': True,
-                'fingerprint': 'chrome',
                 'insecure': False,
-                'server_name': '$CUR_DOMAIN'
+                'server_name': '$CUR_DOMAIN',
+                'utls': {
+                    'enabled': True,
+                    'fingerprint': 'chrome'
+                }
             }
         }]
         cur.execute("UPDATE inbounds SET addrs=? WHERE id=?", (json.dumps(addrs_data, indent=2).encode('utf-8'), inb_id))

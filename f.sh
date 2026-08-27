@@ -1220,9 +1220,12 @@ addrs_data = [
         'tls': {
             'disable_sni': False,
             'enabled': True,
-            'fingerprint': 'chrome',
             'insecure': False,
-            'server_name': domain
+            'server_name': domain,
+            'utls': {
+                'enabled': True,
+                'fingerprint': 'chrome'
+            }
         }
     }
 ]
@@ -1240,6 +1243,7 @@ options_dict = {
     ],
     'transport': {
         'early_data_header_name': 'Sec-WebSocket-Protocol',
+        'max_early_data': 2560,
         'headers': {
             'Host': domain
         },
