@@ -1435,8 +1435,13 @@ api('POST', 'save', {
 })
 
 # 2. 通过 s-ui API 创建/更新 vmess-argo 入站
-inbounds_resp = api('GET', 'inbounds')
-inbound_rows = inbounds_resp.get('obj', {}).get('inbounds') or []
+inbounds_resp = api('GET', 'inbounds') or {}
+inbounds_obj = inbounds_resp.get('obj') or []
+if isinstance(inbounds_obj, dict):
+    inbound_rows = inbounds_obj.get('inbounds') or []
+else:
+    inbound_rows = inbounds_obj or []
+inbound_rows = [r for r in inbound_rows if isinstance(r, dict)]
 node_tag = 'vmess-argo'
 existing_inbound_id = None
 for row in inbound_rows:
@@ -1484,9 +1489,15 @@ api('POST', 'save', {
 })
 
 # 3. 重新查询入站 id（新建后需要）
-inbounds_resp = api('GET', 'inbounds')
+inbounds_resp = api('GET', 'inbounds') or {}
+inbounds_obj = inbounds_resp.get('obj') or []
+if isinstance(inbounds_obj, dict):
+    inbound_rows = inbounds_obj.get('inbounds') or []
+else:
+    inbound_rows = inbounds_obj or []
+inbound_rows = [r for r in inbound_rows if isinstance(r, dict)]
 inbound_id = None
-for row in inbounds_resp.get('obj', {}).get('inbounds') or []:
+for row in inbound_rows:
     if row.get('tag') == node_tag:
         inbound_id = row.get('id')
         break
@@ -1494,9 +1505,15 @@ if not inbound_id:
     raise SystemExit('创建 vmess-argo 入站失败')
 
 # 4. 通过 s-ui API 保存 admin 客户端，由 s-ui 自动生成订阅链接（含 ed/fp）
-clients_resp = api('GET', 'clients')
+clients_resp = api('GET', 'clients') or {}
+clients_obj = clients_resp.get('obj') or []
+if isinstance(clients_obj, dict):
+    clients_rows = clients_obj.get('clients') or []
+else:
+    clients_rows = clients_obj or []
+clients_rows = [r for r in clients_rows if isinstance(r, dict)]
 admin = None
-for row in clients_resp.get('obj', {}).get('clients') or []:
+for row in clients_rows:
     if row.get('name') == os.environ.get('SUI_ADMIN_USER', 'admin'):
         admin = row
         break
