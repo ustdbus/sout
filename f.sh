@@ -1318,6 +1318,17 @@ setup_caddy_proxy() {
       sui_path="${real_sui_path#/}"
       sui_path="${sui_path%/}"
     fi
+
+    local real_sub_port real_sub_path
+    real_sub_port=$(python3 -c "import sqlite3; con=sqlite3.connect('$sui_db_tmp'); r=con.execute(\"SELECT value FROM settings WHERE key='subPort'\").fetchone(); print(r[0] if r and r[0] else ''); con.close()" 2>/dev/null || true)
+    real_sub_path=$(python3 -c "import sqlite3; con=sqlite3.connect('$sui_db_tmp'); r=con.execute(\"SELECT value FROM settings WHERE key='subPath'\").fetchone(); print(r[0] if r and r[0] else ''); con.close()" 2>/dev/null || true)
+    [[ -n "$real_sub_port" ]] && sub_port="$real_sub_port"
+    if [[ -n "$real_sub_path" ]]; then
+      real_sub_path="/${real_sub_path#/}"
+      [[ "$real_sub_path" != */ ]] && real_sub_path="${real_sub_path}/"
+      sub_path="${real_sub_path#/}"
+      sub_path="${sub_path%/}"
+    fi
   fi
 
   # 3. 写入纯净本地 Caddyfile (双栈通配监听 :${tunnel_port})
@@ -1343,10 +1354,9 @@ setup_caddy_proxy() {
         reverse_proxy 127.0.0.1:${sui_port}
     }
 
-      # 3. sout 订阅接口（重写到 sout 面板的 /sub）
+      # 3. s-ui 订阅接口（直接转发到 s-ui 的订阅服务）
       handle /${sub_path}* {
-          rewrite * /${sout_path}/sub{uri}
-          reverse_proxy 127.0.0.1:${sout_port}
+          reverse_proxy 127.0.0.1:${sub_port}
       }
 
     # 4. VLESS + WebSocket 节点 (实时零缓冲透传)
@@ -1465,26 +1475,6 @@ def api(method, endpoint, form=None):
         return api(method, endpoint, form)
     return result
 
-# 1. 更新 s-ui settings，全部走 s-ui API
-settings_data = {
-    'webPort': str(os.environ.get('SUI_PORT', '')),
-    'webListen': '127.0.0.1',
-    'webPath': os.environ['SUI_PATH'],
-    'webURI': f'https://{os.environ["DOMAIN"]}{os.environ["SUI_PATH"]}',
-    'subPort': str(os.environ.get('SUB_PORT', '')),
-    'subListen': '127.0.0.1',
-    'subPath': os.environ['SUB_PATH'],
-    'subURI': f'https://{os.environ["DOMAIN"]}{os.environ["SUB_PATH"]}',
-    'webCertFile': '',
-    'webKeyFile': '',
-    'subCertFile': '',
-    'subKeyFile': '',
-}
-api('POST', 'save', {
-    'object': 'settings',
-    'action': 'set',
-    'data': json.dumps(settings_data),
-})
 
 # 2. 通过 s-ui API 创建/更新 vmess-argo 入站
 inbounds_resp = api('GET', 'inbounds') or {}
@@ -1923,4 +1913,5 @@ case "${1:-}" in
     echo "直接在终端输入 sout 即可进入交互控制菜单"
     ;;
 esac
+
 
