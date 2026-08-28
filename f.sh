@@ -1475,6 +1475,8 @@ inbound_payload = {
     'listen_port': int(os.environ['NODE_PORT']),
     'addrs': addrs_data,
     'transport': {
+        'early_data_header_name': 'Sec-WebSocket-Protocol',
+        'max_early_data': 2560,
         'headers': {
             'Host': os.environ['DOMAIN']
         },
