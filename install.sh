@@ -82,8 +82,12 @@ TUNNEL_PORT="8081"
 ask_tunnel_setup() {
   echo
   echo "================================================================"
-  echo "  💡 提示：NAT 机推荐开启 Cloudflare 隧道进行代理，正常 VPS 可不启用，自行在 Cloudflare 中配置回源。"
+  echo "  💡 提示：NAT 机推荐开启 Cloudflare 隧道进行代理，正常 VPS 可不启用，需在 Cloudflare 中配置回源。"
   echo "  👉 提示：若不填写域名与 Token（直接按回车），将自动为您开启 Cloudflare 官方免费临时隧道（免域名 / 免Token / 即开即用）"
+  echo "  📌 提示：如要使用固定隧道，请提前准备好："
+  echo "       1) 已在 Cloudflare 中添加的访问域名"
+  echo "       2) Cloudflare 隧道 Token"
+  echo "       3) 在 Cloudflare 中为该隧道配置的端口/回源端口"
   echo "================================================================"
   local prompt_choice=""
   if [[ -t 0 ]]; then
