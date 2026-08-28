@@ -328,11 +328,15 @@ show_info() {
   port=$(web_port)
   bp=$(web_basepath)
   pw=$(web_password)
-  pip=$(public_ip)
   purl=$(web_panel_url)
   ssl_en=$(web_ssl_enabled)
   ssl_dom=$(web_ssl_domain)
   c_en=$(is_caddy_enabled)
+  # 隧道模式下不需要探测公网 IP，减少不必要的网络请求（对小内存机更友好）
+  pip=""
+  if [[ "$c_en" != "true" ]]; then
+    pip=$(public_ip)
+  fi
 
   scheme="http"
   [[ "$ssl_en" == "true" ]] && scheme="https"
@@ -911,6 +915,12 @@ uninstall_all() {
   systemctl reset-failed 2>/dev/null || true
   rm -rf /etc/s-ui /usr/local/s-ui 2>/dev/null || true
   rm -f /usr/bin/s-ui /usr/local/bin/s-ui /usr/bin/sui /usr/local/bin/sui 2>/dev/null || true
+
+  # 清理运行日志、PID 与可能存在的旧迁移目录
+  rm -f /var/log/sout.log /var/log/sout.err /var/log/s-ui.log /var/log/caddy.log /var/log/cloudflared.log /var/log/cloudflared_quick.log 2>/dev/null || true
+  rm -f /run/sout.pid /run/fanout.pid /run/caddy.pid /run/cloudflared.pid /run/s-ui.pid 2>/dev/null || true
+  rm -rf /usr/local/sout 2>/dev/null || true
+  rm -rf /root/.local/share/caddy /root/.config/caddy /root/.cache/caddy /root/.cloudflared 2>/dev/null || true
 
   svc_reload
   echo -e "  ${G}[✓] 所有组件 (sout, s-ui, Caddy, cloudflared) 已彻底卸载干净，系统已完全恢复初始状态！${N}"
@@ -1635,7 +1645,12 @@ caddy_interactive_setup() {
   echo -e "${B}================================================================${N}"
   echo -e "  特点：无需公网端口、无视NAT网络、免申请SSL证书、杜绝525握手错误"
   echo -e "${D}----------------------------------------------------------------${N}"
-  
+  echo -e "  ${Y}💡 提示：如果你要使用固定隧道，请提前准备好以下内容：${N}"
+  echo -e "     ${D}1) 已在 Cloudflare 中添加的访问域名${N}"
+  echo -e "     ${D}2) Cloudflare 隧道 Token${N}"
+  echo -e "     ${D}3) 在 Cloudflare 中为该隧道配置的端口/回源端口${N}"
+  echo -e "${D}----------------------------------------------------------------${N}"
+
   local domain tunnel_token tunnel_port
   read -rp "  1. 请输入您的访问域名 (如 example.com): " domain
   domain=$(echo "$domain" | tr -d ' 
@@ -1718,12 +1733,14 @@ caddy_menu() {
       echo -e "  反代状态:      ${D}未开启 (当前为独立多端口模式)${N}"
       echo -e "  💡 提示:       ${Y}强烈推荐开启 Cloudflare 隧道 4合1 反代 (免开端口/杜绝525)${N}"
       echo -e "${D}----------------------------------------${N}"
-      echo "  1) 一键开启 Cloudflare 隧道 4合1 反代"
+      echo "  1) 开启 Cloudflare 官方免费临时隧道 (免域名/免Token)"
+      echo "  2) 使用固定域名 + 隧道 Token 配置"
       echo "  0) 返回上级菜单"
       echo
-      read -rp "  请选择 [0-1]: " opt
+      read -rp "  请选择 [0-2]: " opt
       case "$opt" in
-        1) caddy_interactive_setup; pause ;;
+        1) setup_caddy_proxy "" "" ""; pause ;;
+        2) caddy_interactive_setup; pause ;;
         0) break ;;
         *) ;;
       esac
@@ -1747,9 +1764,10 @@ menu() {
     echo -e "   9) 重置访问口令     10) 重置访问路径"
     echo -e "  11) 面板 URL 设置    12) SSL / HTTPS 设置"
     echo -e "  13) 检查/更新版本    14) 卸载"
+    echo -e "  15) Cloudflare 隧道查看/更换"
     echo -e "   0) 退出脚本"
     echo -e "${D}----------------------------------------${N}"
-    read -rp "  请选择 [0-14]: " choice
+    read -rp "  请选择 [0-15]: " choice
 
     case "$choice" in
       1) svc_start   && echo -e "\n  ${G}已启动${N}"; pause ;;
@@ -1774,6 +1792,7 @@ menu() {
       12) change_ssl; pause ;;
       13) check_and_update; pause ;;
       14) do_uninstall; pause ;;
+      15) caddy_menu; pause ;;
       0) exit 0 ;;
       *) ;;
     esac
