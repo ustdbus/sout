@@ -1208,7 +1208,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/cloudflared tunnel --protocol http2 --url http://127.0.0.1:${tun_p} --no-autoupdate
+ExecStart=/usr/local/bin/cloudflared tunnel --url http://127.0.0.1:${tun_p} --no-autoupdate
 Restart=always
 RestartSec=5s
 LimitNOFILE=65536

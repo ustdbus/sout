@@ -86,7 +86,7 @@ SUI_DB="/usr/local/s-ui/db/s-ui.db"
 mkdir -p /var/lib/sout /var/log
 > "$LOG_FILE"
 
-/usr/local/bin/cloudflared tunnel --protocol http2 --url "http://127.0.0.1:${PORT}" --no-autoupdate 2>&1 | tee -a "$LOG_FILE" &
+/usr/local/bin/cloudflared tunnel --url "http://127.0.0.1:${PORT}" --no-autoupdate 2>&1 | tee -a "$LOG_FILE" &
 CF_PID=$!
 
 CUR_DOMAIN=""
