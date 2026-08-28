@@ -52,6 +52,26 @@ EOF
   chmod +x "$init"
 }
 
+_openrc_force_stop() {
+  local name="$1"
+  case "$name" in
+    s-ui)
+      pkill -9 -f "supervise-daemon s-ui" 2>/dev/null || true
+      pkill -9 -f "/usr/local/s-ui/sui" 2>/dev/null || true
+      ;;
+    sout|fanout)
+      pkill -9 -f "/usr/local/bin/sout-server" 2>/dev/null || true
+      pkill -9 -f "/usr/local/bin/fanout" 2>/dev/null || true
+      ;;
+    caddy)
+      pkill -9 -f "/usr/local/bin/caddy" 2>/dev/null || true
+      ;;
+    cloudflared)
+      pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
+      ;;
+  esac
+}
+
 systemctl() {
   local action="$1"
   shift
@@ -103,7 +123,17 @@ systemctl() {
         _openrc_init_from_unit "$name" || true
       fi
       if [[ -x /etc/init.d/${name} ]]; then
-        rc-service "$name" "$action"
+        if [[ "$action" == "restart" ]]; then
+          rc-service "$name" stop >/dev/null 2>&1 || true
+          _openrc_force_stop "$name"
+          sleep 0.3
+          rc-service "$name" start
+        elif [[ "$action" == "stop" ]]; then
+          rc-service "$name" stop >/dev/null 2>&1 || true
+          _openrc_force_stop "$name"
+        else
+          rc-service "$name" start
+        fi
       else
         return 0
       fi
@@ -1505,7 +1535,40 @@ api('POST', 'save', {
 })
 PYEOF
       then
-        echo -e "  ${Y}[!] s-ui API 自动配置未完成，请稍后在 s-ui 面板手动补充节点/订阅。${N}"
+        echo -e "  ${Y}[!] s-ui API 自动配置未完成，尝试直接更新 s-ui 数据库以恢复面板访问...${N}"
+        # 先停掉旧 s-ui 进程，避免数据库被锁
+        systemctl stop s-ui >/dev/null 2>&1 || true
+        sleep 0.5
+        if ! SUI_DB="$sui_db" SUI_PORT="$sui_port" SUI_PATH="/${sui_path}/" SUB_PORT="$sub_port" SUB_PATH="/${sub_path}/" DOMAIN="$domain" python3 <<'PYEOF'
+import sqlite3, os
+con = sqlite3.connect(os.environ['SUI_DB'], timeout=10)
+con.execute("PRAGMA busy_timeout=10000")
+cur = con.cursor()
+
+def set_setting(key, value):
+    cur.execute("UPDATE settings SET value=? WHERE key=?", (str(value), key))
+
+set_setting('webPort', os.environ.get('SUI_PORT', ''))
+set_setting('webListen', '127.0.0.1')
+set_setting('webPath', os.environ['SUI_PATH'])
+set_setting('webURI', f'https://{os.environ["DOMAIN"]}{os.environ["SUI_PATH"]}')
+set_setting('subPort', os.environ.get('SUB_PORT', ''))
+set_setting('subListen', '127.0.0.1')
+set_setting('subPath', os.environ['SUB_PATH'])
+set_setting('subURI', f'https://{os.environ["DOMAIN"]}{os.environ["SUB_PATH"]}')
+set_setting('webCertFile', '')
+set_setting('webKeyFile', '')
+set_setting('subCertFile', '')
+set_setting('subKeyFile', '')
+con.commit()
+con.close()
+print('s-ui 数据库配置已更新，面板可通过隧道路径访问；vmess-argo 节点仍需在 s-ui 中手动确认/创建。')
+PYEOF
+        then
+          echo -e "  ${Y}[!] s-ui 数据库回退更新失败，请稍后在 s-ui 面板手动配置端口/路径。${N}"
+        else
+          echo -e "  ${Y}[!] s-ui API 自动配置未完成，但已通过数据库回退更新面板地址；如仍需 vmess-argo 节点，请在 s-ui 面板中手动创建。${N}"
+        fi
       fi
       systemctl restart s-ui 2>/dev/null || true
     fi
