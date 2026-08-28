@@ -345,8 +345,8 @@ show_info() {
   fi
 
   local cur_ver="dev"
-  if [[ -x "$BIN" ]]; then
-    cur_ver=$("$BIN" -version 2>/dev/null | awk '{print $NF}' || echo "dev")
+  if [[ -f "${WORK_DIR}/version" ]]; then
+    cur_ver=$(cat "${WORK_DIR}/version" 2>/dev/null | tr -d ' \r\n')
   fi
   [[ -z "$cur_ver" ]] && cur_ver="dev"
 
@@ -941,8 +941,8 @@ check_and_update() {
   echo
   echo -e "  ${B}正在连接 GitHub 检查最新版本...${N}"
   local cur_ver="dev"
-  if [[ -x "$BIN" ]]; then
-    cur_ver=$("$BIN" -version 2>/dev/null | awk '{print $NF}' || echo "dev")
+  if [[ -f "${WORK_DIR}/version" ]]; then
+    cur_ver=$(cat "${WORK_DIR}/version" 2>/dev/null | tr -d ' \r\n')
   fi
   [[ -z "$cur_ver" ]] && cur_ver="dev"
 
