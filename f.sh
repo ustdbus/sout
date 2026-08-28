@@ -1,6 +1,180 @@
 #!/usr/bin/env bash
 set -e
 
+# ==============================================================================
+# 初始化系统检测：systemd / OpenRC (Alpine)
+# ==============================================================================
+detect_init() {
+  if [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null 2>&1; then
+    echo "systemd"
+  else
+    echo "openrc"
+  fi
+}
+INIT_SYS=$(detect_init)
+
+# 在 OpenRC/Alpine 上自动把 systemctl 调用翻译为 rc-service / rc-update。
+# 优先从 systemd unit 生成 OpenRC init 脚本，保证 caddy/cloudflared 可被管理。
+_openrc_init_from_unit() {
+  local name="$1"
+  local unit="/etc/systemd/system/${name}.service"
+  local init="/etc/init.d/${name}"
+  local exec_start command command_args
+  [[ -f "$unit" ]] || return 1
+  # 非 caddy/cloudflared 已有 OpenRC 脚本时不要覆盖（如 sout/s-ui）
+  if [[ -x "$init" && "$name" != "caddy" && "$name" != "cloudflared" ]]; then
+    return 0
+  fi
+  exec_start=$(sed -n 's/^ExecStart=//p' "$unit" | head -1)
+  [[ -z "$exec_start" ]] && return 1
+  command="${exec_start%% *}"
+  command_args="${exec_start#* }"
+  [[ -z "$command" ]] && return 1
+  mkdir -p /var/log
+  cat > "$init" <<EOF
+#!/sbin/openrc-run
+name="$name"
+description="$name service"
+command="$command"
+command_args="$command_args"
+command_background=true
+pidfile="/run/${name}.pid"
+output_log="/var/log/${name}.log"
+error_log="/var/log/${name}.log"
+respawn_delay=5
+supervisor=supervise-daemon
+
+depend() {
+    need net
+    after firewall
+}
+EOF
+  chmod +x "$init"
+}
+
+systemctl() {
+  local action="$1"
+  shift
+  # 过滤常用的 systemctl 参数
+  while [[ $# -gt 0 && "$1" == -* ]]; do
+    shift
+  done
+  local name="${1:-}"
+  [[ -n "$name" ]] && name="${name%.service}"
+
+  if [[ "$INIT_SYS" == "systemd" ]]; then
+    # 调用真实 systemctl
+    if [[ -z "$name" && ( "$action" == "daemon-reload" || "$action" == "reset-failed" ) ]]; then
+      command systemctl "$action" "$@"
+    else
+      command systemctl "$action" "$name" "$@"
+    fi
+    return $?
+  fi
+
+  case "$action" in
+    daemon-reload|reset-failed)
+      return 0
+      ;;
+    is-active)
+      if [[ -x /etc/init.d/${name} ]] && rc-service "$name" status >/dev/null 2>&1; then
+        echo "active"
+        return 0
+      fi
+      return 3
+      ;;
+    is-enabled)
+      if [[ -x /etc/init.d/${name} ]] && rc-update show default 2>/dev/null | grep -qw "$name"; then
+        echo "enabled"
+        return 0
+      fi
+      return 1
+      ;;
+    is-failed)
+      if [[ -x /etc/init.d/${name} ]] && rc-service "$name" status >/dev/null 2>&1; then
+        echo "running"
+        return 0
+      fi
+      echo "failed"
+      return 1
+      ;;
+    start|stop|restart)
+      if [[ "$name" == "caddy" || "$name" == "cloudflared" ]]; then
+        _openrc_init_from_unit "$name" || true
+      fi
+      if [[ -x /etc/init.d/${name} ]]; then
+        rc-service "$name" "$action"
+      else
+        return 0
+      fi
+      ;;
+    enable)
+      if [[ "$name" == "caddy" || "$name" == "cloudflared" ]]; then
+        _openrc_init_from_unit "$name" || true
+      fi
+      if [[ -x /etc/init.d/${name} ]]; then
+        rc-update add "$name" default >/dev/null 2>&1 || true
+      fi
+      return 0
+      ;;
+    disable)
+      if [[ -x /etc/init.d/${name} ]]; then
+        rc-update del "$name" default >/dev/null 2>&1 || true
+      fi
+      return 0
+      ;;
+    status)
+      if [[ -x /etc/init.d/${name} ]]; then
+        rc-service "$name" status
+        return $?
+      fi
+      echo "Unit $name.service could not be found."
+      return 4
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+journalctl() {
+  local unit="" lines="50" follow=0
+  if [[ "$INIT_SYS" == "systemd" ]]; then
+    command journalctl "$@"
+    return $?
+  fi
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -u) unit="$2"; shift 2;;
+      -n) lines="$2"; shift 2;;
+      -f|--follow) follow=1; shift;;
+      --no-pager|-e|--quiet|-q|--no-tail|--all) shift;;
+      -*) shift;;
+      *) shift;;
+    esac
+  done
+  unit="${unit%.service}"
+  if [[ -z "$unit" ]]; then
+    return 0
+  fi
+  if [[ "$unit" == "sout" || "$unit" == "fanout" ]]; then
+    tail -n "$lines" /var/log/${unit}.log /var/log/${unit}.err 2>/dev/null
+  elif [[ -f "/var/log/${unit}.log" ]]; then
+    tail -n "$lines" "/var/log/${unit}.log"
+  elif [[ -f "/var/log/${unit}_quick.log" ]]; then
+    tail -n "$lines" "/var/log/${unit}_quick.log"
+  fi
+  if [[ "$follow" == "1" ]]; then
+    if [[ -f "/var/log/${unit}.log" ]]; then
+      tail -n 0 -f "/var/log/${unit}.log"
+    else
+      sleep 3600
+    fi
+  fi
+  return 0
+}
+
+
 UNIT="sout.service"
 if systemctl is-active fanout.service >/dev/null 2>&1 && ! systemctl is-active sout.service >/dev/null 2>&1; then
   UNIT="fanout.service"
@@ -652,6 +826,7 @@ uninstall_sout_only() {
   systemctl stop cloudflared 2>/dev/null || true
   systemctl disable cloudflared 2>/dev/null || true
   rm -f /etc/systemd/system/caddy.service /etc/systemd/system/cloudflared.service 2>/dev/null || true
+  rm -f /etc/init.d/caddy /etc/init.d/cloudflared 2>/dev/null || true
   rm -rf /etc/caddy /var/lib/caddy /var/log/caddy /usr/local/bin/caddy /usr/local/bin/cloudflared /usr/local/bin/sout-quick-tunnel /var/log/cloudflared* 2>/dev/null || true
 
   # 恢复 s-ui 为公网直连监听
@@ -720,6 +895,7 @@ uninstall_all() {
   systemctl stop cloudflared 2>/dev/null || true
   systemctl disable cloudflared 2>/dev/null || true
   rm -f /etc/systemd/system/caddy.service /etc/systemd/system/cloudflared.service 2>/dev/null || true
+  rm -f /etc/init.d/caddy /etc/init.d/cloudflared 2>/dev/null || true
   rm -rf /etc/caddy /var/lib/caddy /var/log/caddy /usr/local/bin/caddy /usr/local/bin/cloudflared /usr/local/bin/sout-quick-tunnel /var/log/cloudflared* /home/acme 2>/dev/null || true
 
   # 彻底清理 sout 二进制与工作目录
@@ -891,31 +1067,31 @@ get_caddy_arch() {
 }
 
 install_caddy_bin() {
-  if command -v caddy >/dev/null 2>&1; then
-    return 0
-  fi
   local arch
   arch=$(get_caddy_arch)
-  echo -e "  ${B}[+] 正在获取标准 Caddy 反代服务 (${arch})...${N}"
-  local tmp
-  tmp=$(mktemp -d)
-  local url="https://caddyserver.com/api/download?os=linux&arch=${arch}"
-  
-  if ! curl -fsSL "$url" -o "$tmp/caddy"; then
-    echo -e "  ${Y}[!] 官方 API 下载稍慢，正在重试...${N}"
+  if ! command -v caddy >/dev/null 2>&1; then
+    echo -e "  ${B}[+] 正在获取标准 Caddy 反代服务 (${arch})...${N}"
+    local tmp
+    tmp=$(mktemp -d)
+    local url="https://caddyserver.com/api/download?os=linux&arch=${arch}"
+
     if ! curl -fsSL "$url" -o "$tmp/caddy"; then
-      echo -e "  ${R}[✗] Caddy 二进制下载失败，请检查网络连接${N}" >&2
-      rm -rf "$tmp"
-      return 1
+      echo -e "  ${Y}[!] 官方 API 下载稍慢，正在重试...${N}"
+      if ! curl -fsSL "$url" -o "$tmp/caddy"; then
+        echo -e "  ${R}[✗] Caddy 二进制下载失败，请检查网络连接${N}" >&2
+        rm -rf "$tmp"
+        return 1
+      fi
     fi
+
+    install -m 755 "$tmp/caddy" /usr/local/bin/caddy
+    rm -rf "$tmp"
   fi
-  
-  install -m 755 "$tmp/caddy" /usr/local/bin/caddy
-  rm -rf "$tmp"
-  
+
   mkdir -p /etc/caddy /var/log/caddy /var/lib/caddy
   chmod 755 /etc/caddy /var/log/caddy
-  
+  mkdir -p /etc/systemd/system
+
   cat > /etc/systemd/system/caddy.service <<'EOF'
 [Unit]
 Description=Caddy Web Server
@@ -965,6 +1141,7 @@ setup_cloudflared_service() {
   local token="$1"
   local tun_p="${2:-8081}"
 
+  mkdir -p /etc/systemd/system
   if [[ -n "$token" ]]; then
     cat > /etc/systemd/system/cloudflared.service <<EOF
 [Unit]
@@ -1158,7 +1335,7 @@ EOF
       echo -e "  ${Y}[!] 未找到 s-ui API Token，跳过自动配置（请先启动 sout 生成 Token）${N}"
     else
       echo -e "  [+] 正在通过 s-ui API 自动配置 (路径分流与 vmess-argo 节点)..."
-      SUI_API="http://127.0.0.1:${sui_port}/${sui_path}/apiv2" \
+      if ! SUI_API="http://127.0.0.1:${sui_port}/${sui_path}/apiv2" \
       SUI_TOKEN="$sui_token" \
         SUI_DB="$sui_db" \
       DOMAIN="$domain" \
@@ -1317,6 +1494,9 @@ api('POST', 'save', {
     'data': json.dumps(client_payload),
 })
 PYEOF
+      then
+        echo -e "  ${Y}[!] s-ui API 自动配置未完成，请稍后在 s-ui 面板手动补充节点/订阅。${N}"
+      fi
       systemctl restart s-ui 2>/dev/null || true
     fi
     systemctl restart s-ui 2>/dev/null || true

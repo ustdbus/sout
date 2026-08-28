@@ -52,11 +52,19 @@ cleanup_sout() {
     rm -f /etc/init.d/sout /etc/init.d/fanout
   fi
   # 停止并彻底清理 Caddy 与 cloudflared
-  systemctl stop caddy 2>/dev/null || true
-  systemctl disable caddy 2>/dev/null || true
-  systemctl stop cloudflared 2>/dev/null || true
-  systemctl disable cloudflared 2>/dev/null || true
-  rm -f /etc/systemd/system/caddy.service /etc/systemd/system/cloudflared.service 2>/dev/null || true
+  if [[ "$INIT_SYS" == systemd ]]; then
+    systemctl stop caddy 2>/dev/null || true
+    systemctl disable caddy 2>/dev/null || true
+    systemctl stop cloudflared 2>/dev/null || true
+    systemctl disable cloudflared 2>/dev/null || true
+    rm -f /etc/systemd/system/caddy.service /etc/systemd/system/cloudflared.service 2>/dev/null || true
+  else
+    rc-service caddy stop 2>/dev/null || true
+    rc-update del caddy default 2>/dev/null || true
+    rc-service cloudflared stop 2>/dev/null || true
+    rc-update del cloudflared default 2>/dev/null || true
+    rm -f /etc/init.d/caddy /etc/init.d/cloudflared 2>/dev/null || true
+  fi
   rm -rf /etc/caddy /var/lib/caddy /var/log/caddy /usr/local/bin/caddy /usr/local/bin/cloudflared /usr/local/bin/sout-quick-tunnel /var/log/cloudflared* 2>/dev/null || true
 
   rm -f "$BIN" /usr/local/bin/sout-server /usr/local/bin/fanout /usr/local/bin/f /usr/local/bin/sout /usr/local/bin/sout-cli 2>/dev/null || true
