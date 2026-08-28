@@ -1367,11 +1367,16 @@ EOF
   local sui_db="/usr/local/s-ui/db/s-ui.db"
   local sui_admin_user
   sui_admin_user=$(get_sui_user)
+  local sui_admin_pass
+  sui_admin_pass=""
+  if [[ -f "${WORK_DIR}/sui-admin.json" ]]; then
+    sui_admin_pass=$(python3 -c "import json; print(json.load(open('${WORK_DIR}/sui-admin.json')).get('password',''))" 2>/dev/null || true)
+  fi
 
     if [[ -f "$sui_db" ]]; then
     local sui_token
     sui_token=$(cat "${WORK_DIR}/sui-token" 2>/dev/null || true)
-    if [[ -z "$sui_token" ]]; then
+    if [[ -z "$sui_token" && -z "$sui_admin_pass" ]]; then
       echo -e "  ${Y}[!] 未找到 s-ui API Token，跳过自动配置（请先启动 sout 生成 Token）${N}"
     else
       echo -e "  [+] 正在通过 s-ui API 自动配置 (路径分流与 vmess-argo 节点)..."
@@ -1386,8 +1391,9 @@ EOF
       NODE_PORT="$node_port" \
       WS_PATH="/${ws_path}" \
       SUI_ADMIN_USER="$sui_admin_user" \
+      SUI_ADMIN_PASS="$sui_admin_pass" \
       python3 <<'PYEOF'
-import json, os, sqlite3, uuid, urllib.request, urllib.parse
+import json, os, sqlite3, uuid, urllib.request, urllib.parse, http.cookiejar
 
 con = sqlite3.connect(os.environ['SUI_DB'])
 cur = con.cursor()
@@ -1401,17 +1407,46 @@ if not cur_path.startswith('/'): cur_path = '/' + cur_path
 if not cur_path.endswith('/'): cur_path += '/'
 con.close()
 BASE = f'http://127.0.0.1:{cur_port}{cur_path}apiv2'
-TOKEN = os.environ['SUI_TOKEN']
+TOKEN = os.environ.get('SUI_TOKEN', '')
+ADMIN_USER = os.environ.get('SUI_ADMIN_USER', 'admin')
+ADMIN_PASS = os.environ.get('SUI_ADMIN_PASS', '')
+COOKIES = http.cookiejar.CookieJar()
+OPENER = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(COOKIES))
+COOKIE_LOGIN = [False]
+
+def _login():
+    if not ADMIN_PASS:
+        raise SystemExit('未提供 s-ui 管理员密码，无法登录创建节点')
+    login_url = f'http://127.0.0.1:{cur_port}{cur_path}api/login'
+    data = urllib.parse.urlencode({'username': ADMIN_USER, 'password': ADMIN_PASS}).encode()
+    req = urllib.request.Request(login_url, data=data, headers={'Content-Type': 'application/x-www-form-urlencoded'})
+    with OPENER.open(req, timeout=10) as resp:
+        ret = json.loads(resp.read().decode('utf-8'))
+    if not ret.get('success'):
+        raise SystemExit('s-ui 登录失败: ' + str(ret.get('msg', '')))
+    COOKIE_LOGIN[0] = True
 
 def api(method, endpoint, form=None):
     url = BASE.rstrip('/') + '/' + endpoint.lstrip('/')
     data = urllib.parse.urlencode(form).encode() if form else None
+    if COOKIE_LOGIN[0]:
+        headers = {}
+        if data is not None:
+            headers['Content-Type'] = 'application/x-www-form-urlencoded'
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        with OPENER.open(req, timeout=20) as resp:
+            return json.loads(resp.read().decode('utf-8'))
+
     headers = {'Token': TOKEN}
     if data is not None:
         headers['Content-Type'] = 'application/x-www-form-urlencoded'
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     with urllib.request.urlopen(req, timeout=20) as resp:
-        return json.loads(resp.read().decode('utf-8'))
+        result = json.loads(resp.read().decode('utf-8'))
+    if isinstance(result, dict) and result.get('success') is False and 'invalid token' in str(result.get('msg', '')):
+        _login()
+        return api(method, endpoint, form)
+    return result
 
 # 1. 更新 s-ui settings，全部走 s-ui API
 settings_data = {
