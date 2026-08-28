@@ -9,7 +9,6 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"os/exec"
@@ -34,16 +33,14 @@ var (
 
 // SUI 结构体，对接本机 s-ui 面板
 type SUI struct {
-	Host      string `json:"host"`
-	Port      int    `json:"port"`
-	BasePath  string `json:"base_path"`
-	Scheme    string `json:"scheme"`
-	token     string
-	dbPath    string
-	client    *http.Client
-	workDir   string
-	cookieJar *cookiejar.Jar
-	useCookie bool
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	BasePath string `json:"base_path"`
+	Scheme   string `json:"scheme"`
+	token    string
+	dbPath   string
+	client   *http.Client
+	workDir  string
 }
 
 func (s *SUI) Kind() string { return "s-ui" }
@@ -227,16 +224,6 @@ func DetectSUI(workDir string) (*SUI, error) {
 			s.syncSUIDatabaseLinks(hostPublicIP())
 			return s, nil
 		}
-		if s.loginWithAdmin() {
-			cachedSUIToken = existingToken
-			if workDir != "" {
-				saveTokenFile(workDir, suiTokenFile, existingToken)
-			}
-			s.cleanLegacyClonedInbounds()
-			_ = s.cleanStaleRoutesAndClients(nil)
-			s.syncSUIDatabaseLinks(hostPublicIP())
-			return s, nil
-		}
 	}
 
 	newToken := generateRandomToken(32)
@@ -247,15 +234,10 @@ func DetectSUI(workDir string) (*SUI, error) {
 	}
 	_ = exec.Command("sqlite3", dbPath, fmt.Sprintf("INSERT INTO tokens (desc, token, expiry, user_id) VALUES ('sout', '%s', 0, %s);", newToken, adminID)).Run()
 
-	// 如果存在 installer 生成的 s-ui 管理员凭据，则改用登录会话方式，
-	// 不再重启 s-ui，避免 OpenRC 容器中旧进程无法被杀导致重复进程。
-	if _, err := os.Stat(filepath.Join(workDir, "sui-admin.json")); err != nil {
-		restartSUI()
-		time.Sleep(2 * time.Second)
-	}
+	restartSUI()
+	time.Sleep(2 * time.Second)
 
 	s := newSUI(newToken)
-	_ = s.loginWithAdmin()
 	cachedSUIToken = newToken
 	if workDir != "" {
 		saveTokenFile(workDir, suiTokenFile, newToken)
@@ -304,67 +286,9 @@ func (s *SUI) tokenValid() bool {
 	_, err := s.callAPI(http.MethodGet, "inbounds", nil)
 	return err == nil
 }
-func (s *SUI) loginWithAdmin() bool {
-	if s.useCookie {
-		return true
-	}
-	if s.workDir == "" {
-		return false
-	}
-	data, err := os.ReadFile(filepath.Join(s.workDir, "sui-admin.json"))
-	if err != nil {
-		return false
-	}
-	var cred struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	if err := json.Unmarshal(data, &cred); err != nil || cred.Username == "" || cred.Password == "" {
-		return false
-	}
-
-	jar, _ := cookiejar.New(nil)
-	client := &http.Client{
-		Timeout: 20 * time.Second,
-		Jar: jar,
-	}
-	loginURL := fmt.Sprintf("%s/api/login", strings.TrimSuffix(s.base(), "/"))
-	form := url.Values{"user": []string{cred.Username}, "pass": []string{cred.Password}}
-	req, err := http.NewRequest(http.MethodPost, loginURL, strings.NewReader(form.Encode()))
-	if err != nil {
-		return false
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return false
-	}
-	var ret struct {
-		Success bool   `json:"success"`
-		Msg     string `json:"msg"`
-	}
-	if err := json.Unmarshal(body, &ret); err != nil || !ret.Success {
-		return false
-	}
-	s.client = client
-	s.cookieJar = jar
-	s.useCookie = true
-	return true
-}
-
 
 func (s *SUI) callAPI(method, endpoint string, form url.Values) ([]byte, error) {
-	apiBase := "apiv2"
-	if s.useCookie {
-		apiBase = "api"
-	}
-	fullURL := fmt.Sprintf("%s/%s/%s", strings.TrimSuffix(s.base(), "/"), apiBase, strings.TrimPrefix(endpoint, "/"))
+	fullURL := fmt.Sprintf("%s/apiv2/%s", strings.TrimSuffix(s.base(), "/"), strings.TrimPrefix(endpoint, "/"))
 	var reqBody io.Reader
 	if form != nil {
 		reqBody = strings.NewReader(form.Encode())
@@ -381,9 +305,7 @@ func (s *SUI) callAPI(method, endpoint string, form url.Values) ([]byte, error) 
 		req.Header.Set("X-Forwarded-Host", pubIP)
 	}
 
-	if !s.useCookie {
-		req.Header.Set("Token", s.token)
-	}
+	req.Header.Set("Token", s.token)
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}

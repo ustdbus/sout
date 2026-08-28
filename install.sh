@@ -170,22 +170,14 @@ ensure_sui() {
       echo "  [+] 正在自动检测当前服务器系统架构并安装官方 s-ui 面板..."
       echo "      (官方仓库: https://github.com/alireza0/s-ui)"
       echo
-      local sui_pass
-      sui_pass=$(head -c 9 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 12)
-      # 自动生成 s-ui 管理员账号密码，并保存给后续节点配置使用
-      printf 'y\n\n\n\n\ny\nadmin\n%s\n' "$sui_pass" | bash <(curl -Ls https://raw.githubusercontent.com/alireza0/s-ui/master/install.sh) || true
+      if [[ -c /dev/tty ]]; then
+        bash <(curl -Ls https://raw.githubusercontent.com/alireza0/s-ui/master/install.sh) < /dev/tty || true
+      else
+        bash <(curl -Ls https://raw.githubusercontent.com/alireza0/s-ui/master/install.sh) || true
+      fi
       
       if check_sui; then
         SUI_INSTALLED_BY_US=1
-        mkdir -p "$WORK_DIR"
-        cat > "${WORK_DIR}/sui-admin.json" <<JSON
-{
-  "username": "admin",
-  "password": "${sui_pass}"
-}
-JSON
-        chmod 600 "${WORK_DIR}/sui-admin.json"
-
         echo
         echo "================================================================"
         echo "  [✓] s-ui 面板安装完成并就绪！继续进行 sout 插件安装..."
@@ -552,4 +544,3 @@ else
   echo "================================================================"
   echo
 fi
-

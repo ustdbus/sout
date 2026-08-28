@@ -1305,32 +1305,6 @@ setup_caddy_proxy() {
   sub_path=$(rand_safe_path "sub")
   ws_path=$(rand_safe_path "vlws")
 
-  # 若 s-ui 已安装，优先使用它当前的端口/路径，避免必须重启 s-ui 才能生效
-  local sui_db_tmp="/usr/local/s-ui/db/s-ui.db"
-  if [[ -f "$sui_db_tmp" ]]; then
-    local real_sui_port real_sui_path
-    real_sui_port=$(python3 -c "import sqlite3; con=sqlite3.connect('$sui_db_tmp'); r=con.execute(\"SELECT value FROM settings WHERE key='webPort'\").fetchone(); print(r[0] if r and r[0] else ''); con.close()" 2>/dev/null || true)
-    real_sui_path=$(python3 -c "import sqlite3; con=sqlite3.connect('$sui_db_tmp'); r=con.execute(\"SELECT value FROM settings WHERE key='webPath'\").fetchone(); print(r[0] if r and r[0] else ''); con.close()" 2>/dev/null || true)
-    [[ -n "$real_sui_port" ]] && sui_port="$real_sui_port"
-    if [[ -n "$real_sui_path" ]]; then
-      real_sui_path="/${real_sui_path#/}"
-      [[ "$real_sui_path" != */ ]] && real_sui_path="${real_sui_path}/"
-      sui_path="${real_sui_path#/}"
-      sui_path="${sui_path%/}"
-    fi
-
-    local real_sub_port real_sub_path
-    real_sub_port=$(python3 -c "import sqlite3; con=sqlite3.connect('$sui_db_tmp'); r=con.execute(\"SELECT value FROM settings WHERE key='subPort'\").fetchone(); print(r[0] if r and r[0] else ''); con.close()" 2>/dev/null || true)
-    real_sub_path=$(python3 -c "import sqlite3; con=sqlite3.connect('$sui_db_tmp'); r=con.execute(\"SELECT value FROM settings WHERE key='subPath'\").fetchone(); print(r[0] if r and r[0] else ''); con.close()" 2>/dev/null || true)
-    [[ -n "$real_sub_port" ]] && sub_port="$real_sub_port"
-    if [[ -n "$real_sub_path" ]]; then
-      real_sub_path="/${real_sub_path#/}"
-      [[ "$real_sub_path" != */ ]] && real_sub_path="${real_sub_path}/"
-      sub_path="${real_sub_path#/}"
-      sub_path="${sub_path%/}"
-    fi
-  fi
-
   # 3. 写入纯净本地 Caddyfile (双栈通配监听 :${tunnel_port})
   mkdir -p /etc/caddy /var/log/caddy /var/lib/caddy
   cat > /etc/caddy/Caddyfile <<EOF
@@ -1354,9 +1328,10 @@ setup_caddy_proxy() {
         reverse_proxy 127.0.0.1:${sui_port}
     }
 
-      # 3. s-ui 订阅接口（直接转发到 s-ui 的订阅服务）
+      # 3. sout 订阅接口（重写到 sout 面板的 /sub）
       handle /${sub_path}* {
-          reverse_proxy 127.0.0.1:${sub_port}
+          rewrite * /${sout_path}/sub{uri}
+          reverse_proxy 127.0.0.1:${sout_port}
       }
 
     # 4. VLESS + WebSocket 节点 (实时零缓冲透传)
@@ -1392,16 +1367,11 @@ EOF
   local sui_db="/usr/local/s-ui/db/s-ui.db"
   local sui_admin_user
   sui_admin_user=$(get_sui_user)
-  local sui_admin_pass
-  sui_admin_pass=""
-  if [[ -f "${WORK_DIR}/sui-admin.json" ]]; then
-    sui_admin_pass=$(python3 -c "import json; print(json.load(open('${WORK_DIR}/sui-admin.json')).get('password',''))" 2>/dev/null || true)
-  fi
 
     if [[ -f "$sui_db" ]]; then
     local sui_token
     sui_token=$(cat "${WORK_DIR}/sui-token" 2>/dev/null || true)
-    if [[ -z "$sui_token" && -z "$sui_admin_pass" ]]; then
+    if [[ -z "$sui_token" ]]; then
       echo -e "  ${Y}[!] 未找到 s-ui API Token，跳过自动配置（请先启动 sout 生成 Token）${N}"
     else
       echo -e "  [+] 正在通过 s-ui API 自动配置 (路径分流与 vmess-argo 节点)..."
@@ -1416,9 +1386,8 @@ EOF
       NODE_PORT="$node_port" \
       WS_PATH="/${ws_path}" \
       SUI_ADMIN_USER="$sui_admin_user" \
-      SUI_ADMIN_PASS="$sui_admin_pass" \
       python3 <<'PYEOF'
-import json, os, sqlite3, uuid, urllib.request, urllib.parse, http.cookiejar
+import json, os, sqlite3, uuid, urllib.request, urllib.parse
 
 con = sqlite3.connect(os.environ['SUI_DB'])
 cur = con.cursor()
@@ -1432,49 +1401,38 @@ if not cur_path.startswith('/'): cur_path = '/' + cur_path
 if not cur_path.endswith('/'): cur_path += '/'
 con.close()
 BASE = f'http://127.0.0.1:{cur_port}{cur_path}apiv2'
-BASE_COOKIE = f'http://127.0.0.1:{cur_port}{cur_path}api'
-TOKEN = os.environ.get('SUI_TOKEN', '')
-ADMIN_USER = os.environ.get('SUI_ADMIN_USER', 'admin')
-ADMIN_PASS = os.environ.get('SUI_ADMIN_PASS', '')
-COOKIES = http.cookiejar.CookieJar()
-OPENER = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(COOKIES))
-COOKIE_LOGIN = [False]
-
-def _login():
-    if not ADMIN_PASS:
-        raise SystemExit('未提供 s-ui 管理员密码，无法登录创建节点')
-    login_url = f'http://127.0.0.1:{cur_port}{cur_path}api/login'
-    data = urllib.parse.urlencode({'user': ADMIN_USER, 'pass': ADMIN_PASS}).encode()
-    req = urllib.request.Request(login_url, data=data, headers={'Content-Type': 'application/x-www-form-urlencoded'})
-    with OPENER.open(req, timeout=10) as resp:
-        ret = json.loads(resp.read().decode('utf-8'))
-    if not ret.get('success'):
-        raise SystemExit('s-ui 登录失败: ' + str(ret.get('msg', '')))
-    COOKIE_LOGIN[0] = True
+TOKEN = os.environ['SUI_TOKEN']
 
 def api(method, endpoint, form=None):
     url = BASE.rstrip('/') + '/' + endpoint.lstrip('/')
     data = urllib.parse.urlencode(form).encode() if form else None
-    if COOKIE_LOGIN[0]:
-        url = BASE_COOKIE.rstrip('/') + '/' + endpoint.lstrip('/')
-        headers = {}
-        if data is not None:
-            headers['Content-Type'] = 'application/x-www-form-urlencoded'
-        req = urllib.request.Request(url, data=data, headers=headers, method=method)
-        with OPENER.open(req, timeout=20) as resp:
-            return json.loads(resp.read().decode('utf-8'))
-
     headers = {'Token': TOKEN}
     if data is not None:
         headers['Content-Type'] = 'application/x-www-form-urlencoded'
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     with urllib.request.urlopen(req, timeout=20) as resp:
-        result = json.loads(resp.read().decode('utf-8'))
-    if isinstance(result, dict) and result.get('success') is False and 'invalid token' in str(result.get('msg', '')):
-        _login()
-        return api(method, endpoint, form)
-    return result
+        return json.loads(resp.read().decode('utf-8'))
 
+# 1. 更新 s-ui settings，全部走 s-ui API
+settings_data = {
+    'webPort': str(os.environ.get('SUI_PORT', '')),
+    'webListen': '127.0.0.1',
+    'webPath': os.environ['SUI_PATH'],
+    'webURI': f'https://{os.environ["DOMAIN"]}{os.environ["SUI_PATH"]}',
+    'subPort': str(os.environ.get('SUB_PORT', '')),
+    'subListen': '127.0.0.1',
+    'subPath': os.environ['SUB_PATH'],
+    'subURI': f'https://{os.environ["DOMAIN"]}{os.environ["SUB_PATH"]}',
+    'webCertFile': '',
+    'webKeyFile': '',
+    'subCertFile': '',
+    'subKeyFile': '',
+}
+api('POST', 'save', {
+    'object': 'settings',
+    'action': 'set',
+    'data': json.dumps(settings_data),
+})
 
 # 2. 通过 s-ui API 创建/更新 vmess-argo 入站
 inbounds_resp = api('GET', 'inbounds') or {}
@@ -1596,7 +1554,9 @@ PYEOF
       then
         echo -e "  ${Y}[!] s-ui API 自动配置未完成，请稍后在 s-ui 面板手动补充节点/订阅。${N}"
       fi
+      systemctl restart s-ui 2>/dev/null || true
     fi
+    systemctl restart s-ui 2>/dev/null || true
   fi
 
   # 5. 自动化配置 sout
@@ -1913,5 +1873,4 @@ case "${1:-}" in
     echo "直接在终端输入 sout 即可进入交互控制菜单"
     ;;
 esac
-
 
