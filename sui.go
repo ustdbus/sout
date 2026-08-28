@@ -63,13 +63,30 @@ func localSUIClient() *http.Client {
 }
 
 func suiRunning() bool {
-	if exec.Command("systemctl", "is-active", "--quiet", "s-ui").Run() == nil {
-		return true
+	if hasCmd("systemctl") && dirExists("/run/systemd/system") {
+		if exec.Command("systemctl", "is-active", "--quiet", "s-ui").Run() == nil {
+			return true
+		}
+	}
+	if hasCmd("rc-service") {
+		if exec.Command("rc-service", "s-ui", "status").Run() == nil {
+			return true
+		}
 	}
 	if exec.Command("pgrep", "-x", "sui").Run() == nil {
 		return true
 	}
 	return false
+}
+
+func restartSUI() {
+	if hasCmd("systemctl") && dirExists("/run/systemd/system") {
+		_ = exec.Command("systemctl", "restart", "s-ui").Run()
+	} else if hasCmd("rc-service") {
+		_ = exec.Command("rc-service", "s-ui", "restart").Run()
+	} else {
+		_ = exec.Command("systemctl", "restart", "s-ui").Run()
+	}
 }
 
 func runSQLite(dbPath string, query string) (string, error) {
@@ -217,7 +234,7 @@ func DetectSUI(workDir string) (*SUI, error) {
 	}
 	_ = exec.Command("sqlite3", dbPath, fmt.Sprintf("INSERT INTO tokens (desc, token, expiry, user_id) VALUES ('sout', '%s', 0, %s);", newToken, adminID)).Run()
 
-	_ = exec.Command("systemctl", "restart", "s-ui").Run()
+	restartSUI()
 	time.Sleep(2 * time.Second)
 
 	s := newSUI(newToken)
