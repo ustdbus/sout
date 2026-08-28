@@ -1305,6 +1305,21 @@ setup_caddy_proxy() {
   sub_path=$(rand_safe_path "sub")
   ws_path=$(rand_safe_path "vlws")
 
+  # 若 s-ui 已安装，优先使用它当前的端口/路径，避免必须重启 s-ui 才能生效
+  local sui_db_tmp="/usr/local/s-ui/db/s-ui.db"
+  if [[ -f "$sui_db_tmp" ]]; then
+    local real_sui_port real_sui_path
+    real_sui_port=$(python3 -c "import sqlite3; con=sqlite3.connect('$sui_db_tmp'); r=con.execute(\"SELECT value FROM settings WHERE key='webPort'\").fetchone(); print(r[0] if r and r[0] else ''); con.close()" 2>/dev/null || true)
+    real_sui_path=$(python3 -c "import sqlite3; con=sqlite3.connect('$sui_db_tmp'); r=con.execute(\"SELECT value FROM settings WHERE key='webPath'\").fetchone(); print(r[0] if r and r[0] else ''); con.close()" 2>/dev/null || true)
+    [[ -n "$real_sui_port" ]] && sui_port="$real_sui_port"
+    if [[ -n "$real_sui_path" ]]; then
+      real_sui_path="/${real_sui_path#/}"
+      [[ "$real_sui_path" != */ ]] && real_sui_path="${real_sui_path}/"
+      sui_path="${real_sui_path#/}"
+      sui_path="${sui_path%/}"
+    fi
+  fi
+
   # 3. 写入纯净本地 Caddyfile (双栈通配监听 :${tunnel_port})
   mkdir -p /etc/caddy /var/log/caddy /var/lib/caddy
   cat > /etc/caddy/Caddyfile <<EOF
@@ -1407,6 +1422,7 @@ if not cur_path.startswith('/'): cur_path = '/' + cur_path
 if not cur_path.endswith('/'): cur_path += '/'
 con.close()
 BASE = f'http://127.0.0.1:{cur_port}{cur_path}apiv2'
+BASE_COOKIE = f'http://127.0.0.1:{cur_port}{cur_path}api'
 TOKEN = os.environ.get('SUI_TOKEN', '')
 ADMIN_USER = os.environ.get('SUI_ADMIN_USER', 'admin')
 ADMIN_PASS = os.environ.get('SUI_ADMIN_PASS', '')
@@ -1418,7 +1434,7 @@ def _login():
     if not ADMIN_PASS:
         raise SystemExit('未提供 s-ui 管理员密码，无法登录创建节点')
     login_url = f'http://127.0.0.1:{cur_port}{cur_path}api/login'
-    data = urllib.parse.urlencode({'username': ADMIN_USER, 'password': ADMIN_PASS}).encode()
+    data = urllib.parse.urlencode({'user': ADMIN_USER, 'pass': ADMIN_PASS}).encode()
     req = urllib.request.Request(login_url, data=data, headers={'Content-Type': 'application/x-www-form-urlencoded'})
     with OPENER.open(req, timeout=10) as resp:
         ret = json.loads(resp.read().decode('utf-8'))
@@ -1430,6 +1446,7 @@ def api(method, endpoint, form=None):
     url = BASE.rstrip('/') + '/' + endpoint.lstrip('/')
     data = urllib.parse.urlencode(form).encode() if form else None
     if COOKIE_LOGIN[0]:
+        url = BASE_COOKIE.rstrip('/') + '/' + endpoint.lstrip('/')
         headers = {}
         if data is not None:
             headers['Content-Type'] = 'application/x-www-form-urlencoded'
@@ -1589,9 +1606,7 @@ PYEOF
       then
         echo -e "  ${Y}[!] s-ui API 自动配置未完成，请稍后在 s-ui 面板手动补充节点/订阅。${N}"
       fi
-      systemctl restart s-ui 2>/dev/null || true
     fi
-    systemctl restart s-ui 2>/dev/null || true
   fi
 
   # 5. 自动化配置 sout

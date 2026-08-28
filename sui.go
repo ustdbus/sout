@@ -234,8 +234,12 @@ func DetectSUI(workDir string) (*SUI, error) {
 	}
 	_ = exec.Command("sqlite3", dbPath, fmt.Sprintf("INSERT INTO tokens (desc, token, expiry, user_id) VALUES ('sout', '%s', 0, %s);", newToken, adminID)).Run()
 
-	restartSUI()
-	time.Sleep(2 * time.Second)
+	// 如果存在 installer 生成的 s-ui 管理员凭据，则改用登录会话方式，
+	// 不再重启 s-ui，避免 OpenRC 容器中旧进程无法被杀导致重复进程。
+	if _, err := os.Stat(filepath.Join(workDir, "sui-admin.json")); err != nil {
+		restartSUI()
+		time.Sleep(2 * time.Second)
+	}
 
 	s := newSUI(newToken)
 	cachedSUIToken = newToken
