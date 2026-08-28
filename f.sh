@@ -1218,6 +1218,8 @@ WantedBy=multi-user.target
 EOF
   fi
 
+  # 清空旧日志，避免 get_quick_tunnel_domain 读到上一次临时隧道的旧域名
+  : > /var/log/cloudflared.log 2>/dev/null || true
   systemctl daemon-reload
   systemctl enable cloudflared >/dev/null 2>&1 || true
   systemctl restart cloudflared
