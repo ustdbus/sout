@@ -358,7 +358,7 @@ echo "================================================================"
 echo "[1/6] 检查系统依赖..."
 MGR=$(detect_pkg_mgr)
 needed=()
-for cmd in curl tar ip ss; do
+for cmd in curl tar ip ss python3 sqlite3; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     needed+=("$cmd")
   fi
@@ -373,6 +373,8 @@ if [[ ${#needed[@]} -gt 0 ]]; then
       tar)  pkgs+=("tar") ;;
       ip)   [[ "$MGR" == "apk" ]] && pkgs+=("iproute2") || pkgs+=("iproute2") ;;
       ss)   [[ "$MGR" == "apk" ]] && pkgs+=("iproute2") || pkgs+=("iproute2") ;;
+      python3) pkgs+=("python3") ;;
+      sqlite3) [[ "$MGR" == "apk" ]] && pkgs+=("sqlite") || pkgs+=("sqlite3") ;;
     esac
   done
   echo "      正在自动安装: ${pkgs[*]}"
