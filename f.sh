@@ -233,12 +233,10 @@ check_sui() {
 }
 
 svc_status()     { systemctl is-active "$UNIT" 2>/dev/null || echo inactive; }
-svc_is_enabled() { systemctl is-enabled "$UNIT" 2>/dev/null | grep -q 'enabled'; }
 svc_start()      { systemctl start "$UNIT"; }
 svc_stop()       { systemctl stop "$UNIT"; }
 svc_restart()    { systemctl restart "$UNIT"; }
 svc_reload()     { systemctl daemon-reload; }
-svc_enable()     { systemctl enable "$UNIT"; }
 svc_disable()    { systemctl disable "$UNIT"; }
 svc_logs()       { journalctl -u "$UNIT" -n "${1:-40}" --no-pager; }
 svc_logs_follow(){ journalctl -u "$UNIT" -f; }
@@ -487,44 +485,6 @@ show_info() {
   fi
   echo -e "  s-ui 唤起命令: ${C}s-ui${N}"
   echo -e "  sout 唤起命令: ${C}sout${N}"
-  echo
-}
-
-list_tunnels() {
-  local port bp pw
-  port=$(web_port)
-  bp=$(web_basepath)
-  pw=$(web_password)
-  echo
-  echo -e "  ${B}当前运行中的出口隧道列表：${N}"
-  python3 -c "
-import urllib.request, urllib.parse, http.cookiejar, json
-try:
-    cj = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
-    login_url = f'http://127.0.0.1:${port}${bp}login'
-    login_data = urllib.parse.urlencode({'password': '${pw}'}).encode()
-    opener.open(login_url, data=login_data, timeout=3)
-    
-    req = urllib.request.Request(f'http://127.0.0.1:${port}${bp}api/tunnels')
-    res = opener.open(req, timeout=4)
-    data = json.loads(res.read().decode())
-    if not data:
-        print('  (暂无运行中的出口隧道，请在面板中新建)')
-    else:
-        print('  ' + f'{\"槽位\":<6} {\"状态\":<10} {\"出口 IP\":<18} {\"SOCKS5 端口\":<14} {\"国家/地区\"}')
-        print('  ' + '-'*68)
-        for t in data:
-            slot = t.get('slot', '-')
-            st = t.get('status', '-')
-            ip = t.get('exit_ip') or '连接中...'
-            port = t.get('port', '-')
-            node = t.get('node', {})
-            c = node.get('country') or node.get('country_code') or '-'
-            print('  ' + f'{slot:<6} {st:<10} {ip:<18} 127.0.0.1:{port:<6} {c}')
-except Exception as e:
-    print('  获取隧道列表失败:', e)
-"
   echo
 }
 
@@ -1817,29 +1777,28 @@ menu() {
     echo -e "   1) 启动服务          2) 停止服务"
     echo -e "   3) 重启服务          4) 查看运行日志"
     echo
-    echo -e "   5) 查看出口隧道      6) 修改面板监听地址和端口"
-    echo -e "   7) 重置访问口令      8) 重置访问路径"
-    echo -e "   9) 面板 URL 设置    10) SSL / HTTPS 设置"
-    echo -e "  11) Cloudflare 隧道查看/更换"
-    echo -e "  12) 检查/更新版本    13) 卸载"
+    echo -e "   5) 修改面板监听地址和端口"
+    echo -e "   6) 重置访问口令      7) 重置访问路径"
+    echo -e "   8) 面板 URL 设置     9) SSL / HTTPS 设置"
+    echo -e "  10) Cloudflare 隧道查看/更换"
+    echo -e "  11) 检查/更新版本    12) 卸载"
     echo -e "   0) 退出脚本"
     echo -e "${D}----------------------------------------${N}"
-    read -rp "  请选择 [0-13]: " choice
+    read -rp "  请选择 [0-12]: " choice
 
     case "$choice" in
       1) svc_start   && echo -e "\n  ${G}已启动${N}"; pause ;;
       2) svc_stop    && echo -e "\n  ${Y}已停止${N}"; pause ;;
       3) svc_restart && echo -e "\n  ${G}已重启${N}"; pause ;;
       4) echo; svc_logs 40; pause ;;
-      5) list_tunnels; pause ;;
-      6) change_listen_and_port; pause ;;
-      7) reset_password; pause ;;
-      8) reset_basepath; pause ;;
-      9) change_panel_url; pause ;;
-      10) change_ssl; pause ;;
-      11) caddy_menu; pause ;;
-      12) check_and_update; pause ;;
-      13) do_uninstall; pause ;;
+      5) change_listen_and_port; pause ;;
+      6) reset_password; pause ;;
+      7) reset_basepath; pause ;;
+      8) change_panel_url; pause ;;
+      9) change_ssl; pause ;;
+      10) caddy_menu; pause ;;
+      11) check_and_update; pause ;;
+      12) do_uninstall; pause ;;
       0) exit 0 ;;
       *) ;;
     esac
@@ -1859,7 +1818,6 @@ case "${1:-}" in
   status)    show_info ;;
   log)       svc_logs_follow ;;
   info)      show_info ;;
-  list)      list_tunnels ;;
   listen|port) change_listen_and_port ;;
   url)       change_panel_url ;;
   ssl)       change_ssl ;;
@@ -1869,7 +1827,7 @@ case "${1:-}" in
   uninstall) do_uninstall ;;
   "")        menu ;;
   *)
-    echo "用法: sout [start|stop|restart|status|log|info|list|listen|port|url|ssl|caddy|update|uninstall]"
+    echo "用法: sout [start|stop|restart|status|log|info|listen|port|url|ssl|caddy|update|uninstall]"
     echo "直接在终端输入 sout 即可进入交互控制菜单"
     ;;
 esac
