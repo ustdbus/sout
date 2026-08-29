@@ -72,7 +72,7 @@ cleanup_sout() {
 }
 
 # ==============================================================================
-# [第一步] 一开始首先询问 Cloudflare 隧道 4合1 反代配置
+# [第一步] 一开始首先询问 Cloudflare隧道连接和Caddy流量代理配置
 # ==============================================================================
 WANT_TUNNEL="n"
 TUNNEL_DOMAIN=""
@@ -91,10 +91,10 @@ ask_tunnel_setup() {
   echo "================================================================"
   local prompt_choice=""
   if [[ -t 0 ]]; then
-    read -rp "  是否配置 Cloudflare 隧道 4合1 统一反代？[y/N]: " prompt_choice
+    read -rp "  是否配置 Cloudflare隧道连接和Caddy流量代理？[y/N]: " prompt_choice
   else
     if [[ -c /dev/tty ]]; then
-      read -rp "  是否配置 Cloudflare 隧道 4合1 统一反代？[y/N]: " prompt_choice < /dev/tty || prompt_choice="n"
+      read -rp "  是否配置 Cloudflare隧道连接和Caddy流量代理？[y/N]: " prompt_choice < /dev/tty || prompt_choice="n"
     fi
   fi
 
@@ -460,7 +460,7 @@ if [[ "$WANT_TUNNEL" == "y" ]]; then
   if [[ -z "$TUNNEL_DOMAIN" && -z "$TUNNEL_TOKEN" ]]; then
     echo "  [+] 检测到未输入域名与 Token，正在自动开启 Cloudflare 官方免费临时隧道..."
   else
-    echo "  [+] 正在根据第一步输入的参数配置 Cloudflare 隧道 4合1 反代..."
+    echo "  [+] 正在根据第一步输入的参数配置 Cloudflare隧道连接和Caddy流量代理..."
   fi
   if [[ -x /usr/local/bin/sout ]]; then
     /usr/local/bin/sout setup_tunnel "$TUNNEL_DOMAIN" "$TUNNEL_TOKEN" "$TUNNEL_PORT"
@@ -488,7 +488,7 @@ if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$
   c_sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   echo
   echo "================================================================"
-  echo "  🎉 sout 插件安装部署完成！(Cloudflare 隧道 4合1 模式)"
+  echo "  🎉 sout 插件安装部署完成！(Cloudflare隧道连接和Caddy流量代理)"
   echo "================================================================"
   echo "  [sout 动态家宽出口插件]"
   echo "  管理面板:  https://${c_dom}/${c_sout_p}/"

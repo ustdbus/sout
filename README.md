@@ -74,7 +74,7 @@ sout
   程序版本:    v2.1.30
   服务状态:    运行中 (active)
   面板对接:    s-ui (Sing-Box) 已就绪
-  反代模式:    Cloudflare 隧道 4合1 模式 (已开启)
+  反代模式:    Cloudflare隧道连接和Caddy流量代理 (已开启)
   隧道服务:    运行中 (active) (本地回源: 127.0.0.1:8081)
   管理面板:    https://sout.example.com/sout8978ee63/
   访问口令:    5d07dae1d1f0b49309

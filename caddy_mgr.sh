@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ================================================================
-# sout 4合1 Cloudflare 隧道统一反向代理管理模块 (Caddy + Cloudflared)
+# sout Cloudflare隧道连接和Caddy流量代理管理模块 (Caddy + Cloudflared)
 # 支持模式：
 # 1. 自定义命名隧道 (带域名 + Token)
 # 2. Cloudflare 官方免费临时隧道 (无需域名/无需Token，直接回车即开即用，动态实时同步)
@@ -339,7 +339,7 @@ setup_caddy_proxy() {
   if [[ "$is_quick" == "true" ]]; then
     echo "  正在配置 Cloudflare 官方免费临时隧道 (免域名 / 免Token)..."
   else
-    echo "  正在配置 Cloudflare 隧道 4合1 统一反代 (${domain})..."
+    echo "  正在配置 Cloudflare隧道连接和Caddy流量代理 (${domain})..."
   fi
   echo "================================================================"
 
@@ -519,9 +519,9 @@ EOF
   echo
   echo "================================================================"
   if [[ "$is_quick" == "true" ]]; then
-    echo "  🎉 Cloudflare 官方免费临时隧道 4合1 统一反代已成功开启！"
+    echo "  🎉 Cloudflare 官方免费临时隧道连接和Caddy流量代理已成功开启！"
   else
-    echo "  🎉 Cloudflare 隧道 4合1 统一反代已成功开启！"
+    echo "  🎉 Cloudflare隧道连接和Caddy流量代理已成功开启！"
   fi
   echo "================================================================"
   echo "  访问域名:      https://${domain}"
@@ -543,7 +543,7 @@ EOF
 }
 
 remove_caddy_proxy() {
-  echo "  [-] 正在关闭 Cloudflare 隧道 4合1 统一反代..."
+  echo "  [-] 正在关闭 Cloudflare隧道连接和Caddy流量代理..."
   systemctl stop cloudflared 2>/dev/null || true
   systemctl disable cloudflared 2>/dev/null || true
   systemctl stop caddy 2>/dev/null || true

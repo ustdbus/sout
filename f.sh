@@ -426,9 +426,9 @@ show_info() {
       real_d=$(journalctl -u cloudflared -n 50 --no-pager 2>/dev/null | grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' | tail -1 | sed 's|https://||' | tr -d ' 
 ')
       [[ -n "$real_d" ]] && c_dom="$real_d"
-      echo -e "  反代模式:    ${G}Cloudflare 官方免费临时隧道 4合1 (已开启)${N}"
+      echo -e "  反代模式:    ${G}Cloudflare 官方免费临时隧道连接和Caddy流量代理 (已开启)${N}"
     else
-      echo -e "  反代模式:    ${G}Cloudflare 隧道 4合1 模式 (已开启)${N}"
+      echo -e "  反代模式:    ${G}Cloudflare隧道连接和Caddy流量代理 (已开启)${N}"
     fi
 
     echo -e "  隧道服务:    ${cf_st} (本地回源: 127.0.0.1:${c_tun_p})"
@@ -1083,7 +1083,7 @@ sys.exit(0 if latest > cur else 1)
 
 #!/usr/bin/env bash
 # ==============================================================================
-# sout - Cloudflare 隧道 4合1 统一反代独立管理脚本
+# sout - Cloudflare隧道连接和Caddy流量代理独立管理脚本
 # ==============================================================================
 
 set -e
@@ -1294,7 +1294,7 @@ setup_caddy_proxy() {
   if [[ "$is_quick" == "true" ]]; then
     echo -e "${G}  正在配置 Cloudflare 官方免费临时隧道 (免域名 / 免Token)...${N}"
   else
-    echo -e "${B}  正在配置 Cloudflare 隧道 4合1 统一反代 (${domain})...${N}"
+    echo -e "${B}  正在配置 Cloudflare隧道连接和Caddy流量代理 (${domain})...${N}"
   fi
   echo -e "${B}================================================================${N}"
 
@@ -1620,9 +1620,9 @@ METAEOF
   echo
   echo -e "${G}================================================================${N}"
   if [[ "$is_quick" == "true" ]]; then
-    echo -e "${G}  🎉 Cloudflare 官方免费临时隧道 4合1 统一反代已成功开启！${N}"
+    echo -e "${G}  🎉 Cloudflare 官方免费临时隧道连接和Caddy流量代理已成功开启！${N}"
   else
-    echo -e "${G}  🎉 Cloudflare 隧道 4合1 统一反代已成功开启！${N}"
+    echo -e "${G}  🎉 Cloudflare隧道连接和Caddy流量代理已成功开启！${N}"
   fi
   echo -e "${G}================================================================${N}"
   echo -e "  访问域名:      ${B}https://${domain}${N}"
@@ -1699,7 +1699,7 @@ con.close()
 caddy_interactive_setup() {
   echo
   echo -e "${B}================================================================${N}"
-  echo -e "${B}  🚀 Cloudflare 隧道 4合1 一键全自动反代配置 (免开端口/杜绝525)${N}"
+  echo -e "${B}  🚀 Cloudflare隧道连接和Caddy流量代理一键配置 (免开端口/杜绝525)${N}"
   echo -e "${B}================================================================${N}"
   echo -e "  特点：无需公网端口、无视NAT网络、免申请SSL证书、杜绝525握手错误"
   echo -e "${D}----------------------------------------------------------------${N}"
@@ -1735,7 +1735,7 @@ caddy_menu() {
   while true; do
     echo
     echo -e "${B}========================================${N}"
-    echo -e "${B}  Cloudflare 隧道 4合1 反代管理${N}"
+    echo -e "${B}  Cloudflare隧道连接和Caddy流量代理管理${N}"
     echo -e "${B}========================================${N}"
     local en dom st cf_st
     en=$(is_caddy_enabled)
@@ -1789,7 +1789,7 @@ caddy_menu() {
       esac
     else
       echo -e "  反代状态:      ${D}未开启 (当前为独立多端口模式)${N}"
-      echo -e "  💡 提示:       ${Y}强烈推荐开启 Cloudflare 隧道 4合1 反代 (免开端口/杜绝525)${N}"
+      echo -e "  💡 提示:       ${Y}强烈推荐开启 Cloudflare隧道连接和Caddy流量代理 (免开端口/杜绝525)${N}"
       echo -e "${D}----------------------------------------${N}"
       echo "  1) 开启 Cloudflare 官方免费临时隧道 (免域名/免Token)"
       echo "  2) 使用固定域名 + 隧道 Token 配置"
