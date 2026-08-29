@@ -829,21 +829,28 @@ uninstall_sout_only() {
   systemctl stop fanout 2>/dev/null || true
   systemctl disable fanout 2>/dev/null || true
 
-  # 彻底清理 Caddy 与 cloudflared 隧道
+  # 1. 彻底清理 s-ui 中由 sout 创建的出入站、分流路由、clients 与注入的 API Token
+  cleanup_sui
+
+  # 2. 彻底清理 Caddy 与 cloudflared 隧道及相关数据
   systemctl stop caddy 2>/dev/null || true
   systemctl disable caddy 2>/dev/null || true
   systemctl stop cloudflared 2>/dev/null || true
   systemctl disable cloudflared 2>/dev/null || true
   rm -f /etc/systemd/system/caddy.service /etc/systemd/system/cloudflared.service 2>/dev/null || true
   rm -f /etc/init.d/caddy /etc/init.d/cloudflared 2>/dev/null || true
-  rm -rf /etc/caddy /var/lib/caddy /var/log/caddy /usr/local/bin/caddy /usr/local/bin/cloudflared /usr/local/bin/sout-quick-tunnel /var/log/cloudflared* 2>/dev/null || true
+  rm -rf /etc/caddy /var/lib/caddy /var/log/caddy /usr/local/bin/caddy /usr/local/bin/cloudflared /usr/local/bin/sout-quick-tunnel /var/log/cloudflared* /home/acme 2>/dev/null || true
+  rm -rf /root/.local/share/caddy /root/.config/caddy /root/.cache/caddy /root/.cloudflared 2>/dev/null || true
 
-  # 恢复 s-ui 为公网直连监听
+  # 3. 恢复 s-ui 为公网直连监听
   local sui_db="/usr/local/s-ui/db/s-ui.db"
   if [[ -f "$sui_db" ]] && command -v sqlite3 >/dev/null 2>&1; then
     sqlite3 "$sui_db" "UPDATE settings SET value='' WHERE key='webListen';" 2>/dev/null || true
+    sqlite3 "$sui_db" "UPDATE settings SET value='' WHERE key='subListen';" 2>/dev/null || true
     sqlite3 "$sui_db" "UPDATE settings SET value='8443' WHERE key='webPort';" 2>/dev/null || true
     sqlite3 "$sui_db" "UPDATE settings SET value='/app/' WHERE key='webPath';" 2>/dev/null || true
+    sqlite3 "$sui_db" "UPDATE settings SET value='' WHERE key='webURI';" 2>/dev/null || true
+    sqlite3 "$sui_db" "UPDATE settings SET value='' WHERE key='subURI';" 2>/dev/null || true
     systemctl restart s-ui 2>/dev/null || true
   fi
 
@@ -858,8 +865,10 @@ uninstall_sout_only() {
   rm -f "$BIN" /usr/local/bin/sout /usr/local/bin/fanout /usr/local/bin/f /usr/local/bin/sout-cli
   rm -rf "$WORK_DIR" /var/lib/sout /var/lib/fanout 2>/dev/null || true
 
+  systemctl daemon-reload 2>/dev/null || true
+  systemctl reset-failed 2>/dev/null || true
   svc_reload
-  echo -e "  ${G}[✓] sout 插件及反代组件已彻底清理完成，s-ui 面板已恢复公网直连模式！${N}"
+  echo -e "  ${G}[✓] sout 插件、Caddy 及 Cloudflare 隧道已彻底清理干净，s-ui 面板已恢复独立公网模式！${N}"
   exit 0
 }
 
