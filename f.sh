@@ -376,8 +376,11 @@ show_info() {
     full_url="${purl}${bp}"
   fi
 
-  local cur_ver="dev"
-  if [[ -f "${WORK_DIR}/version" ]]; then
+  local cur_ver=""
+  if command -v sout-server >/dev/null 2>&1; then
+    cur_ver=$(sout-server -version 2>/dev/null | awk '{print $2}' | tr -d ' \r\n')
+  fi
+  if [[ -z "$cur_ver" && -f "${WORK_DIR}/version" ]]; then
     cur_ver=$(cat "${WORK_DIR}/version" 2>/dev/null | tr -d ' \r\n')
   fi
   [[ -z "$cur_ver" ]] && cur_ver="dev"
@@ -1036,6 +1039,8 @@ sys.exit(0 if latest > cur else 1)
     chmod +x /usr/local/bin/sout
     rm -f /usr/local/bin/f /usr/local/bin/sout-cli 2>/dev/null || true
   fi
+
+  echo "$tag_name" > "${WORK_DIR}/version" 2>/dev/null || true
 
   svc_restart
   echo -e "  ${G}恭喜！sout 已成功更新至 ${tag_name}，服务已自动重启生效。${N}"
