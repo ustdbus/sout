@@ -982,21 +982,13 @@ if not orig_spath.endswith('/'): orig_spath += '/'
   systemctl reset-failed 2>/dev/null || true
   svc_reload
 
-  local sui_user
-  sui_user=$(get_sui_user)
-  [[ -z "$sui_user" ]] && sui_user="admin"
-
   echo
   echo -e "${G}================================================================${N}"
   echo -e "${G}  🎉 sout 插件、Caddy 及 Cloudflare 隧道已彻底清理干净！${N}"
   echo -e "${G}  🎉 s-ui 面板已完全恢复公网 0.0.0.0 直连模式 (已还原证书与配置)${N}"
   echo -e "${G}================================================================${N}"
   echo -e "  [1] s-ui 管理面板:  ${B}${final_proto}://${show_web_host}${final_wpath}${N}"
-  echo -e "      管理账号:      ${Y}${sui_user}${N}"
-  echo -e "      管理密码:      ${D}[由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]${N}"
-  echo
-  echo -e "  [2] s-ui 订阅地址:  ${B}${final_sub_proto}://${show_sub_host}${final_spath}${N}"
-  echo -e "  [3] s-ui 唤起命令:  ${G}s-ui${N}"
+  echo -e "  [2] s-ui 唤起命令:  ${G}s-ui${N}"
   echo -e "${G}================================================================${N}"
   echo
   exit 0
