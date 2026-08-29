@@ -535,7 +535,7 @@ EOF
   echo "  [2] s-ui 节点与分流管理面板"
   echo "      访问地址:  https://${domain}/${sui_p}/"
   echo "      管理账号:  ${sui_u}"
-  echo "      管理密码:  [由您在 s-ui 中设置，已安全加密]"
+  echo "      管理密码:  [由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]"
   echo
     echo "  [3] sout 订阅地址:  https://${domain}/${sout_p}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")"
   echo "================================================================"

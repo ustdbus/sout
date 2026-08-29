@@ -391,7 +391,6 @@ show_info() {
   else
     echo -e "  服务状态:    ${R}已停止 (${st})${N}"
   fi
-  echo -e "  开机自启:    $(svc_is_enabled && echo -e "${G}已开启${N}" || echo -e "${D}已关闭${N}")"
 
   if [[ -f /usr/local/s-ui/db/s-ui.db ]] || [[ -f /usr/local/s-ui/s-ui ]] || command -v sui >/dev/null 2>&1; then
     echo -e "  面板对接:    ${G}s-ui (Sing-Box) 已就绪${N}"
@@ -437,7 +436,7 @@ show_info() {
     echo -e "  访问口令:    ${Y}${pw}${N}"
     echo -e "  s-ui 面板:   ${B}https://${c_dom}/${c_sui_p}/${N}"
     echo -e "  s-ui 用户名: ${Y}${sui_u}${N}"
-    echo -e "  s-ui 密  码: ${D}[由您在 s-ui 中设置，已安全加密]${N}"
+    echo -e "  s-ui 密  码: ${D}[由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]${N}"
       echo -e "  订阅链接:    ${B}https://${c_dom}/${c_sout_p}/sub=${pw}${N}"
   else
     if [[ "$ssl_en" == "true" ]]; then
@@ -483,10 +482,9 @@ show_info() {
       [[ "$sui_path" != */ ]] && sui_path="${sui_path}/"
       echo -e "  s-ui 面板:   ${B}http://${pip}:${sui_port}${sui_path}${N}"
       echo -e "  s-ui 用户名: ${Y}${sui_u}${N}"
-      echo -e "  s-ui 密  码: ${D}[由您在 s-ui 中设置，已安全加密]${N}"
+      echo -e "  s-ui 密  码: ${D}[由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]${N}"
     fi
   fi
-  echo -e "  💡 提示:     ${D}如遗忘密码，可在终端运行 s-ui 随时重置${N}"
   echo -e "  s-ui 唤起命令: ${C}s-ui${N}"
   echo -e "  sout 唤起命令: ${C}sout${N}"
   echo
@@ -530,60 +528,71 @@ except Exception as e:
   echo
 }
 
-change_port() {
-  local cur new
-  cur=$(web_port)
+change_listen_and_port() {
+  local cur_addr cur_port new_addr new_port
+  cur_addr=$(web_listen_addr)
+  cur_port=$(web_port)
+  [[ -z "$cur_addr" ]] && cur_addr="0.0.0.0"
+  [[ -z "$cur_port" ]] && cur_port="8899"
+
   echo
-  read -rp "  请输入新管理端口 (当前 ${cur}): " new
-  [[ -z "$new" ]] && { echo "  未修改"; return; }
-  if ! [[ "$new" =~ ^[0-9]+$ ]] || (( new < 1 || new > 65535 )); then
-    echo -e "  ${R}端口不合法${N}"; return
-  fi
-  if [[ -f "$WORK_DIR/settings.json" ]]; then
-    sed -i "s/\"port\"[[:space:]]*:[[:space:]]*[0-9]*/\"port\": ${new}/" "$WORK_DIR/settings.json"
+  echo -e "  当前监听地址: ${B}${cur_addr}${N}"
+  echo -e "  当前管理端口: ${B}${cur_port}${N}"
+  echo
+  echo "  [1/2] 设置面板监听地址："
+  echo "  1) 127.0.0.1 (仅内网 / 便于 Nginx、1Panel、Caddy 等反向代理)"
+  echo "  2) 0.0.0.0   (公网 IP 直接访问)"
+  read -rp "  请选择 [1/2] (直接回车保持当前: ${cur_addr}): " opt_addr
+
+  case "$opt_addr" in
+    1) new_addr="127.0.0.1" ;;
+    2) new_addr="0.0.0.0" ;;
+    "") new_addr="$cur_addr" ;;
+    *) echo -e "  ${Y}输入无效，保持当前监听地址: ${cur_addr}${N}"; new_addr="$cur_addr" ;;
+  esac
+
+  echo
+  echo "  [2/2] 设置面板管理端口："
+  read -rp "  请输入新管理端口 (直接回车保持当前: ${cur_port}): " input_port
+  if [[ -z "$input_port" ]]; then
+    new_port="$cur_port"
+  elif ! [[ "$input_port" =~ ^[0-9]+$ ]] || (( input_port < 1 || input_port > 65535 )); then
+    echo -e "  ${R}端口不合法 (必须为 1-65535 之间的整数)，取消修改${N}"
+    return
   else
-    printf '{\n  \"port\": %s,\n  \"listen_addr\": \"\"\n}\n' "$new" > "$WORK_DIR/settings.json"
-    chmod 600 "$WORK_DIR/settings.json"
+    new_port="$input_port"
   fi
+
+  if [[ "$new_addr" == "$cur_addr" && "$new_port" == "$cur_port" ]]; then
+    echo -e "  ${Y}监听地址与端口未做任何修改${N}"
+    return
+  fi
+
+  python3 -c "
+import json, os
+path = '$WORK_DIR/settings.json'
+data = {}
+if os.path.exists(path):
+    try:
+        with open(path, 'r') as f:
+            data = json.load(f)
+    except: pass
+data['listen_addr'] = '$new_addr'
+data['port'] = int('$new_port')
+with open(path, 'w') as f:
+    json.dump(data, f, indent=2)
+os.chmod(path, 0o600)
+"
   svc_restart
-  echo -e "  ${G}管理端口已修改为 ${new}${N}"
+  echo -e "  ${G}面板配置已更新并生效: 监听地址 -> ${new_addr}，管理端口 -> ${new_port}${N}"
+}
+
+change_port() {
+  change_listen_and_port
 }
 
 change_listen_addr() {
-  local cur
-  cur=$(web_listen_addr)
-  echo
-  echo -e "  当前监听地址: ${B}${cur}${N}"
-  echo "  1) 127.0.0.1 (仅本地监听，便于 Nginx / 1Panel / Caddy 等反向代理)"
-  echo "  2) 0.0.0.0   (公网 IP 直接访问)"
-  echo
-  read -rp "  请选择 [1/2]: " opt
-  local new_addr=""
-  case "$opt" in
-    1) new_addr="127.0.0.1" ;;
-    2) new_addr="0.0.0.0" ;;
-    *) echo "  取消操作"; return ;;
-  esac
-
-  local port
-  port=$(web_port)
-  if [[ -f "$WORK_DIR/settings.json" ]]; then
-    if grep -q '"listen_addr"' "$WORK_DIR/settings.json"; then
-      sed -i "s/\"listen_addr\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"listen_addr\": \"${new_addr}\"/" "$WORK_DIR/settings.json"
-    else
-      sed -i "s/\"port\"[[:space:]]*:[[:space:]]*[0-9]*/\"port\": ${port},\n  \"listen_addr\": \"${new_addr}\"/" "$WORK_DIR/settings.json"
-    fi
-  else
-    printf '{\n  \"port\": %s,\n  \"listen_addr\": \"%s\"\n}\n' "$port" "$new_addr" > "$WORK_DIR/settings.json"
-    chmod 600 "$WORK_DIR/settings.json"
-  fi
-
-  svc_restart
-  if [[ "$new_addr" == "127.0.0.1" ]]; then
-    echo -e "  ${G}已成功切换为 127.0.0.1 监听（仅允许本地反向代理访问）${N}"
-  else
-    echo -e "  ${G}已成功切换为 0.0.0.0 监听（公网 IP 可直接访问）${N}"
-  fi
+  change_listen_and_port
 }
 
 change_panel_url() {
@@ -1627,7 +1636,7 @@ METAEOF
   echo -e "  [2] s-ui 节点与分流管理面板"
   echo -e "      访问地址:  ${B}https://${domain}/${sui_path}/${N}"
   echo -e "      管理账号:  ${Y}${sui_admin_user}${N}"
-  echo -e "      管理密码:  ${D}[由您在 s-ui 中设置，已安全加密]${N}"
+  echo -e "      管理密码:  ${D}[由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]${N}"
   echo
     echo -e "  [3] sout 订阅地址:  ${B}https://${domain}/${sout_path}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")${N}"
   echo -e "${G}================================================================${N}"
@@ -1808,40 +1817,29 @@ menu() {
     echo -e "   1) 启动服务          2) 停止服务"
     echo -e "   3) 重启服务          4) 查看运行日志"
     echo
-    echo -e "   5) 开关开机自启      6) 查看出口隧道"
-    echo -e "   7) 修改面板端口      8) 修改监听地址"
-    echo -e "   9) 重置访问口令     10) 重置访问路径"
-    echo -e "  11) 面板 URL 设置    12) SSL / HTTPS 设置"
-    echo -e "  13) 检查/更新版本    14) 卸载"
-    echo -e "  15) Cloudflare 隧道查看/更换"
+    echo -e "   5) 查看出口隧道      6) 修改面板监听地址和端口"
+    echo -e "   7) 重置访问口令      8) 重置访问路径"
+    echo -e "   9) 面板 URL 设置    10) SSL / HTTPS 设置"
+    echo -e "  11) Cloudflare 隧道查看/更换"
+    echo -e "  12) 检查/更新版本    13) 卸载"
     echo -e "   0) 退出脚本"
     echo -e "${D}----------------------------------------${N}"
-    read -rp "  请选择 [0-15]: " choice
+    read -rp "  请选择 [0-13]: " choice
 
     case "$choice" in
       1) svc_start   && echo -e "\n  ${G}已启动${N}"; pause ;;
       2) svc_stop    && echo -e "\n  ${Y}已停止${N}"; pause ;;
       3) svc_restart && echo -e "\n  ${G}已重启${N}"; pause ;;
       4) echo; svc_logs 40; pause ;;
-      5)
-        if svc_is_enabled; then
-          svc_disable
-          echo -e "\n  ${Y}已关闭开机自启${N}"
-        else
-          svc_enable
-          echo -e "\n  ${G}已开启开机自启${N}"
-        fi
-        pause ;;
-      6) list_tunnels; pause ;;
-      7) change_port; pause ;;
-      8) change_listen_addr; pause ;;
-      9) reset_password; pause ;;
-      10) reset_basepath; pause ;;
-      11) change_panel_url; pause ;;
-      12) change_ssl; pause ;;
-      13) check_and_update; pause ;;
-      14) do_uninstall; pause ;;
-      15) caddy_menu; pause ;;
+      5) list_tunnels; pause ;;
+      6) change_listen_and_port; pause ;;
+      7) reset_password; pause ;;
+      8) reset_basepath; pause ;;
+      9) change_panel_url; pause ;;
+      10) change_ssl; pause ;;
+      11) caddy_menu; pause ;;
+      12) check_and_update; pause ;;
+      13) do_uninstall; pause ;;
       0) exit 0 ;;
       *) ;;
     esac
@@ -1862,16 +1860,16 @@ case "${1:-}" in
   log)       svc_logs_follow ;;
   info)      show_info ;;
   list)      list_tunnels ;;
-  listen)    change_listen_addr ;;
+  listen|port) change_listen_and_port ;;
   url)       change_panel_url ;;
   ssl)       change_ssl ;;
-  caddy)     caddy_menu ;;
+  caddy|cf|tunnel) caddy_menu ;;
   update)    check_and_update ;;
   upgrade)   check_and_update ;;
   uninstall) do_uninstall ;;
   "")        menu ;;
   *)
-    echo "用法: sout [start|stop|restart|status|log|info|list|listen|url|ssl|caddy|update|uninstall]"
+    echo "用法: sout [start|stop|restart|status|log|info|list|listen|port|url|ssl|caddy|update|uninstall]"
     echo "直接在终端输入 sout 即可进入交互控制菜单"
     ;;
 esac
