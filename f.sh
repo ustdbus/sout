@@ -842,15 +842,20 @@ uninstall_sout_only() {
   rm -rf /etc/caddy /var/lib/caddy /var/log/caddy /usr/local/bin/caddy /usr/local/bin/cloudflared /usr/local/bin/sout-quick-tunnel /var/log/cloudflared* /home/acme 2>/dev/null || true
   rm -rf /root/.local/share/caddy /root/.config/caddy /root/.cache/caddy /root/.cloudflared 2>/dev/null || true
 
-  # 3. 恢复 s-ui 为公网直连监听
+  # 3. 恢复 s-ui 为公网直连监听 (监听 0.0.0.0 并更新公网直连地址)
+  local public_ip
+  public_ip=$(curl -s4m 2 https://api.ipify.org 2>/dev/null || curl -s4m 2 https://icanhazip.com 2>/dev/null || curl -s4m 2 https://ifconfig.me 2>/dev/null || true)
+  public_ip=$(echo "$public_ip" | tr -d ' \r\n')
+  [[ -z "$public_ip" ]] && public_ip="服务器公网IP"
+
   local sui_db="/usr/local/s-ui/db/s-ui.db"
   if [[ -f "$sui_db" ]] && command -v sqlite3 >/dev/null 2>&1; then
     sqlite3 "$sui_db" "UPDATE settings SET value='' WHERE key='webListen';" 2>/dev/null || true
     sqlite3 "$sui_db" "UPDATE settings SET value='' WHERE key='subListen';" 2>/dev/null || true
     sqlite3 "$sui_db" "UPDATE settings SET value='8443' WHERE key='webPort';" 2>/dev/null || true
     sqlite3 "$sui_db" "UPDATE settings SET value='/app/' WHERE key='webPath';" 2>/dev/null || true
-    sqlite3 "$sui_db" "UPDATE settings SET value='' WHERE key='webURI';" 2>/dev/null || true
-    sqlite3 "$sui_db" "UPDATE settings SET value='' WHERE key='subURI';" 2>/dev/null || true
+    sqlite3 "$sui_db" "UPDATE settings SET value='http://${public_ip}:8443/app/' WHERE key='webURI';" 2>/dev/null || true
+    sqlite3 "$sui_db" "UPDATE settings SET value='http://${public_ip}:8444/sub/' WHERE key='subURI';" 2>/dev/null || true
     systemctl restart s-ui 2>/dev/null || true
   fi
 
@@ -868,7 +873,10 @@ uninstall_sout_only() {
   systemctl daemon-reload 2>/dev/null || true
   systemctl reset-failed 2>/dev/null || true
   svc_reload
-  echo -e "  ${G}[✓] sout 插件、Caddy 及 Cloudflare 隧道已彻底清理干净，s-ui 面板已恢复独立公网模式！${N}"
+  echo -e "  ${G}[✓] sout 插件、Caddy 及 Cloudflare 隧道已彻底清理干净！${N}"
+  echo -e "  ${G}[✓] s-ui 面板已恢复公网 0.0.0.0 HTTP 直连模式：${N}"
+  echo -e "      • s-ui 管理面板: ${B}http://${public_ip}:8443/app/${N}"
+  echo -e "      • s-ui 订阅地址: ${B}http://${public_ip}:8444/sub/${N}"
   exit 0
 }
 
@@ -1652,17 +1660,24 @@ with open(path, 'w') as f:
 " 2>/dev/null || true
 
   # 恢复 s-ui 监听为 8443 / 8444
+  local public_ip
+  public_ip=$(curl -s4m 2 https://api.ipify.org 2>/dev/null || curl -s4m 2 https://icanhazip.com 2>/dev/null || curl -s4m 2 https://ifconfig.me 2>/dev/null || true)
+  public_ip=$(echo "$public_ip" | tr -d ' \r\n')
+  [[ -z "$public_ip" ]] && public_ip="服务器公网IP"
+
   local sui_db="/usr/local/s-ui/db/s-ui.db"
   if [[ -f "$sui_db" ]]; then
     python3 -c "
 import sqlite3
 con = sqlite3.connect('$sui_db')
-con.execute('UPDATE settings SET value = "8443" WHERE key = "webPort"')
-con.execute('UPDATE settings SET value = "" WHERE key = "webListen"')
-con.execute('UPDATE settings SET value = "/app/" WHERE key = "webPath"')
-con.execute('UPDATE settings SET value = "8444" WHERE key = "subPort"')
-con.execute('UPDATE settings SET value = "" WHERE key = "subListen"')
-con.execute('UPDATE settings SET value = "/sub/" WHERE key = "subPath"')
+con.execute('UPDATE settings SET value = \"8443\" WHERE key = \"webPort\"')
+con.execute('UPDATE settings SET value = \"\" WHERE key = \"webListen\"')
+con.execute('UPDATE settings SET value = \"/app/\" WHERE key = \"webPath\"')
+con.execute('UPDATE settings SET value = \"http://${public_ip}:8443/app/\" WHERE key = \"webURI\"')
+con.execute('UPDATE settings SET value = \"8444\" WHERE key = \"subPort\"')
+con.execute('UPDATE settings SET value = \"\" WHERE key = \"subListen\"')
+con.execute('UPDATE settings SET value = \"/sub/\" WHERE key = \"subPath\"')
+con.execute('UPDATE settings SET value = \"http://${public_ip}:8444/sub/\" WHERE key = \"subURI\"')
 con.commit()
 con.close()
 " 2>/dev/null || true
@@ -1670,7 +1685,10 @@ con.close()
   fi
 
   systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || true
-  echo -e "  ${G}[✓] 已成功关闭隧道反代，sout 与 s-ui 已恢复独立端口访问模式。${N}"
+  echo -e "  ${G}[✓] 已成功关闭隧道反代，所有服务已恢复公网 0.0.0.0 直连模式：${N}"
+  echo -e "      • sout 管理面板: ${B}http://${public_ip}:8899/$(cat "${WORK_DIR}/basepath" 2>/dev/null || echo "")/${N}"
+  echo -e "      • s-ui 管理面板: ${B}http://${public_ip}:8443/app/${N}"
+  echo -e "      • s-ui 订阅地址: ${B}http://${public_ip}:8444/sub/${N}"
 }
 
 caddy_interactive_setup() {
