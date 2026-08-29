@@ -328,7 +328,7 @@ select:focus,input:focus{outline:none;border-color:var(--accent)}
       <label class="f"><span>监听地址</span>
         <select id="setListen">
           <option value="0.0.0.0">0.0.0.0 (公网直接访问)</option>
-          <option value="127.0.0.1">127.0.0.1 (仅本地，用于 Nginx / 1Panel 等反向代理)</option>
+          <option value="127.0.0.1">127.0.0.1 (仅内网，用于反代)</option>
         </select>
       </label>
       <label class="f"><span>面板 URL (如 https://example.com 或 https://example.com/，不带路径)</span>

@@ -447,7 +447,7 @@ show_info() {
     fi
     
     if [[ "$la" == "127.0.0.1" ]]; then
-      echo -e "  监听地址:    ${Y}127.0.0.1 (本地反向代理模式)${N}"
+      echo -e "  监听地址:    ${Y}127.0.0.1 (仅内网，用于反代)${N}"
       if [[ -n "$full_url" ]]; then
         echo -e "  本地地址:    ${B}${full_url}${N}"
       else
@@ -503,7 +503,7 @@ change_listen_and_port() {
   echo -e "  当前管理端口: ${B}${cur_port}${N}"
   echo
   echo "  [1/2] 设置面板监听地址："
-  echo "  1) 127.0.0.1 (仅内网 / 便于 Nginx、1Panel、Caddy 等反向代理)"
+  echo "  1) 127.0.0.1 (仅内网，用于反代)"
   echo "  2) 0.0.0.0   (公网 IP 直接访问)"
   read -rp "  请选择 [1/2] (直接回车保持当前: ${cur_addr}): " opt_addr
 
