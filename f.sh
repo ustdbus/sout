@@ -910,41 +910,60 @@ if not orig_spath.endswith('/'): orig_spath += '/'
     orig_wkey = b.get('webKeyFile', '')
     orig_scert = b.get('subCertFile', '')
     orig_skey = b.get('subKeyFile', '')
+    orig_wdom = b.get('webDomain', '')
+    orig_sdom = b.get('subDomain', '')
+    orig_supd = b.get('subUpdates', '12')
 
-    cur.execute('UPDATE settings SET value=? WHERE key=\"webCertFile\"', (orig_wcert,))
-    cur.execute('UPDATE settings SET value=? WHERE key=\"webKeyFile\"', (orig_wkey,))
-    cur.execute('UPDATE settings SET value=? WHERE key=\"subCertFile\"', (orig_scert,))
-    cur.execute('UPDATE settings SET value=? WHERE key=\"subKeyFile\"', (orig_skey,))
+    cur.execute('UPDATE settings SET value=? WHERE key="webCertFile"', (orig_wcert,))
+    cur.execute('UPDATE settings SET value=? WHERE key="webKeyFile"', (orig_wkey,))
+    cur.execute('UPDATE settings SET value=? WHERE key="subCertFile"', (orig_scert,))
+    cur.execute('UPDATE settings SET value=? WHERE key="subKeyFile"', (orig_skey,))
+    cur.execute('UPDATE settings SET value=? WHERE key="webDomain"', (orig_wdom,))
+    cur.execute('UPDATE settings SET value=? WHERE key="subDomain"', (orig_sdom,))
+    cur.execute('UPDATE settings SET value=? WHERE key="subUpdates"', (orig_supd,))
+
+    # 恢复其他高级订阅项
+    for ext_k in ['subEncode', 'subShowInfo', 'subClashExt', 'subJsonExt', 'subClashSprtAll', 'subClashNoDefGrp']:
+        if ext_k in b:
+            cur.execute('UPDATE settings SET value=? WHERE key=?', (str(b[ext_k]), ext_k))
 
     proto = 'https' if (orig_wcert and orig_wkey) else 'http'
     sub_proto = 'https' if (orig_scert and orig_skey) else 'http'
 
-    # 4. 恢复监听地址为 0.0.0.0 (空字符串) 并更新公网直连 URI
-    cur.execute('UPDATE settings SET value=? WHERE key=\"webPort\"', (str(final_wp),))
-    cur.execute('UPDATE settings SET value=\"\" WHERE key=\"webListen\"')
-    cur.execute('UPDATE settings SET value=? WHERE key=\"webPath\"', (orig_wpath,))
-    cur.execute('UPDATE settings SET value=? WHERE key=\"webURI\"', (f'{proto}://{pub_ip}:{final_wp}{orig_wpath}',))
+    host_web = orig_wdom if orig_wdom else f'{pub_ip}:{final_wp}'
+    host_sub = orig_sdom if orig_sdom else f'{pub_ip}:{final_sp}'
 
-    cur.execute('UPDATE settings SET value=? WHERE key=\"subPort\"', (str(final_sp),))
-    cur.execute('UPDATE settings SET value=\"\" WHERE key=\"subListen\"')
-    cur.execute('UPDATE settings SET value=? WHERE key=\"subPath\"', (orig_spath,))
-    cur.execute('UPDATE settings SET value=? WHERE key=\"subURI\"', (f'{sub_proto}://{pub_ip}:{final_sp}{orig_spath}',))
+    # 4. 恢复监听地址为 0.0.0.0 (空字符串) 并更新公网直连 URI
+    cur.execute('UPDATE settings SET value=? WHERE key="webPort"', (str(final_wp),))
+    cur.execute('UPDATE settings SET value="" WHERE key="webListen"')
+    cur.execute('UPDATE settings SET value=? WHERE key="webPath"', (orig_wpath,))
+    cur.execute('UPDATE settings SET value=? WHERE key="webURI"', (f'{proto}://{host_web}{orig_wpath}',))
+
+    cur.execute('UPDATE settings SET value=? WHERE key="subPort"', (str(final_sp),))
+    cur.execute('UPDATE settings SET value="" WHERE key="subListen"')
+    cur.execute('UPDATE settings SET value=? WHERE key="subPath"', (orig_spath,))
+    cur.execute('UPDATE settings SET value=? WHERE key="subURI"', (f'{sub_proto}://{host_sub}{orig_spath}',))
 
     con.commit()
     con.close()
 
-    print(f'{final_wp}|{orig_wpath}|{final_sp}|{orig_spath}|{proto}|{sub_proto}')
-" 2>/dev/null || echo "8443|/app/|8444|/sub/|http|http")
+    print(f'{final_wp}|{orig_wpath}|{final_sp}|{orig_spath}|{proto}|{sub_proto}|{orig_wdom}|{orig_sdom}')
+" 2>/dev/null || echo "8443|/app/|8444|/sub/|http|http||")
 
     final_wp=$(echo "$restore_info" | cut -d'|' -f1)
     final_wpath=$(echo "$restore_info" | cut -d'|' -f2)
     final_sp=$(echo "$restore_info" | cut -d'|' -f3)
     final_spath=$(echo "$restore_info" | cut -d'|' -f4)
-    local final_proto final_sub_proto
+    local final_proto final_sub_proto final_wdom final_sdom
     final_proto=$(echo "$restore_info" | cut -d'|' -f5)
     final_sub_proto=$(echo "$restore_info" | cut -d'|' -f6)
+    final_wdom=$(echo "$restore_info" | cut -d'|' -f7)
+    final_sdom=$(echo "$restore_info" | cut -d'|' -f8)
     [[ -z "$final_proto" ]] && final_proto="http"
     [[ -z "$final_sub_proto" ]] && final_sub_proto="http"
+    local show_web_host show_sub_host
+    show_web_host="$([[ -n "$final_wdom" ]] && echo "$final_wdom" || echo "${public_ip}:${final_wp}")"
+    show_sub_host="$([[ -n "$final_sdom" ]] && echo "$final_sdom" || echo "${public_ip}:${final_sp}")"
     systemctl restart s-ui 2>/dev/null || true
   fi
 
@@ -972,11 +991,11 @@ if not orig_spath.endswith('/'): orig_spath += '/'
   echo -e "${G}  🎉 sout 插件、Caddy 及 Cloudflare 隧道已彻底清理干净！${N}"
   echo -e "${G}  🎉 s-ui 面板已完全恢复公网 0.0.0.0 直连模式 (已还原证书与配置)${N}"
   echo -e "${G}================================================================${N}"
-  echo -e "  [1] s-ui 管理面板:  ${B}${final_proto}://${public_ip}:${final_wp}${final_wpath}${N}"
+  echo -e "  [1] s-ui 管理面板:  ${B}${final_proto}://${show_web_host}${final_wpath}${N}"
   echo -e "      管理账号:      ${Y}${sui_user}${N}"
   echo -e "      管理密码:      ${D}[由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]${N}"
   echo
-  echo -e "  [2] s-ui 订阅地址:  ${B}${final_sub_proto}://${public_ip}:${final_sp}${final_spath}${N}"
+  echo -e "  [2] s-ui 订阅地址:  ${B}${final_sub_proto}://${show_sub_host}${final_spath}${N}"
   echo -e "  [3] s-ui 唤起命令:  ${G}s-ui${N}"
   echo -e "${G}================================================================${N}"
   echo
@@ -1474,7 +1493,11 @@ import sqlite3, json
 try:
     con = sqlite3.connect('$sui_db')
     cur = con.cursor()
-    keys = ['webPort', 'webListen', 'webPath', 'webURI', 'subPort', 'subListen', 'subPath', 'subURI', 'webCertFile', 'webKeyFile', 'subCertFile', 'subKeyFile']
+    keys = [
+        'webPort', 'webListen', 'webPath', 'webDomain', 'webCertFile', 'webKeyFile', 'webURI',
+        'subPort', 'subListen', 'subPath', 'subDomain', 'subCertFile', 'subKeyFile', 'subURI', 'subUpdates',
+        'subEncode', 'subShowInfo', 'subClashExt', 'subJsonExt', 'subClashSprtAll', 'subClashNoDefGrp'
+    ]
     backup = {}
     for k in keys:
         cur.execute('SELECT value FROM settings WHERE key=?', (k,))
@@ -1852,49 +1875,68 @@ if not orig_spath.endswith('/'): orig_spath += '/'
     orig_wkey = b.get('webKeyFile', '')
     orig_scert = b.get('subCertFile', '')
     orig_skey = b.get('subKeyFile', '')
+    orig_wdom = b.get('webDomain', '')
+    orig_sdom = b.get('subDomain', '')
+    orig_supd = b.get('subUpdates', '12')
 
     cur.execute('UPDATE settings SET value=? WHERE key=\"webCertFile\"', (orig_wcert,))
     cur.execute('UPDATE settings SET value=? WHERE key=\"webKeyFile\"', (orig_wkey,))
     cur.execute('UPDATE settings SET value=? WHERE key=\"subCertFile\"', (orig_scert,))
     cur.execute('UPDATE settings SET value=? WHERE key=\"subKeyFile\"', (orig_skey,))
+    cur.execute('UPDATE settings SET value=? WHERE key=\"webDomain\"', (orig_wdom,))
+    cur.execute('UPDATE settings SET value=? WHERE key=\"subDomain\"', (orig_sdom,))
+    cur.execute('UPDATE settings SET value=? WHERE key=\"subUpdates\"', (orig_supd,))
+
+    # 恢复其他高级订阅项
+    for ext_k in ['subEncode', 'subShowInfo', 'subClashExt', 'subJsonExt', 'subClashSprtAll', 'subClashNoDefGrp']:
+        if ext_k in b:
+            cur.execute('UPDATE settings SET value=? WHERE key=?', (str(b[ext_k]), ext_k))
 
     proto = 'https' if (orig_wcert and orig_wkey) else 'http'
     sub_proto = 'https' if (orig_scert and orig_skey) else 'http'
+
+    host_web = orig_wdom if orig_wdom else f'{pub_ip}:{final_wp}'
+    host_sub = orig_sdom if orig_sdom else f'{pub_ip}:{final_sp}'
 
     # 4. 恢复监听地址为 0.0.0.0 (空字符串) 并更新公网直连 URI
     cur.execute('UPDATE settings SET value=? WHERE key=\"webPort\"', (str(final_wp),))
     cur.execute('UPDATE settings SET value=\"\" WHERE key=\"webListen\"')
     cur.execute('UPDATE settings SET value=? WHERE key=\"webPath\"', (orig_wpath,))
-    cur.execute('UPDATE settings SET value=? WHERE key=\"webURI\"', (f'{proto}://{pub_ip}:{final_wp}{orig_wpath}',))
+    cur.execute('UPDATE settings SET value=? WHERE key=\"webURI\"', (f'{proto}://{host_web}{orig_wpath}',))
 
     cur.execute('UPDATE settings SET value=? WHERE key=\"subPort\"', (str(final_sp),))
     cur.execute('UPDATE settings SET value=\"\" WHERE key=\"subListen\"')
     cur.execute('UPDATE settings SET value=? WHERE key=\"subPath\"', (orig_spath,))
-    cur.execute('UPDATE settings SET value=? WHERE key=\"subURI\"', (f'{sub_proto}://{pub_ip}:{final_sp}{orig_spath}',))
+    cur.execute('UPDATE settings SET value=? WHERE key=\"subURI\"', (f'{sub_proto}://{host_sub}{orig_spath}',))
 
     con.commit()
     con.close()
 
-    print(f'{final_wp}|{orig_wpath}|{final_sp}|{orig_spath}|{proto}|{sub_proto}')
-" 2>/dev/null || echo "8443|/app/|8444|/sub/|http|http")
+    print(f'{final_wp}|{orig_wpath}|{final_sp}|{orig_spath}|{proto}|{sub_proto}|{orig_wdom}|{orig_sdom}')
+" 2>/dev/null || echo "8443|/app/|8444|/sub/|http|http||")
 
     final_wp=$(echo "$restore_info" | cut -d'|' -f1)
     final_wpath=$(echo "$restore_info" | cut -d'|' -f2)
     final_sp=$(echo "$restore_info" | cut -d'|' -f3)
     final_spath=$(echo "$restore_info" | cut -d'|' -f4)
-    local final_proto final_sub_proto
+    local final_proto final_sub_proto final_wdom final_sdom
     final_proto=$(echo "$restore_info" | cut -d'|' -f5)
     final_sub_proto=$(echo "$restore_info" | cut -d'|' -f6)
+    final_wdom=$(echo "$restore_info" | cut -d'|' -f7)
+    final_sdom=$(echo "$restore_info" | cut -d'|' -f8)
     [[ -z "$final_proto" ]] && final_proto="http"
     [[ -z "$final_sub_proto" ]] && final_sub_proto="http"
+    local show_web_host show_sub_host
+    show_web_host="$([[ -n "$final_wdom" ]] && echo "$final_wdom" || echo "${public_ip}:${final_wp}")"
+    show_sub_host="$([[ -n "$final_sdom" ]] && echo "$final_sdom" || echo "${public_ip}:${final_sp}")"
     systemctl restart s-ui 2>/dev/null || true
   fi
 
   systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || true
   echo -e "  ${G}[✓] 已成功关闭隧道反代，所有服务已恢复公网 0.0.0.0 直连模式 (已还原证书与配置)：${N}"
   echo -e "      • sout 管理面板: ${B}http://${public_ip}:8899/$(cat "${WORK_DIR}/basepath" 2>/dev/null || echo "")/${N}"
-  echo -e "      • s-ui 管理面板: ${B}${final_proto}://${public_ip}:${final_wp}${final_wpath}${N}"
-  echo -e "      • s-ui 订阅地址: ${B}${final_sub_proto}://${public_ip}:${final_sp}${final_spath}${N}"
+  echo -e "      • s-ui 管理面板: ${B}${final_proto}://${show_web_host}${final_wpath}${N}"
+  echo -e "      • s-ui 订阅地址: ${B}${final_sub_proto}://${show_sub_host}${final_spath}${N}"
 }
 
 caddy_interactive_setup() {
