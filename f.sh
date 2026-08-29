@@ -1776,10 +1776,9 @@ menu() {
     echo -e "${D}----------------------------------------${N}"
     echo -e "   1) 启动服务          2) 停止服务"
     echo -e "   3) 重启服务          4) 查看运行日志"
-    echo
-    echo -e "   5) 修改面板监听地址和端口"
-    echo -e "   6) 重置访问口令      7) 重置访问路径"
-    echo -e "   8) 面板 URL 设置     9) SSL / HTTPS 设置"
+    echo -e "   5) 重置访问口令      6) 重置访问路径"
+    echo -e "   7) 面板 URL 设置     8) SSL / HTTPS 设置"
+    echo -e "   9) 修改面板监听地址和端口"
     echo -e "  10) Cloudflare 隧道查看/更换"
     echo -e "  11) 检查/更新版本    12) 卸载"
     echo -e "   0) 退出脚本"
@@ -1791,11 +1790,11 @@ menu() {
       2) svc_stop    && echo -e "\n  ${Y}已停止${N}"; pause ;;
       3) svc_restart && echo -e "\n  ${G}已重启${N}"; pause ;;
       4) echo; svc_logs 40; pause ;;
-      5) change_listen_and_port; pause ;;
-      6) reset_password; pause ;;
-      7) reset_basepath; pause ;;
-      8) change_panel_url; pause ;;
-      9) change_ssl; pause ;;
+      5) reset_password; pause ;;
+      6) reset_basepath; pause ;;
+      7) change_panel_url; pause ;;
+      8) change_ssl; pause ;;
+      9) change_listen_and_port; pause ;;
       10) caddy_menu; pause ;;
       11) check_and_update; pause ;;
       12) do_uninstall; pause ;;
