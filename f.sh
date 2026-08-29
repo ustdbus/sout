@@ -1696,6 +1696,193 @@ caddy_interactive_setup() {
   setup_caddy_proxy "$domain" "$tunnel_token" "$tunnel_port"
 }
 
+reload_caddy_proxy() {
+  echo
+  echo -e "  ${B}[+] 正在扫描并重新识别各组件 (sout / s-ui / 节点) 最新路径与端口...${N}"
+  if [[ ! -f "$CADDY_META" ]]; then
+    echo -e "  ${R}未检测到反代配置文件 ($CADDY_META)${N}"
+    return
+  fi
+
+  local domain tunnel_port sout_p sui_p sub_p ws_p sout_port sui_port node_port
+  domain=$(grep -oE '"domain"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+  tunnel_port=$(grep -oE '"tunnel_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
+  [[ -z "$tunnel_port" ]] && tunnel_port="8081"
+
+  # 1. 动态探测 sout 面板配置
+  sout_port="8899"
+  if [[ -f "${WORK_DIR}/settings.json" ]]; then
+    local p_probe
+    p_probe=$(python3 -c "import json; print(json.load(open('${WORK_DIR}/settings.json')).get('port', '8899'))" 2>/dev/null || true)
+    [[ -n "$p_probe" ]] && sout_port="$p_probe"
+  fi
+  sout_p=$(grep -oE '"sout_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+  [[ -z "$sout_p" ]] && sout_p="sout"
+
+  # 2. 动态探测 s-ui 面板配置
+  sui_port="2096"
+  sui_p=$(grep -oE '"sui_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+  [[ -z "$sui_p" ]] && sui_p="sui"
+  if [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
+    local sui_probe
+    sui_probe=$(python3 -c "
+import sqlite3
+con = sqlite3.connect('/usr/local/s-ui/db/s-ui.db')
+cur = con.cursor()
+cur.execute(\"SELECT value FROM settings WHERE key='webPort'\")
+r1 = cur.fetchone()
+port = r1[0] if r1 and r1[0] else ''
+cur.execute(\"SELECT value FROM settings WHERE key='webPath'\")
+r2 = cur.fetchone()
+path = r2[0] if r2 and r2[0] else ''
+con.close()
+path = path.strip('/')
+print(f'{port}|{path}')
+" 2>/dev/null || true)
+    if [[ -n "$sui_probe" ]]; then
+      local probed_port probed_path
+      probed_port=$(echo "$sui_probe" | cut -d'|' -f1)
+      probed_path=$(echo "$sui_probe" | cut -d'|' -f2)
+      [[ -n "$probed_port" ]] && sui_port="$probed_port"
+      [[ -n "$probed_path" ]] && sui_p="$probed_path"
+    fi
+  fi
+
+  # 3. 动态探测/识别 s-ui 节点入站 (解析 inbounds 中的 WebSocket 传输与端口)
+  sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+  [[ -z "$sub_p" ]] && sub_p="sub"
+  ws_p=$(grep -oE '"ws_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+  node_port=$(grep -oE '"node_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
+  [[ -z "$node_port" ]] && node_port="2082"
+
+  if [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
+    local node_probe
+    node_probe=$(python3 -c "
+import sqlite3, json
+con = sqlite3.connect('/usr/local/s-ui/db/s-ui.db')
+cur = con.cursor()
+cur.execute(\"SELECT listen_port, transport, tag, type FROM inbounds\")
+rows = cur.fetchall()
+con.close()
+found_port = ''
+found_path = ''
+for r in rows:
+    p, tr_str, tag, typ = r[0], r[1], r[2], r[3]
+    try:
+        tr = json.loads(tr_str) if tr_str else {}
+    except:
+        tr = {}
+    if isinstance(tr, dict) and tr.get('type') == 'ws' and tr.get('path'):
+        found_port = str(p)
+        found_path = tr.get('path').strip('/')
+        break
+    if tag == 'vmess-argo' and p:
+        found_port = str(p)
+if found_port:
+    print(f'{found_port}|{found_path}')
+" 2>/dev/null || true)
+    if [[ -n "$node_probe" ]]; then
+      local n_port n_path
+      n_port=$(echo "$node_probe" | cut -d'|' -f1)
+      n_path=$(echo "$node_probe" | cut -d'|' -f2)
+      [[ -n "$n_port" ]] && node_port="$n_port"
+      [[ -n "$n_path" ]] && ws_p="$n_path"
+    fi
+  fi
+
+  # 4. 重新生成纯净 Caddyfile
+  mkdir -p /etc/caddy
+  cat > /etc/caddy/Caddyfile <<EOF
+{
+    admin off
+    auto_https off
+}
+
+:${tunnel_port} {
+    redir /${sout_p} /${sout_p}/ 308
+    redir /${sui_p} /${sui_p}/ 308
+    redir /${sub_p} /${sub_p}/ 308
+
+    # 1. sout 动态家宽管理面板
+    handle /${sout_p}* {
+        reverse_proxy 127.0.0.1:${sout_port}
+    }
+
+    # 2. s-ui 节点管理面板
+    handle /${sui_p}* {
+        reverse_proxy 127.0.0.1:${sui_port}
+    }
+
+    # 3. sout 订阅接口（重写到 sout 面板的 /sub）
+    handle /${sub_p}* {
+        rewrite * /${sout_p}/sub{uri}
+        reverse_proxy 127.0.0.1:${sout_port}
+    }
+
+    # 4. VLESS + WebSocket 节点 (实时零缓冲透传)
+    handle /${ws_p}* {
+        reverse_proxy 127.0.0.1:${node_port} {
+            flush_interval -1
+        }
+    }
+
+    # 5. 伪装根路径
+    handle {
+        respond "Service Ready" 200
+    }
+}
+EOF
+
+  # 5. 更新 caddy_meta.json
+  python3 -c "
+import json
+p = '${CADDY_META}'
+try:
+    with open(p, 'r') as f:
+        d = json.load(f)
+except:
+    d = {}
+d['sout_port'] = int('${sout_port}')
+d['sout_path'] = '${sout_p}'
+d['sui_port'] = int('${sui_port}')
+d['sui_path'] = '${sui_p}'
+d['sub_path'] = '${sub_p}'
+d['ws_path'] = '${ws_p}'
+d['node_port'] = int('${node_port}')
+with open(p, 'w') as f:
+    json.dump(d, f, indent=2)
+" 2>/dev/null || true
+
+  # 6. 重启 Caddy 服务
+  if systemctl restart caddy 2>/dev/null; then
+    systemctl enable caddy 2>/dev/null || true
+    echo -e "  ${G}[✓] Caddy 反代服务已重新加载最新分流配置并成功启动！${N}"
+    echo
+    echo -e "${B}========================================${N}"
+    echo -e "${B}  最新 Caddy 流量反代与分流详情${N}"
+    echo -e "${B}========================================${N}"
+    echo -e "  Caddy 正在监听:    ${Y}127.0.0.1:${tunnel_port}${N}"
+    echo
+    echo -e "  ${G}• Caddy 将 /${sout_p}/ 路径流量转发至:   127.0.0.1:${sout_port} (sout 管理面板)${N}"
+    echo -e "    外网访问: https://${domain}/${sout_p}/"
+    echo
+    echo -e "  ${G}• Caddy 将 /${sui_p}/ 路径流量转发至:    127.0.0.1:${sui_port} (s-ui 面板)${N}"
+    echo -e "    外网访问: https://${domain}/${sui_p}/"
+    echo
+    echo -e "  ${G}• Caddy 将 /${sout_p}/sub 路径流量转发至: 127.0.0.1:${sout_port} (订阅接口)${N}"
+    echo -e "    订阅链接: https://${domain}/${sout_p}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")"
+    if [[ -n "$ws_p" ]]; then
+      echo
+      echo -e "  ${G}• Caddy 将 /${ws_p}/ 路径流量转发至:     127.0.0.1:${node_port} (节点流量)${N}"
+    fi
+    echo
+    echo -e "  ${G}• Caddy 将 / 根路径流量响应:            200 OK (伪装服务就绪)${N}"
+    echo -e "${B}========================================${N}"
+  else
+    echo -e "  ${R}[×] Caddy 重启失败，请检查 Caddyfile 或端口占用${N}"
+  fi
+}
+
 caddy_menu() {
   while true; do
     echo
@@ -1722,11 +1909,12 @@ caddy_menu() {
       echo "  1) 查看 Caddy 反代信息"
       echo "  2) 重新配置隧道与域名 (修改 Token/域名/端口)"
       echo "  3) 查看 cloudflared 隧道运行日志"
-      echo "  4) 重启隧道与 Caddy 服务"
-      echo "  5) 关闭隧道反代 (恢复独立端口模式)"
+      echo "  4) 重启 Cloudflare 隧道"
+      echo "  5) 启用/重启 Caddy 服务 (重新探测并分流)"
+      echo "  6) 关闭隧道反代 (恢复独立端口模式)"
       echo "  0) 返回上级菜单"
       echo
-      read -rp "  请选择 [0-5]: " opt
+      read -rp "  请选择 [0-6]: " opt
       case "$opt" in
         1)
           if [[ -f "$CADDY_META" ]]; then
@@ -1768,10 +1956,13 @@ caddy_menu() {
         2) caddy_interactive_setup; pause ;;
         3) echo; journalctl -u cloudflared -n 40 --no-pager; pause ;;
         4)
-          systemctl restart cloudflared 2>/dev/null || true
-          systemctl restart caddy && echo -e "  ${G}服务已重启${N}"
+          echo -e "  正在重启 Cloudflare 隧道服务..."
+          systemctl restart cloudflared 2>/dev/null && echo -e "  ${G}[✓] Cloudflare 隧道服务已成功重启${N}" || echo -e "  ${R}[×] 隧道服务重启失败${N}"
           pause ;;
-        5) disable_caddy_proxy; pause; break ;;
+        5)
+          reload_caddy_proxy
+          pause ;;
+        6) disable_caddy_proxy; pause; break ;;
         0) break ;;
         *) ;;
       esac
