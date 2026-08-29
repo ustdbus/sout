@@ -543,58 +543,113 @@ EOF
 }
 
 reload_caddy_proxy() {
-  echo
-  echo -e "  ${B}[+] 正在扫描并重新识别各组件 (sout / s-ui / 节点) 最新路径与端口...${N}"
-  if [[ ! -f "$CADDY_META" ]]; then
-    echo -e "  ${R}未检测到反代配置文件 ($CADDY_META)${N}"
+  if [[ ! -f "$CADDY_META" ]] || ! grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$CADDY_META" 2>/dev/null; then
+    echo
+    echo -e "  ${Y}================================================================${N}"
+    echo -e "  ${Y}💡 提示: 检测到您尚未配置 Cloudflare 隧道连接和Caddy流量代理！${N}"
+    echo -e "  ${Y}请先在菜单中选择配置隧道（选项 1 或选项 2）完成隧道与域名绑定后再使用此功能。${N}"
+    echo -e "  ${Y}================================================================${N}"
     return
   fi
+
+  echo
+  echo -e "  ${B}[+] 正在扫描并重新识别各组件 (sout / s-ui / 节点) 最新路径与端口...${N}"
 
   local domain tunnel_port sout_p sui_p sub_p ws_p sout_port sui_port node_port
   domain=$(grep -oE '"domain"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   tunnel_port=$(grep -oE '"tunnel_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
   [[ -z "$tunnel_port" ]] && tunnel_port="8081"
 
-  # 1. 动态探测 sout 面板配置
+  # 1. 动态探测并自动纠偏 sout 面板配置 (确保监听 127.0.0.1)
   sout_port="8899"
+  local sout_needs_restart=0
   if [[ -f "${WORK_DIR}/settings.json" ]]; then
-    local p_probe
-    p_probe=$(python3 -c "import json; print(json.load(open('${WORK_DIR}/settings.json')).get('port', '8899'))" 2>/dev/null || true)
-    [[ -n "$p_probe" ]] && sout_port="$p_probe"
+    local sout_info
+    sout_info=$(python3 -c "
+import json
+try:
+    with open('${WORK_DIR}/settings.json') as f:
+        d = json.load(f)
+    p = d.get('port', 8899)
+    la = d.get('listen_addr', '')
+    changed = False
+    if la != '127.0.0.1':
+        d['listen_addr'] = '127.0.0.1'
+        changed = True
+        with open('${WORK_DIR}/settings.json', 'w') as f:
+            json.dump(d, f, indent=2)
+    print(f'{p}|{changed}')
+except Exception:
+    print('8899|False')
+" 2>/dev/null || echo "8899|False")
+    sout_port=$(echo "$sout_info" | cut -d'|' -f1)
+    if [[ "$(echo "$sout_info" | cut -d'|' -f2)" == "True" ]]; then
+      sout_needs_restart=1
+    fi
   fi
   sout_p=$(grep -oE '"sout_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   [[ -z "$sout_p" ]] && sout_p="sout"
+  if [[ "$sout_needs_restart" -eq 1 ]]; then
+    echo -e "  [+] 检测到 sout 监听地址不是 127.0.0.1，已自动修正为 127.0.0.1 并重启服务..."
+    systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || true
+  fi
 
-  # 2. 动态探测 s-ui 面板配置
+  # 2. 动态探测并自动纠偏 s-ui 面板配置 (确保监听 127.0.0.1)
   sui_port="2096"
   sui_p=$(grep -oE '"sui_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   [[ -z "$sui_p" ]] && sui_p="sui"
+  local sui_needs_restart=0
   if [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
-    local sui_probe
-    sui_probe=$(python3 -c "
+    local sui_info
+    sui_info=$(python3 -c "
 import sqlite3
 con = sqlite3.connect('/usr/local/s-ui/db/s-ui.db')
 cur = con.cursor()
 cur.execute(\"SELECT value FROM settings WHERE key='webPort'\")
 r1 = cur.fetchone()
-port = r1[0] if r1 and r1[0] else ''
+port = r1[0] if r1 and r1[0] else '2096'
 cur.execute(\"SELECT value FROM settings WHERE key='webPath'\")
 r2 = cur.fetchone()
-path = r2[0] if r2 and r2[0] else ''
+path = r2[0] if r2 and r2[0] else 'sui'
+cur.execute(\"SELECT value FROM settings WHERE key='webListen'\")
+r3 = cur.fetchone()
+w_listen = r3[0] if r3 and r3[0] else ''
+cur.execute(\"SELECT value FROM settings WHERE key='subListen'\")
+r4 = cur.fetchone()
+s_listen = r4[0] if r4 and r4[0] else ''
+
+changed = False
+if w_listen != '127.0.0.1':
+    cur.execute(\"UPDATE settings SET value='127.0.0.1' WHERE key='webListen'\")
+    changed = True
+if s_listen != '127.0.0.1':
+    cur.execute(\"UPDATE settings SET value='127.0.0.1' WHERE key='subListen'\")
+    changed = True
+
+if changed:
+    con.commit()
 con.close()
 path = path.strip('/')
-print(f'{port}|{path}')
+print(f'{port}|{path}|{changed}')
 " 2>/dev/null || true)
-    if [[ -n "$sui_probe" ]]; then
-      local probed_port probed_path
-      probed_port=$(echo "$sui_probe" | cut -d'|' -f1)
-      probed_path=$(echo "$sui_probe" | cut -d'|' -f2)
+    if [[ -n "$sui_info" ]]; then
+      local probed_port probed_path probed_changed
+      probed_port=$(echo "$sui_info" | cut -d'|' -f1)
+      probed_path=$(echo "$sui_info" | cut -d'|' -f2)
+      probed_changed=$(echo "$sui_info" | cut -d'|' -f3)
       [[ -n "$probed_port" ]] && sui_port="$probed_port"
       [[ -n "$probed_path" ]] && sui_p="$probed_path"
+      if [[ "$probed_changed" == "True" ]]; then
+        sui_needs_restart=1
+      fi
     fi
   fi
+  if [[ "$sui_needs_restart" -eq 1 ]]; then
+    echo -e "  [+] 检测到 s-ui 监听地址不是 127.0.0.1，已自动修正为 127.0.0.1 并重启服务..."
+    systemctl restart s-ui 2>/dev/null || true
+  fi
 
-  # 3. 动态探测/识别 s-ui 节点入站 (解析 inbounds 中的 WebSocket 传输与端口)
+  # 3. 动态识别/创建 s-ui 隧道节点入站 (核心：识别监听在 127.0.0.1 的隧道节点)
   sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   [[ -z "$sub_p" ]] && sub_p="sub"
   ws_p=$(grep -oE '"ws_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
@@ -602,37 +657,124 @@ print(f'{port}|{path}')
   [[ -z "$node_port" ]] && node_port="2082"
 
   if [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
-    local node_probe
-    node_probe=$(python3 -c "
+    local node_result
+    node_result=$(python3 -c "
 import sqlite3, json
-con = sqlite3.connect('/usr/local/s-ui/db/s-ui.db')
+
+db_path = '/usr/local/s-ui/db/s-ui.db'
+con = sqlite3.connect(db_path)
 cur = con.cursor()
-cur.execute(\"SELECT listen_port, transport, tag, type FROM inbounds\")
+cur.execute(\"SELECT id, listen_port, listen, transport, tag, type FROM inbounds\")
 rows = cur.fetchall()
 con.close()
+
 found_port = ''
 found_path = ''
+
+# 遍历寻找 listen 为 127.0.0.1 且包含 ws 传输协议的隧道节点
 for r in rows:
-    p, tr_str, tag, typ = r[0], r[1], r[2], r[3]
-    try:
-        tr = json.loads(tr_str) if tr_str else {}
-    except:
-        tr = {}
-    if isinstance(tr, dict) and tr.get('type') == 'ws' and tr.get('path'):
-        found_port = str(p)
-        found_path = tr.get('path').strip('/')
-        break
-    if tag == 'vmess-argo' and p:
-        found_port = str(p)
-if found_port:
-    print(f'{found_port}|{found_path}')
-" 2>/dev/null || true)
-    if [[ -n "$node_probe" ]]; then
+    ib_id, p, listen_ip, tr_str, tag, typ = r[0], r[1], r[2], r[3], r[4], r[5]
+    if listen_ip == '127.0.0.1':
+        try:
+            tr = json.loads(tr_str) if tr_str else {}
+        except:
+            tr = {}
+        if isinstance(tr, dict) and tr.get('type') == 'ws' and tr.get('path'):
+            found_port = str(p)
+            found_path = tr.get('path').strip('/')
+            break
+        elif tag == 'vmess-argo' or typ in ('vmess', 'vless'):
+            found_port = str(p)
+            if isinstance(tr, dict) and tr.get('path'):
+                found_path = tr.get('path').strip('/')
+
+if found_port and found_path:
+    print(f'FOUND|{found_port}|{found_path}')
+else:
+    print('CREATE')
+" 2>/dev/null || echo "CREATE")
+
+    if [[ "$node_result" == FOUND* ]]; then
       local n_port n_path
-      n_port=$(echo "$node_probe" | cut -d'|' -f1)
-      n_path=$(echo "$node_probe" | cut -d'|' -f2)
+      n_port=$(echo "$node_result" | cut -d'|' -f2)
+      n_path=$(echo "$node_result" | cut -d'|' -f3)
       [[ -n "$n_port" ]] && node_port="$n_port"
       [[ -n "$n_path" ]] && ws_p="$n_path"
+      echo -e "  [+] 成功识别到已存在的 127.0.0.1 隧道节点 (端口: ${node_port}, 路径: /${ws_p}/)"
+    else
+      echo -e "  [+] 未找到监听在 127.0.0.1 的隧道节点，正在自动依据模板创建..."
+      local sui_token
+      sui_token=$(cat "${WORK_DIR}/sui-token" 2>/dev/null || true)
+      local sui_admin_user
+      sui_admin_user=$(get_sui_user)
+      if [[ -z "$ws_p" ]]; then
+        ws_p=$(rand_safe_path "vlws")
+      fi
+      node_port=$(rand_port)
+      
+      SUI_API="http://127.0.0.1:${sui_port}/${sui_p}/apiv2" \
+      SUI_TOKEN="$sui_token" \
+      SUI_DB="/usr/local/s-ui/db/s-ui.db" \
+      DOMAIN="$domain" \
+      NODE_PORT="$node_port" \
+      WS_PATH="/${ws_p}" \
+      SUI_ADMIN_USER="$sui_admin_user" \
+      python3 <<'PYEOF'
+import json, os, uuid, urllib.request, urllib.parse
+
+BASE = os.environ['SUI_API']
+TOKEN = os.environ.get('SUI_TOKEN', '')
+
+def api(method, endpoint, form=None):
+    url = BASE.rstrip('/') + '/' + endpoint.lstrip('/')
+    data = urllib.parse.urlencode(form).encode() if form else None
+    headers = {'Token': TOKEN}
+    if data is not None:
+        headers['Content-Type'] = 'application/x-www-form-urlencoded'
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode('utf-8'))
+
+try:
+    node_tag = 'vmess-argo'
+    client_uuid = str(uuid.uuid4())
+    addrs_data = [{
+        'server': os.environ['DOMAIN'],
+        'server_port': 443,
+        'tls': {
+            'disable_sni': False,
+            'enabled': True,
+            'insecure': False,
+            'server_name': os.environ['DOMAIN'],
+            'utls': {'enabled': True, 'fingerprint': 'chrome'}
+        }
+    }]
+    inbound_payload = {
+        'id': 0,
+        'type': 'vmess',
+        'tag': node_tag,
+        'tls_id': 0,
+        'listen': '127.0.0.1',
+        'listen_port': int(os.environ['NODE_PORT']),
+        'addrs': addrs_data,
+        'transport': {
+            'early_data_header_name': 'Sec-WebSocket-Protocol',
+            'max_early_data': 2560,
+            'headers': {'Host': os.environ['DOMAIN']},
+            'path': os.environ['WS_PATH'],
+            'type': 'ws'
+        }
+    }
+    api('POST', 'save', {
+        'object': 'inbounds',
+        'action': 'new',
+        'data': json.dumps(inbound_payload),
+    })
+except Exception:
+    pass
+PYEOF
+      systemctl restart s-ui 2>/dev/null || true
+      echo -e "  ${G}[✓] 127.0.0.1 隧道节点创建完成 (端口: ${node_port}, 路径: /${ws_p}/)${N}"
     fi
   fi
 
