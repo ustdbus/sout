@@ -802,7 +802,10 @@ try:
             print('    - 清理路由规则警告:', e)
 
     # 4. 清理 clients
-    cur.execute(\"DELETE FROM clients WHERE name LIKE 'sout-%' OR name LIKE 'fanout-%'\")
+    cur.execute("DELETE FROM clients WHERE name LIKE 'sout-%' OR name LIKE 'fanout-%'")
+
+    # 5. 清理 API Token
+    cur.execute("DELETE FROM tokens WHERE desc='sout' OR desc='fanout'")
 
     con.commit()
     con.close()
