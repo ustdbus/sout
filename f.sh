@@ -1508,6 +1508,18 @@ except Exception:
     local sui_token
     sui_token=$(cat "${WORK_DIR}/sui-token" 2>/dev/null || true)
     if [[ -z "$sui_token" ]]; then
+      sui_token=$(sqlite3 "$sui_db" "SELECT token FROM tokens WHERE (desc='sout' OR desc='fanout') AND (expiry=0 OR expiry > strftime('%s','now')) LIMIT 1;" 2>/dev/null || true)
+      if [[ -z "$sui_token" ]]; then
+        sui_token=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+        sqlite3 "$sui_db" "INSERT INTO tokens (desc, token, expiry, user_id) VALUES ('sout', '$sui_token', 0, 1);" 2>/dev/null || true
+        systemctl restart s-ui 2>/dev/null || true
+      fi
+      mkdir -p "$WORK_DIR"
+      echo "$sui_token" > "${WORK_DIR}/sui-token"
+      chmod 600 "${WORK_DIR}/sui-token" 2>/dev/null || true
+    fi
+
+    if [[ -z "$sui_token" ]]; then
       echo -e "  ${Y}[!] 未找到 s-ui API Token，跳过自动配置（请先启动 sout 生成 Token）${N}"
     else
       echo -e "  [+] 正在通过 s-ui API 自动配置 (路径分流与 vmess-argo 节点)..."
@@ -2175,6 +2187,17 @@ else:
       echo -e "  [+] 未找到监听在 127.0.0.1 的隧道节点，正在自动依据模板创建..."
       local sui_token
       sui_token=$(cat "${WORK_DIR}/sui-token" 2>/dev/null || true)
+      if [[ -z "$sui_token" ]]; then
+        sui_token=$(sqlite3 "/usr/local/s-ui/db/s-ui.db" "SELECT token FROM tokens WHERE (desc='sout' OR desc='fanout') AND (expiry=0 OR expiry > strftime('%s','now')) LIMIT 1;" 2>/dev/null || true)
+        if [[ -z "$sui_token" ]]; then
+          sui_token=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          sqlite3 "/usr/local/s-ui/db/s-ui.db" "INSERT INTO tokens (desc, token, expiry, user_id) VALUES ('sout', '$sui_token', 0, 1);" 2>/dev/null || true
+          systemctl restart s-ui 2>/dev/null || true
+        fi
+        mkdir -p "$WORK_DIR"
+        echo "$sui_token" > "${WORK_DIR}/sui-token"
+        chmod 600 "${WORK_DIR}/sui-token" 2>/dev/null || true
+      fi
       local sui_admin_user
       sui_admin_user=$(get_sui_user)
       if [[ -z "$ws_p" ]]; then
