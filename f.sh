@@ -2190,7 +2190,7 @@ menu() {
     echo -e "   5) 重置访问口令      6) 重置访问路径"
     echo -e "   7) 面板 URL 设置     8) SSL / HTTPS 设置"
     echo -e "   9) 修改面板监听地址和端口"
-    echo -e "  10) Cloudflare 隧道查看/更换"
+    echo -e "  10) Cloudflare隧道/Caddy配置"
     echo -e "  11) 检查/更新版本    12) 卸载"
     echo -e "   0) 退出脚本"
     echo -e "${D}----------------------------------------${N}"
