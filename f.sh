@@ -1719,7 +1719,7 @@ caddy_menu() {
       echo -e "  托管域名:      ${B}${dom}${N}"
       echo -e "  本地回源:      ${Y}127.0.0.1:${tun_p}${N}"
       echo -e "${D}----------------------------------------${N}"
-      echo "  1) 查看反代访问清单与节点地址"
+      echo "  1) 查看 Caddy 反代信息"
       echo "  2) 重新配置隧道与域名 (修改 Token/域名/端口)"
       echo "  3) 查看 cloudflared 隧道运行日志"
       echo "  4) 重启隧道与 Caddy 服务"
@@ -1730,16 +1730,39 @@ caddy_menu() {
       case "$opt" in
         1)
           if [[ -f "$CADDY_META" ]]; then
-            local sout_p sui_p sub_p ws_p
+            local sout_p sui_p sub_p ws_p sout_port sui_port node_port
             sout_p=$(grep -oE '"sout_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" | cut -d'"' -f4)
             sui_p=$(grep -oE '"sui_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" | cut -d'"' -f4)
             sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" | cut -d'"' -f4)
             ws_p=$(grep -oE '"ws_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" | cut -d'"' -f4)
+            sout_port=$(grep -oE '"sout_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
+            sui_port=$(grep -oE '"sui_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
+            node_port=$(grep -oE '"node_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
+            [[ -z "$sout_port" ]] && sout_port="8899"
+            [[ -z "$sui_port" ]] && sui_port="2096"
+            [[ -z "$node_port" ]] && node_port="2082"
+
             echo
-            echo -e "  [1] sout 管理面板:  ${B}https://${dom}/${sout_p}/${N}"
-            echo -e "  [2] s-ui 管理面板:  ${B}https://${dom}/${sui_p}/${N}"
-              echo -e "  [3] sout 订阅地址:  ${B}https://${dom}/${sout_p}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")${N}"
-            echo -e "  访问口令:          ${Y}$(cat "${WORK_DIR}/password" 2>/dev/null || echo "未设置")${N}"
+            echo -e "${B}========================================${N}"
+            echo -e "${B}  Caddy 流量反代与转发详情${N}"
+            echo -e "${B}========================================${N}"
+            echo -e "  Caddy 正在监听:    ${Y}127.0.0.1:${tun_p}${N}"
+            echo
+            echo -e "  ${G}• Caddy 将 /${sout_p}/ 路径流量转发至:   127.0.0.1:${sout_port} (sout 管理面板)${N}"
+            echo -e "    外网访问: https://${dom}/${sout_p}/"
+            echo
+            echo -e "  ${G}• Caddy 将 /${sui_p}/ 路径流量转发至:    127.0.0.1:${sui_port} (s-ui 面板)${N}"
+            echo -e "    外网访问: https://${dom}/${sui_p}/"
+            echo
+            echo -e "  ${G}• Caddy 将 /${sout_p}/sub 路径流量转发至: 127.0.0.1:${sout_port} (订阅接口)${N}"
+            echo -e "    订阅链接: https://${dom}/${sout_p}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")"
+            if [[ -n "$ws_p" ]]; then
+              echo
+              echo -e "  ${G}• Caddy 将 /${ws_p}/ 路径流量转发至:     127.0.0.1:${node_port} (节点流量)${N}"
+            fi
+            echo
+            echo -e "  ${G}• Caddy 将 / 根路径流量响应:            200 OK (伪装服务就绪)${N}"
+            echo -e "${B}========================================${N}"
           fi
           pause ;;
         2) caddy_interactive_setup; pause ;;
