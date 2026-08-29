@@ -842,20 +842,90 @@ uninstall_sout_only() {
   rm -rf /etc/caddy /var/lib/caddy /var/log/caddy /usr/local/bin/caddy /usr/local/bin/cloudflared /usr/local/bin/sout-quick-tunnel /var/log/cloudflared* /home/acme 2>/dev/null || true
   rm -rf /root/.local/share/caddy /root/.config/caddy /root/.cache/caddy /root/.cloudflared 2>/dev/null || true
 
-  # 3. 恢复 s-ui 为公网直连监听 (监听 0.0.0.0 并更新公网直连地址)
+  # 3. 恢复 s-ui 监听与配置 (优先从备份还原，若端口被占用则自动随机空闲端口)
   local public_ip
   public_ip=$(curl -s4m 2 https://api.ipify.org 2>/dev/null || curl -s4m 2 https://icanhazip.com 2>/dev/null || curl -s4m 2 https://ifconfig.me 2>/dev/null || true)
   public_ip=$(echo "$public_ip" | tr -d ' \r\n')
   [[ -z "$public_ip" ]] && public_ip="服务器公网IP"
 
   local sui_db="/usr/local/s-ui/db/s-ui.db"
-  if [[ -f "$sui_db" ]] && command -v sqlite3 >/dev/null 2>&1; then
-    sqlite3 "$sui_db" "UPDATE settings SET value='' WHERE key='webListen';" 2>/dev/null || true
-    sqlite3 "$sui_db" "UPDATE settings SET value='' WHERE key='subListen';" 2>/dev/null || true
-    sqlite3 "$sui_db" "UPDATE settings SET value='8443' WHERE key='webPort';" 2>/dev/null || true
-    sqlite3 "$sui_db" "UPDATE settings SET value='/app/' WHERE key='webPath';" 2>/dev/null || true
-    sqlite3 "$sui_db" "UPDATE settings SET value='http://${public_ip}:8443/app/' WHERE key='webURI';" 2>/dev/null || true
-    sqlite3 "$sui_db" "UPDATE settings SET value='http://${public_ip}:8444/sub/' WHERE key='subURI';" 2>/dev/null || true
+  local sui_backup="${WORK_DIR}/sui_backup.json"
+  local final_wp="8443" final_wpath="/app/" final_sp="8444" final_spath="/sub/"
+  if [[ -f "$sui_db" ]]; then
+    local restore_info
+    restore_info=$(python3 -c "
+import sqlite3, json, os, socket
+
+db = '$sui_db'
+backup_file = '$sui_backup'
+pub_ip = '$public_ip'
+
+def is_port_free(port):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.5)
+        res = s.connect_ex(('127.0.0.1', int(port)))
+        s.close()
+        return res != 0
+    except:
+        return True
+
+def get_free_port(start=8443):
+    import random
+    if is_port_free(start):
+        return start
+    for _ in range(50):
+        p = random.randint(10000, 60000)
+        if is_port_free(p):
+            return p
+    return start
+
+con = sqlite3.connect(db)
+cur = con.cursor()
+
+b = {}
+if os.path.exists(backup_file):
+    try:
+        with open(backup_file) as f:
+            b = json.load(f)
+    except:
+        pass
+
+# 1. 恢复 webPort / webPath
+orig_wp = b.get('webPort', '8443')
+final_wp = orig_wp if is_port_free(orig_wp) else get_free_port(8443)
+orig_wpath = b.get('webPath', '/app/')
+if not orig_wpath.startswith('/'): orig_wpath = '/' + orig_wpath
+if not orig_wpath.endswith('/'): orig_wpath += '/'
+
+# 2. 恢复 subPort / subPath
+orig_sp = b.get('subPort', '8444')
+final_sp = orig_sp if is_port_free(orig_sp) else get_free_port(8444)
+orig_spath = b.get('subPath', '/sub/')
+if not orig_spath.startswith('/'): orig_spath = '/' + orig_spath
+if not orig_spath.endswith('/'): orig_spath += '/'
+
+# 3. 恢复监听地址为 0.0.0.0 (空字符串) 并更新公网直连 URI
+cur.execute('UPDATE settings SET value=? WHERE key=\"webPort\"', (str(final_wp),))
+cur.execute('UPDATE settings SET value=\"\" WHERE key=\"webListen\"')
+cur.execute('UPDATE settings SET value=? WHERE key=\"webPath\"', (orig_wpath,))
+cur.execute('UPDATE settings SET value=? WHERE key=\"webURI\"', (f'http://{pub_ip}:{final_wp}{orig_wpath}',))
+
+cur.execute('UPDATE settings SET value=? WHERE key=\"subPort\"', (str(final_sp),))
+cur.execute('UPDATE settings SET value=\"\" WHERE key=\"subListen\"')
+cur.execute('UPDATE settings SET value=? WHERE key=\"subPath\"', (orig_spath,))
+cur.execute('UPDATE settings SET value=? WHERE key=\"subURI\"', (f'http://{pub_ip}:{final_sp}{orig_spath}',))
+
+con.commit()
+con.close()
+
+print(f'{final_wp}|{orig_wpath}|{final_sp}|{orig_spath}')
+" 2>/dev/null || echo "8443|/app/|8444|/sub/")
+
+    final_wp=$(echo "$restore_info" | cut -d'|' -f1)
+    final_wpath=$(echo "$restore_info" | cut -d'|' -f2)
+    final_sp=$(echo "$restore_info" | cut -d'|' -f3)
+    final_spath=$(echo "$restore_info" | cut -d'|' -f4)
     systemctl restart s-ui 2>/dev/null || true
   fi
 
@@ -874,9 +944,9 @@ uninstall_sout_only() {
   systemctl reset-failed 2>/dev/null || true
   svc_reload
   echo -e "  ${G}[✓] sout 插件、Caddy 及 Cloudflare 隧道已彻底清理干净！${N}"
-  echo -e "  ${G}[✓] s-ui 面板已恢复公网 0.0.0.0 HTTP 直连模式：${N}"
-  echo -e "      • s-ui 管理面板: ${B}http://${public_ip}:8443/app/${N}"
-  echo -e "      • s-ui 订阅地址: ${B}http://${public_ip}:8444/sub/${N}"
+  echo -e "  ${G}[✓] s-ui 面板已恢复公网 0.0.0.0 直连模式 (已还原备份配置)：${N}"
+  echo -e "      • s-ui 管理面板: ${B}http://${public_ip}:${final_wp}${final_wpath}${N}"
+  echo -e "      • s-ui 订阅地址: ${B}http://${public_ip}:${final_sp}${final_spath}${N}"
   exit 0
 }
 
@@ -1359,12 +1429,34 @@ EOF
     fi
   fi
 
-  # 4. 自动化配置 s-ui
+  # 4. 自动化配置 s-ui (配置前先做持久化备份)
   local sui_db="/usr/local/s-ui/db/s-ui.db"
   local sui_admin_user
   sui_admin_user=$(get_sui_user)
+  local sui_backup="${WORK_DIR}/sui_backup.json"
 
-    if [[ -f "$sui_db" ]]; then
+  if [[ -f "$sui_db" && ! -f "$sui_backup" ]]; then
+    python3 -c "
+import sqlite3, json
+try:
+    con = sqlite3.connect('$sui_db')
+    cur = con.cursor()
+    keys = ['webPort', 'webListen', 'webPath', 'webURI', 'subPort', 'subListen', 'subPath', 'subURI']
+    backup = {}
+    for k in keys:
+        cur.execute('SELECT value FROM settings WHERE key=?', (k,))
+        row = cur.fetchone()
+        if row and row[0] is not None:
+            backup[k] = row[0]
+    con.close()
+    with open('$sui_backup', 'w') as f:
+        json.dump(backup, f, indent=2)
+except Exception:
+    pass
+" 2>/dev/null || true
+  fi
+
+  if [[ -f "$sui_db" ]]; then
     local sui_token
     sui_token=$(cat "${WORK_DIR}/sui-token" 2>/dev/null || true)
     if [[ -z "$sui_token" ]]; then
@@ -1659,36 +1751,98 @@ with open(path, 'w') as f:
     json.dump(data, f, indent=2)
 " 2>/dev/null || true
 
-  # 恢复 s-ui 监听为 8443 / 8444
+  # 恢复 s-ui 监听与配置 (优先从备份还原，若端口被占用则自动随机空闲端口)
   local public_ip
   public_ip=$(curl -s4m 2 https://api.ipify.org 2>/dev/null || curl -s4m 2 https://icanhazip.com 2>/dev/null || curl -s4m 2 https://ifconfig.me 2>/dev/null || true)
   public_ip=$(echo "$public_ip" | tr -d ' \r\n')
   [[ -z "$public_ip" ]] && public_ip="服务器公网IP"
 
   local sui_db="/usr/local/s-ui/db/s-ui.db"
+  local sui_backup="${WORK_DIR}/sui_backup.json"
+  local final_wp="8443" final_wpath="/app/" final_sp="8444" final_spath="/sub/"
   if [[ -f "$sui_db" ]]; then
-    python3 -c "
-import sqlite3
-con = sqlite3.connect('$sui_db')
-con.execute('UPDATE settings SET value = \"8443\" WHERE key = \"webPort\"')
-con.execute('UPDATE settings SET value = \"\" WHERE key = \"webListen\"')
-con.execute('UPDATE settings SET value = \"/app/\" WHERE key = \"webPath\"')
-con.execute('UPDATE settings SET value = \"http://${public_ip}:8443/app/\" WHERE key = \"webURI\"')
-con.execute('UPDATE settings SET value = \"8444\" WHERE key = \"subPort\"')
-con.execute('UPDATE settings SET value = \"\" WHERE key = \"subListen\"')
-con.execute('UPDATE settings SET value = \"/sub/\" WHERE key = \"subPath\"')
-con.execute('UPDATE settings SET value = \"http://${public_ip}:8444/sub/\" WHERE key = \"subURI\"')
+    local restore_info
+    restore_info=$(python3 -c "
+import sqlite3, json, os, socket
+
+db = '$sui_db'
+backup_file = '$sui_backup'
+pub_ip = '$public_ip'
+
+def is_port_free(port):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.5)
+        res = s.connect_ex(('127.0.0.1', int(port)))
+        s.close()
+        return res != 0
+    except:
+        return True
+
+def get_free_port(start=8443):
+    import random
+    if is_port_free(start):
+        return start
+    for _ in range(50):
+        p = random.randint(10000, 60000)
+        if is_port_free(p):
+            return p
+    return start
+
+con = sqlite3.connect(db)
+cur = con.cursor()
+
+b = {}
+if os.path.exists(backup_file):
+    try:
+        with open(backup_file) as f:
+            b = json.load(f)
+    except:
+        pass
+
+# 1. 恢复 webPort / webPath
+orig_wp = b.get('webPort', '8443')
+final_wp = orig_wp if is_port_free(orig_wp) else get_free_port(8443)
+orig_wpath = b.get('webPath', '/app/')
+if not orig_wpath.startswith('/'): orig_wpath = '/' + orig_wpath
+if not orig_wpath.endswith('/'): orig_wpath += '/'
+
+# 2. 恢复 subPort / subPath
+orig_sp = b.get('subPort', '8444')
+final_sp = orig_sp if is_port_free(orig_sp) else get_free_port(8444)
+orig_spath = b.get('subPath', '/sub/')
+if not orig_spath.startswith('/'): orig_spath = '/' + orig_spath
+if not orig_spath.endswith('/'): orig_spath += '/'
+
+# 3. 恢复监听地址为 0.0.0.0 (空字符串) 并更新公网直连 URI
+cur.execute('UPDATE settings SET value=? WHERE key=\"webPort\"', (str(final_wp),))
+cur.execute('UPDATE settings SET value=\"\" WHERE key=\"webListen\"')
+cur.execute('UPDATE settings SET value=? WHERE key=\"webPath\"', (orig_wpath,))
+cur.execute('UPDATE settings SET value=? WHERE key=\"webURI\"', (f'http://{pub_ip}:{final_wp}{orig_wpath}',))
+
+cur.execute('UPDATE settings SET value=? WHERE key=\"subPort\"', (str(final_sp),))
+cur.execute('UPDATE settings SET value=\"\" WHERE key=\"subListen\"')
+cur.execute('UPDATE settings SET value=? WHERE key=\"subPath\"', (orig_spath,))
+cur.execute('UPDATE settings SET value=? WHERE key=\"subURI\"', (f'http://{pub_ip}:{final_sp}{orig_spath}',))
+
 con.commit()
 con.close()
-" 2>/dev/null || true
+
+print(f'{final_wp}|{orig_wpath}|{final_sp}|{orig_spath}')
+" 2>/dev/null || echo "8443|/app/|8444|/sub/")
+
+    final_wp=$(echo "$restore_info" | cut -d'|' -f1)
+    final_wpath=$(echo "$restore_info" | cut -d'|' -f2)
+    final_sp=$(echo "$restore_info" | cut -d'|' -f3)
+    final_spath=$(echo "$restore_info" | cut -d'|' -f4)
     systemctl restart s-ui 2>/dev/null || true
   fi
 
   systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || true
-  echo -e "  ${G}[✓] 已成功关闭隧道反代，所有服务已恢复公网 0.0.0.0 直连模式：${N}"
+  echo -e "  ${G}[✓] 已成功关闭隧道反代，所有服务已恢复公网 0.0.0.0 直连模式 (已还原备份配置)：${N}"
   echo -e "      • sout 管理面板: ${B}http://${public_ip}:8899/$(cat "${WORK_DIR}/basepath" 2>/dev/null || echo "")/${N}"
-  echo -e "      • s-ui 管理面板: ${B}http://${public_ip}:8443/app/${N}"
-  echo -e "      • s-ui 订阅地址: ${B}http://${public_ip}:8444/sub/${N}"
+  echo -e "      • s-ui 管理面板: ${B}http://${public_ip}:${final_wp}${final_wpath}${N}"
+  echo -e "      • s-ui 订阅地址: ${B}http://${public_ip}:${final_sp}${final_spath}${N}"
 }
 
 caddy_interactive_setup() {
