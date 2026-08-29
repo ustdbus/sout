@@ -178,7 +178,7 @@ select:focus,input:focus{outline:none;border-color:var(--accent)}
       <svg viewBox="0 0 24 24"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z"/><path d="M6 6h10"/><path d="M6 10h10"/></svg>
       SOCKS5 订阅源
     </button>
-    <button id="stopAllExitsBtn">全部停止</button>
+    <button id="stopAllExitsBtn">全部删除</button>
   </div>
 
   <div id="exitsContainer"></div>
@@ -858,11 +858,11 @@ $('#exportAll').onclick = async () => {
 $('#copyAllLinksBtn').onclick = () => copy($('#allLinksBox').value);
 
 $('#stopAllExitsBtn').onclick = async () => {
-  if(!confirm('停止全部 VPN 出口？')) return;
+  if(!confirm('确定删除全部出口？')) return;
   for(const x of (viewData.exits || [])){
     try{ await api('/api/stop?slot=' + x.slot, {method:'POST'}); }catch(e){}
   }
-  toast('已停止全部出口');
+  toast('已删除全部出口');
   poll();
 };
 
