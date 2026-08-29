@@ -546,21 +546,43 @@ reload_caddy_proxy() {
   if [[ ! -f "$CADDY_META" ]] || ! grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$CADDY_META" 2>/dev/null; then
     echo
     echo -e "  ${Y}================================================================${N}"
-    echo -e "  ${Y}💡 提示: 检测到您尚未配置 Cloudflare 隧道连接和Caddy流量代理！${N}"
-    echo -e "  ${Y}请先在菜单中选择配置隧道（选项 1 或选项 2）完成隧道与域名绑定后再使用此功能。${N}"
+    echo -e "  ${Y}💡 提示: 检测到您尚未配置 Cloudflare 隧道连接${N}"
+    echo -e "  ${Y}请先在菜单中选择配置隧道完成隧道配置，后再使用此功能。${N}"
     echo -e "  ${Y}================================================================${N}"
     return
   fi
 
   echo
-  echo -e "  ${B}[+] 正在扫描并重新识别各组件 (sout / s-ui / 节点) 最新路径与端口...${N}"
+  echo -e "  ${B}[+] 正在扫描并重新识别各组件 (隧道/sout/s-ui/节点) 最新路径与端口...${N}"
 
-  local domain tunnel_port sout_p sui_p sub_p ws_p sout_port sui_port node_port
+  local domain tunnel_port sout_p sui_p sub_p ws_p sout_port sui_port node_port meta_mode
+  meta_mode=$(grep -oE '"mode"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   domain=$(grep -oE '"domain"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   tunnel_port=$(grep -oE '"tunnel_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
+
+  # 0. 动态探测 Cloudflare 隧道的实时端口与活跃域名
+  if [[ -f /etc/systemd/system/cloudflared.service ]]; then
+    local probed_cf_port
+    probed_cf_port=$(grep -oE 'http://127\.0\.0\.1:[0-9]+' /etc/systemd/system/cloudflared.service 2>/dev/null | awk -F: '{print $3}' | head -1)
+    [[ -n "$probed_cf_port" ]] && tunnel_port="$probed_cf_port"
+  fi
   [[ -z "$tunnel_port" ]] && tunnel_port="8081"
 
-  # 1. 动态探测并自动纠偏 sout 面板配置 (确保监听 127.0.0.1)
+  if [[ "$meta_mode" == "quick_tunnel" ]] || [[ "$domain" == *trycloudflare.com* ]]; then
+    echo -e "  [+] 正在探测 Cloudflare 临时隧道当前活跃域名..."
+    local cur_quick_dom
+    cur_quick_dom=$(get_quick_tunnel_domain)
+    if [[ -n "$cur_quick_dom" ]]; then
+      domain="$cur_quick_dom"
+      echo -e "  ${G}[✓] 成功识别到当前活跃域名: https://${domain}${N}"
+    else
+      echo -e "  ${D}[*] 沿用已有隧道域名: https://${domain}${N}"
+    fi
+  else
+    echo -e "  [+] 识别到固定托管域名: https://${domain} (回源端口: ${tunnel_port})"
+  fi
+
+  # 1. 动态探测并自动纠偏 sout 面板配置 (确保监听 127.0.0.1 并更新完整 URL)
   sout_port="8899"
   local sout_needs_restart=0
   if [[ -f "${WORK_DIR}/settings.json" ]]; then
@@ -572,10 +594,16 @@ try:
         d = json.load(f)
     p = d.get('port', 8899)
     la = d.get('listen_addr', '')
+    purl = d.get('panel_url', '')
+    target_url = 'https://${domain}'
     changed = False
     if la != '127.0.0.1':
         d['listen_addr'] = '127.0.0.1'
         changed = True
+    if purl != target_url:
+        d['panel_url'] = target_url
+        changed = True
+    if changed:
         with open('${WORK_DIR}/settings.json', 'w') as f:
             json.dump(d, f, indent=2)
     print(f'{p}|{changed}')
@@ -590,14 +618,17 @@ except Exception:
   sout_p=$(grep -oE '"sout_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   [[ -z "$sout_p" ]] && sout_p="sout"
   if [[ "$sout_needs_restart" -eq 1 ]]; then
-    echo -e "  [+] 检测到 sout 监听地址不是 127.0.0.1，已自动修正为 127.0.0.1 并重启服务..."
+    echo -e "  [+] 检测到 sout 监听地址/面板URL需要更新，已自动修正并重启服务..."
     systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || true
   fi
 
-  # 2. 动态探测并自动纠偏 s-ui 面板配置 (确保监听 127.0.0.1)
+  # 2. 动态探测并自动纠偏 s-ui 面板配置 (确保监听 127.0.0.1 并更新 webURI/subURI)
   sui_port="2096"
   sui_p=$(grep -oE '"sui_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   [[ -z "$sui_p" ]] && sui_p="sui"
+  sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+  [[ -z "$sub_p" ]] && sub_p="sub"
+
   local sui_needs_restart=0
   if [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
     local sui_info
@@ -618,6 +649,9 @@ cur.execute(\"SELECT value FROM settings WHERE key='subListen'\")
 r4 = cur.fetchone()
 s_listen = r4[0] if r4 and r4[0] else ''
 
+target_web_uri = 'https://${domain}/' + path.strip('/') + '/'
+target_sub_uri = 'https://${domain}/${sub_p}/'
+
 changed = False
 if w_listen != '127.0.0.1':
     cur.execute(\"UPDATE settings SET value='127.0.0.1' WHERE key='webListen'\")
@@ -625,6 +659,9 @@ if w_listen != '127.0.0.1':
 if s_listen != '127.0.0.1':
     cur.execute(\"UPDATE settings SET value='127.0.0.1' WHERE key='subListen'\")
     changed = True
+
+cur.execute(\"UPDATE settings SET value=? WHERE key='webURI'\", (target_web_uri,))
+cur.execute(\"UPDATE settings SET value=? WHERE key='subURI'\", (target_sub_uri,))
 
 if changed:
     con.commit()
