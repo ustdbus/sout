@@ -1299,7 +1299,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/cloudflared tunnel --protocol http2 --no-autoupdate run --token ${token}
+ExecStart=/usr/local/bin/cloudflared tunnel --protocol quic --no-autoupdate run --token ${token}
 Restart=always
 RestartSec=5s
 LimitNOFILE=65536
