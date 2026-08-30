@@ -218,6 +218,102 @@ DEFAULT_PORT=8899
 
 R='\033[31m'; G='\033[32m'; Y='\033[33m'; B='\033[34m'; D='\033[90m'; N='\033[0m'
 
+# ==============================================================================
+# 系统内核与网络缓冲区参数自动调优 / 备份 / 还原
+# ==============================================================================
+SYSCTL_BACKUP="${WORK_DIR}/sysctl_backup.conf"
+
+apply_sysctl_optimization() {
+  mkdir -p "$WORK_DIR" /etc/sysctl.d 2>/dev/null || true
+
+  # 1. 备份原系统参数（仅首次备份，避免覆盖原始值）
+  if [[ ! -f "$SYSCTL_BACKUP" ]]; then
+    local keys=(
+      "net.core.rmem_max"
+      "net.core.wmem_max"
+      "net.core.rmem_default"
+      "net.core.wmem_default"
+      "net.core.netdev_max_backlog"
+      "net.core.somaxconn"
+      "net.ipv4.udp_mem"
+      "net.ipv4.udp_rmem_min"
+      "net.ipv4.udp_wmem_min"
+      "net.core.default_qdisc"
+      "net.ipv4.tcp_congestion_control"
+    )
+    : > "$SYSCTL_BACKUP"
+    for k in "${keys[@]}"; do
+      local val
+      val=$(sysctl -n "$k" 2>/dev/null || true)
+      if [[ -n "$val" ]]; then
+        echo "${k}=${val}" >> "$SYSCTL_BACKUP"
+      fi
+    done
+  fi
+
+  # 2. 根据内存大小动态选择缓冲区
+  local mem_total_mb=512
+  if [[ -f /proc/meminfo ]]; then
+    local mem_kb
+    mem_kb=$(grep -i 'MemTotal' /proc/meminfo | awk '{print $2}')
+    [[ -n "$mem_kb" && "$mem_kb" -gt 0 ]] && mem_total_mb=$(( mem_kb / 1024 ))
+  fi
+
+  local rmem_max=4194304
+  local wmem_max=4194304
+  local udp_mem="4096 8192 16384"
+  if [[ $mem_total_mb -gt 512 ]]; then
+    rmem_max=8388608
+    wmem_max=8388608
+    udp_mem="8192 16384 32768"
+  fi
+
+  # 3. 尝试加载 BBR 模块
+  modprobe tcp_bbr >/dev/null 2>&1 || true
+
+  # 4. 写入独立 sysctl 配置文件与 /etc/sysctl.conf
+  local conf_content="# === SOUT SYSCTL START ===
+net.core.rmem_max = ${rmem_max}
+net.core.wmem_max = ${wmem_max}
+net.core.rmem_default = 262144
+net.core.wmem_default = 262144
+net.core.netdev_max_backlog = 2500
+net.core.somaxconn = 4096
+net.ipv4.udp_mem = ${udp_mem}
+net.ipv4.udp_rmem_min = 8192
+net.ipv4.udp_wmem_min = 8192
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+# === SOUT SYSCTL END ==="
+
+  echo "$conf_content" > /etc/sysctl.d/99-sout.conf 2>/dev/null || true
+
+  if [[ -f /etc/sysctl.conf ]]; then
+    sed -i '/# === SOUT SYSCTL START ===/,/# === SOUT SYSCTL END ===/d' /etc/sysctl.conf 2>/dev/null || true
+    echo "$conf_content" >> /etc/sysctl.conf 2>/dev/null || true
+  fi
+
+  # 5. 生效参数（容器无权修改时静默忽略）
+  sysctl -p /etc/sysctl.d/99-sout.conf >/dev/null 2>&1 || sysctl -p >/dev/null 2>&1 || true
+}
+
+restore_sysctl() {
+  if [[ -f "$SYSCTL_BACKUP" ]]; then
+    while IFS='=' read -r key val || [[ -n "$key" ]]; do
+      [[ -z "$key" || "$key" =~ ^# ]] && continue
+      sysctl -w "${key}=${val}" >/dev/null 2>&1 || true
+    done < "$SYSCTL_BACKUP"
+    rm -f "$SYSCTL_BACKUP" 2>/dev/null || true
+  fi
+
+  rm -f /etc/sysctl.d/99-sout.conf 2>/dev/null || true
+
+  if [[ -f /etc/sysctl.conf ]]; then
+    sed -i '/# === SOUT SYSCTL START ===/,/# === SOUT SYSCTL END ===/d' /etc/sysctl.conf 2>/dev/null || true
+    sysctl -p >/dev/null 2>&1 || true
+  fi
+}
+
 need_root() {
   if [[ $EUID -ne 0 ]]; then
     echo -e "${R}请使用 root 权限运行此脚本 (sudo sout)${N}"
@@ -233,9 +329,9 @@ check_sui() {
 }
 
 svc_status()     { systemctl is-active "$UNIT" 2>/dev/null || echo inactive; }
-svc_start()      { systemctl start "$UNIT"; }
+svc_start()      { apply_sysctl_optimization; systemctl start "$UNIT"; }
 svc_stop()       { systemctl stop "$UNIT"; }
-svc_restart()    { systemctl restart "$UNIT"; }
+svc_restart()    { apply_sysctl_optimization; systemctl restart "$UNIT"; }
 svc_reload()     { systemctl daemon-reload; }
 svc_disable()    { systemctl disable "$UNIT"; }
 svc_logs()       { journalctl -u "$UNIT" -n "${1:-40}" --no-pager; }
@@ -974,6 +1070,9 @@ if not orig_spath.endswith('/'): orig_spath += '/'
     ip link del "$l" 2>/dev/null || true
   done
 
+  # 还原内核与网络系统参数备份
+  restore_sysctl
+
   rm -f "/etc/systemd/system/sout.service" "/etc/systemd/system/fanout.service" "/etc/init.d/sout" "/etc/init.d/fanout"
   rm -f "$BIN" /usr/local/bin/sout /usr/local/bin/fanout /usr/local/bin/f /usr/local/bin/sout-cli
   rm -rf "$WORK_DIR" /var/lib/sout /var/lib/fanout 2>/dev/null || true
@@ -1037,6 +1136,9 @@ uninstall_all() {
   rm -f /etc/systemd/system/caddy.service /etc/systemd/system/cloudflared.service 2>/dev/null || true
   rm -f /etc/init.d/caddy /etc/init.d/cloudflared 2>/dev/null || true
   rm -rf /etc/caddy /var/lib/caddy /var/log/caddy /usr/local/bin/caddy /usr/local/bin/cloudflared /usr/local/bin/sout-quick-tunnel /var/log/cloudflared* /home/acme 2>/dev/null || true
+
+  # 还原内核与网络系统参数备份
+  restore_sysctl
 
   # 彻底清理 sout 二进制与工作目录
   rm -f "/etc/systemd/system/sout.service" "/etc/systemd/system/fanout.service" "/etc/init.d/sout" "/etc/init.d/fanout"
@@ -2509,6 +2611,7 @@ menu() {
 }
 
 need_root
+apply_sysctl_optimization
 
 case "${1:-}" in
   setup_tunnel|setup_caddy)
