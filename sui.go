@@ -2077,11 +2077,7 @@ func (s *SUI) ResetClient(id int, email string, tunnels []*Tunnel) error {
 }
 
 func (s *SUI) OnTunnelsChanged(tunnels []*Tunnel) error {
-	if err := s.syncOutbounds(tunnels); err != nil {
-		return err
-	}
-	s.reconcileBranchBindings(tunnels)
-	return s.cleanStaleRoutesAndClients(tunnels)
+	return s.syncOutbounds(tunnels)
 }
 
 // reconcileBranchBindings 自动将持久化保存的分流绑定恢复到活跃隧道
