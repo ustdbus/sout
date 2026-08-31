@@ -229,6 +229,7 @@ func (m *Manager) tryCandidates(t *Tunnel, notify bool) bool {
 			}
 			return true
 		}
+		log.Printf("槽位 %d 尝试候选节点 %s (%s, %s) 失败: %v", t.Slot, node.HostName, node.IP, node.CountryCode, err)
 	}
 	return false
 }
