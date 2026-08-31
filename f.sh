@@ -2277,12 +2277,12 @@ for r in rows:
                     addrs[0]['server'] = domain_val
                     if 'tls' in addrs[0] and isinstance(addrs[0]['tls'], dict):
                         addrs[0]['tls']['server_name'] = domain_val
-                    cur.execute('UPDATE inbounds SET addrs=? WHERE id=?', (json.dumps(addrs), ib_id))
+                    cur.execute('UPDATE inbounds SET addrs=? WHERE id=?', (sqlite3.Binary(json.dumps(addrs).encode('utf-8')), ib_id))
                     
                 if isinstance(tr, dict) and 'headers' in tr and isinstance(tr['headers'], dict):
                     tr['headers']['Host'] = domain_val
                     opt['transport'] = tr
-                    cur.execute('UPDATE inbounds SET options=? WHERE id=?', (json.dumps(opt), ib_id))
+                    cur.execute('UPDATE inbounds SET options=? WHERE id=?', (sqlite3.Binary(json.dumps(opt).encode('utf-8')), ib_id))
                     
                 con.commit()
         except Exception:
