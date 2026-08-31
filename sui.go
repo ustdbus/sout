@@ -1052,7 +1052,7 @@ func ensureSUIClientProtocolConfig(clientCfgObj map[string]map[string]any, proto
 	clientCfgObj[proto] = vals
 }
 
-// CloneToTunnels 采用槽位绑定单端口多用户架构：优先复用已绑定到该槽位的任何 Client，避免重复创建
+// CloneToTunnels 为每个指定隧道创建/更新分流客户端并绑定出站
 func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) ([]int, error) {
 	inboundsObj, err := s.callAPI(http.MethodGet, fmt.Sprintf("inbounds?id=%d", templateID), nil)
 	if err != nil {
@@ -1101,16 +1101,6 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		}
 	}
 
-	// 读取当前模板入站下的所有已有 Client，供反向溯源复用
-	allClientsJSON, _ := s.sqliteJSONQuery(fmt.Sprintf(
-		"SELECT id, name, remark, enable, inbounds, links, config FROM clients WHERE %d IN (SELECT json_each.value FROM json_each(clients.inbounds));",
-		templateID,
-	))
-	var tmplClientsAll []suiDBClient
-	_ = json.Unmarshal(allClientsJSON, &tmplClientsAll)
-
-	boundUserMap, _ := s.getBoundUserRoutes()
-
 	var createdPorts []int
 	for _, host := range hosts {
 		var targetTunnel *Tunnel
@@ -1150,50 +1140,16 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		})
 
 		clientRemark := fmt.Sprintf("%s%s", cName, poolName)
+		clientName := fmt.Sprintf("soutu%d_%s", templateID, sanitizeTag(host))
 
-		// 1. 优先反向溯源：检查该入站下是否已有任何 Client（即便用户在 s-ui 中改了名字）已经路由到了该槽位
-		var reusedClientName string
-		var reusedClientID int
-		for _, c := range tmplClientsAll {
-			target := boundUserMap[c.Name]
-			if target == slotTag || target == host || sanitizeTag(target) == sanitizeTag(host) {
-				reusedClientName = c.Name
-				reusedClientID = c.ID
-				break
-			}
-		}
-
-		// 2. 如果没有路由绑定记录，再检查是否有标准槽位名字匹配
-		standardName := fmt.Sprintf("soutu%d_slot%d", templateID, slot)
-		clientName := standardName
-		if reusedClientName != "" {
-			clientName = reusedClientName
-		} else {
-			for _, c := range tmplClientsAll {
-				if c.Name == standardName || (strings.HasPrefix(c.Name, fmt.Sprintf("soutu%d", templateID)) && strings.HasSuffix(c.Name, sanitizeTag(host))) {
-					clientName = c.Name
-					reusedClientID = c.ID
-					break
-				}
-			}
-		}
-
-		clientID := reusedClientID
-		existingOK := false
+		existing, existingOK, _ := s.apiClientByName(clientName)
+		clientID := 0
 		var existingFull map[string]any
-		if clientID > 0 {
-			existingOK = true
-			if full, ferr := s.apiClients(clientID); ferr == nil && len(full) > 0 {
-				existingFull = full[0]
-			}
-		} else {
-			if existing, ok, _ := s.apiClientByName(clientName); ok {
-				existingOK = true
-				if idVal, ok := existing["id"].(float64); ok {
-					clientID = int(idVal)
-					if full, ferr := s.apiClients(clientID); ferr == nil && len(full) > 0 {
-						existingFull = full[0]
-					}
+		if existingOK {
+			if idVal, ok := existing["id"].(float64); ok {
+				clientID = int(idVal)
+				if full, ferr := s.apiClients(clientID); ferr == nil && len(full) > 0 {
+					existingFull = full[0]
 				}
 			}
 		}
