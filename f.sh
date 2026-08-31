@@ -73,6 +73,11 @@ _openrc_force_stop() {
 }
 
 systemctl() {
+  if [[ "$INIT_SYS" == "systemd" ]]; then
+    command systemctl "$@"
+    return $?
+  fi
+
   local action="$1"
   shift
   # 过滤常用的 systemctl 参数
@@ -81,16 +86,6 @@ systemctl() {
   done
   local name="${1:-}"
   [[ -n "$name" ]] && name="${name%.service}"
-
-  if [[ "$INIT_SYS" == "systemd" ]]; then
-    # 调用真实 systemctl
-    if [[ -z "$name" && ( "$action" == "daemon-reload" || "$action" == "reset-failed" ) ]]; then
-      command systemctl "$action" "$@"
-    else
-      command systemctl "$action" "$name" "$@"
-    fi
-    return $?
-  fi
 
   case "$action" in
     daemon-reload|reset-failed)
