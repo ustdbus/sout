@@ -1119,19 +1119,23 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 			}
 		}
 
-		existing, existingOK, err := s.apiClientByName(clientName)
-		if err != nil {
-			return createdPorts, fmt.Errorf("查询分流客户端失败: %w", err)
-		}
 		clientID := reusedClientID
+		existingOK := false
 		var existingFull map[string]any
-		if existingOK {
-			if idVal, ok := existing["id"].(float64); ok {
-				clientID = int(idVal)
-			}
-			full, ferr := s.apiClients(clientID)
-			if ferr == nil && len(full) > 0 {
+		if clientID > 0 {
+			existingOK = true
+			if full, ferr := s.apiClients(clientID); ferr == nil && len(full) > 0 {
 				existingFull = full[0]
+			}
+		} else {
+			if existing, ok, _ := s.apiClientByName(clientName); ok {
+				existingOK = true
+				if idVal, ok := existing["id"].(float64); ok {
+					clientID = int(idVal)
+					if full, ferr := s.apiClients(clientID); ferr == nil && len(full) > 0 {
+						existingFull = full[0]
+					}
+				}
 			}
 		}
 		preserveCred := false
