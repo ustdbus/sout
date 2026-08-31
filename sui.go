@@ -998,6 +998,60 @@ func removeBranchBinding(workDir string, templateID int, host string, slot int) 
 	}
 }
 
+func ensureSUIClientProtocolConfig(clientCfgObj map[string]map[string]any, proto string, clientName string, uuid string, pass string, flow string) {
+	if proto == "" {
+		proto = "vless"
+	}
+	proto = strings.ToLower(strings.TrimSpace(proto))
+	vals, exists := clientCfgObj[proto]
+	if !exists || vals == nil {
+		vals = make(map[string]any)
+	}
+	vals["name"] = clientName
+	switch proto {
+	case "vless":
+		if _, ok := vals["uuid"]; !ok || vals["uuid"] == "" {
+			vals["uuid"] = uuid
+		}
+		if flow != "" {
+			vals["flow"] = flow
+		}
+	case "vmess":
+		if _, ok := vals["uuid"]; !ok || vals["uuid"] == "" {
+			vals["uuid"] = uuid
+		}
+		if _, ok := vals["alter_id"]; !ok {
+			vals["alter_id"] = 0
+		}
+	case "tuic":
+		if _, ok := vals["uuid"]; !ok || vals["uuid"] == "" {
+			vals["uuid"] = uuid
+		}
+		if _, ok := vals["password"]; !ok || vals["password"] == "" {
+			vals["password"] = pass
+		}
+	case "trojan", "hysteria2", "hy2", "shadowtls":
+		if _, ok := vals["password"]; !ok || vals["password"] == "" {
+			vals["password"] = pass
+		}
+	case "shadowsocks":
+		if _, ok := vals["password"]; !ok || vals["password"] == "" {
+			vals["password"] = pass
+		}
+		if _, ok := vals["method"]; !ok || vals["method"] == "" {
+			vals["method"] = "aes-128-gcm"
+		}
+	default:
+		if _, ok := vals["username"]; !ok || vals["username"] == "" {
+			vals["username"] = clientName
+		}
+		if _, ok := vals["password"]; !ok || vals["password"] == "" {
+			vals["password"] = pass
+		}
+	}
+	clientCfgObj[proto] = vals
+}
+
 // CloneToTunnels 采用槽位绑定单端口多用户架构：优先复用已绑定到该槽位的任何 Client，避免重复创建
 func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) ([]int, error) {
 	inboundsObj, err := s.callAPI(http.MethodGet, fmt.Sprintf("inbounds?id=%d", templateID), nil)
@@ -1017,6 +1071,11 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		return nil, fmt.Errorf("未找到模板入站 %d", templateID)
 	}
 	tpl := inboundsList[0]
+	tplType, _ := tpl["type"].(string)
+	tplType = strings.ToLower(strings.TrimSpace(tplType))
+	if tplType == "" {
+		tplType = "vless"
+	}
 	origTag, _ := tpl["tag"].(string)
 	if origTag == "" {
 		origTag = fmt.Sprintf("inbound-%d", templateID)
@@ -1111,7 +1170,7 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 			clientName = reusedClientName
 		} else {
 			for _, c := range tmplClientsAll {
-				if c.Name == standardName || strings.HasPrefix(c.Name, fmt.Sprintf("soutu%d", templateID)) && strings.HasSuffix(c.Name, sanitizeTag(host)) {
+				if c.Name == standardName || (strings.HasPrefix(c.Name, fmt.Sprintf("soutu%d", templateID)) && strings.HasSuffix(c.Name, sanitizeTag(host))) {
 					clientName = c.Name
 					reusedClientID = c.ID
 					break
@@ -1151,25 +1210,20 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 				preserveCred = true
 			}
 		}
-		tmplJSON, _ := s.sqliteJSONQuery(fmt.Sprintf("SELECT config FROM clients WHERE enable=1 AND %d IN (SELECT json_each.value FROM json_each(clients.inbounds)) LIMIT 1;", templateID))
-		if string(tmplJSON) == "[]" || len(tmplJSON) == 0 {
-			tmplJSON, _ = s.sqliteJSONQuery("SELECT config FROM clients WHERE enable=1 AND name NOT LIKE 'soutu%' AND name NOT LIKE 'sout-u-%' AND name NOT LIKE 'fanoutu%' AND name NOT LIKE 'fanout-u-%' LIMIT 1;")
-		}
-		var tmplClients []suiDBClient
-		_ = json.Unmarshal(tmplJSON, &tmplClients)
-		if len(tmplClients) > 0 && len(clientCfgObj) == 0 {
-			clientCfgObj = parseSUIClientConfig(tmplClients[0].Config)
-		}
 		if len(clientCfgObj) == 0 {
-			clientCfgObj = map[string]map[string]any{
-				"vless": {
-					"name": clientName,
-					"uuid": newUUID,
-					"flow": baseFlow,
-				},
+			// 优先读取同入站下的已有客户端配置
+			tmplJSON, _ := s.sqliteJSONQuery(fmt.Sprintf("SELECT config FROM clients WHERE enable=1 AND %d IN (SELECT json_each.value FROM json_each(clients.inbounds)) LIMIT 1;", templateID))
+			if string(tmplJSON) == "[]" || len(tmplJSON) == 0 {
+				tmplJSON, _ = s.sqliteJSONQuery("SELECT config FROM clients WHERE enable=1 AND name NOT LIKE 'soutu%' AND name NOT LIKE 'sout-u-%' AND name NOT LIKE 'fanoutu%' AND name NOT LIKE 'fanout-u-%' LIMIT 1;")
 			}
-		} else {
-			// 仅遍历模板中真实存在的协议并替换凭据，绝不塞入未使用的冗余协议
+			var tmplClients []suiDBClient
+			_ = json.Unmarshal(tmplJSON, &tmplClients)
+			if len(tmplClients) > 0 {
+				clientCfgObj = parseSUIClientConfig(tmplClients[0].Config)
+			}
+		}
+		if len(clientCfgObj) > 0 {
+			// 遍历模板中真实存在的协议并替换凭据，绝不塞入未使用的冗余协议
 			for proto, vals := range clientCfgObj {
 				if vals == nil {
 					vals = make(map[string]any)
@@ -1201,6 +1255,9 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 				clientCfgObj[proto] = vals
 			}
 		}
+
+		// 确保当前模板入站协议在 clientCfgObj 中 100% 存在且结构合法
+		ensureSUIClientProtocolConfig(clientCfgObj, tplType, clientName, newUUID, newPass, baseFlow)
 
 		// 通过 s-ui 自身 API 保存/更新分流客户端，由 s-ui 自动生成订阅链接（含 ed/fp 等参数）
 		act := "new"
@@ -1242,6 +1299,7 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		createdPorts = append(createdPorts, listenPort)
 	}
 
+	s.restartSingBox()
 	s.syncSUIDatabaseLinks(hostPublicIP())
 	return createdPorts, nil
 }
