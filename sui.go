@@ -483,6 +483,9 @@ func isSUIOutboundTag(outbound string) bool {
 }
 
 func extractSUIHost(outbound string) string {
+	if strings.HasPrefix(outbound, "sout_slot") || strings.HasPrefix(outbound, "sout-slot") {
+		return outbound
+	}
 	if strings.HasPrefix(outbound, "sout-") {
 		return strings.TrimPrefix(outbound, "sout-")
 	}
