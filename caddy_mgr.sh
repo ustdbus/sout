@@ -698,34 +698,48 @@ print(f'{port}|{path}|{changed}')
     node_result=$(python3 -c "
 import sqlite3, json
 
+def to_str(v):
+    if isinstance(v, bytes): return v.decode('utf-8', errors='replace')
+    return str(v) if v is not None else ''
+
 db_path = '/usr/local/s-ui/db/s-ui.db'
 con = sqlite3.connect(db_path)
 cur = con.cursor()
-cur.execute(\"SELECT id, listen_port, listen, transport, tag, type FROM inbounds\")
+cur.execute('SELECT id, type, tag, options, addrs FROM inbounds')
 rows = cur.fetchall()
 con.close()
 
 found_port = ''
 found_path = ''
 
-# 遍历寻找 listen 为 127.0.0.1 且包含 ws 传输协议的隧道节点
+# 遍历寻找 listen 为 127.0.0.1 的隧道入站节点
 for r in rows:
-    ib_id, p, listen_ip, tr_str, tag, typ = r[0], r[1], r[2], r[3], r[4], r[5]
-    if listen_ip == '127.0.0.1':
-        try:
-            tr = json.loads(tr_str) if tr_str else {}
-        except:
-            tr = {}
-        if isinstance(tr, dict) and tr.get('type') == 'ws' and tr.get('path'):
-            found_port = str(p)
-            found_path = tr.get('path').strip('/')
-            break
-        elif tag == 'vmess-argo' or typ in ('vmess', 'vless'):
-            found_port = str(p)
-            if isinstance(tr, dict) and tr.get('path'):
-                found_path = tr.get('path').strip('/')
+    ib_id = r[0]
+    typ = to_str(r[1])
+    tag = to_str(r[2])
+    opt_raw = to_str(r[3])
+    addrs_raw = to_str(r[4])
+    
+    try:
+        opt = json.loads(opt_raw) if opt_raw else {}
+    except Exception:
+        opt = {}
+        
+    listen_ip = opt.get('listen', '')
+    port = opt.get('listen_port', 0)
+    tr = opt.get('transport', {})
+    path = tr.get('path', '') if isinstance(tr, dict) else ''
+    
+    # 只要节点监听在 127.0.0.1 且端口有效
+    if listen_ip == '127.0.0.1' and port > 0:
+        found_port = str(port)
+        if path:
+            found_path = path.strip('/')
+        else:
+            found_path = 'vlws'
+        break
 
-if found_port and found_path:
+if found_port:
     print(f'FOUND|{found_port}|{found_path}')
 else:
     print('CREATE')

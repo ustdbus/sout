@@ -2229,45 +2229,68 @@ print(f'{port}|{path}|{changed}')
     node_result=$(python3 -c "
 import sqlite3, json
 
+def to_str(v):
+    if isinstance(v, bytes): return v.decode('utf-8', errors='replace')
+    return str(v) if v is not None else ''
+
 db_path = '/usr/local/s-ui/db/s-ui.db'
 con = sqlite3.connect(db_path)
 cur = con.cursor()
-cur.execute(\"SELECT id, listen_port, listen, transport, tag, type, addrs FROM inbounds\")
+cur.execute('SELECT id, type, tag, options, addrs FROM inbounds')
 rows = cur.fetchall()
 
 found_port = ''
 found_path = ''
 
-# 遍历寻找 listen 为 127.0.0.1 且包含 ws 传输协议的隧道节点，并更新域名SNI
+# 遍历寻找 listen 为 127.0.0.1 的隧道入站节点
 for r in rows:
-    ib_id, p, listen_ip, tr_str, tag, typ, addrs_str = r[0], r[1], r[2], r[3], r[4], r[5], r[6]
-    if listen_ip == '127.0.0.1':
+    ib_id = r[0]
+    typ = to_str(r[1])
+    tag = to_str(r[2])
+    opt_raw = to_str(r[3])
+    addrs_raw = to_str(r[4])
+    
+    try:
+        opt = json.loads(opt_raw) if opt_raw else {}
+    except Exception:
+        opt = {}
+        
+    listen_ip = opt.get('listen', '')
+    port = opt.get('listen_port', 0)
+    tr = opt.get('transport', {})
+    path = tr.get('path', '') if isinstance(tr, dict) else ''
+    
+    # 只要节点监听在 127.0.0.1 且端口有效
+    if listen_ip == '127.0.0.1' and port > 0:
+        found_port = str(port)
+        if path:
+            found_path = path.strip('/')
+        else:
+            found_path = 'vlws'
+            
+        # 同步更新节点域名与 SNI 及 transport Header 中的 Host
         try:
-            tr = json.loads(tr_str) if tr_str else {}
-        except:
-            tr = {}
-        if isinstance(tr, dict) and tr.get('type') == 'ws' and tr.get('path'):
-            found_port = str(p)
-            found_path = tr.get('path').strip('/')
-            # 同步更新节点域名与SNI
-            try:
-                addrs = json.loads(addrs_str) if addrs_str else []
+            domain_val = '${domain}'
+            if domain_val:
+                addrs = json.loads(addrs_raw) if addrs_raw else []
                 if isinstance(addrs, list) and len(addrs) > 0:
-                    addrs[0]['server'] = '${domain}'
+                    addrs[0]['server'] = domain_val
                     if 'tls' in addrs[0] and isinstance(addrs[0]['tls'], dict):
-                        addrs[0]['tls']['server_name'] = '${domain}'
-                    cur.execute(\"UPDATE inbounds SET addrs=? WHERE id=?\", (json.dumps(addrs), ib_id))
-                    con.commit()
-            except Exception:
-                pass
-            break
-        elif tag == 'vmess-argo' or typ in ('vmess', 'vless'):
-            found_port = str(p)
-            if isinstance(tr, dict) and tr.get('path'):
-                found_path = tr.get('path').strip('/')
+                        addrs[0]['tls']['server_name'] = domain_val
+                    cur.execute('UPDATE inbounds SET addrs=? WHERE id=?', (json.dumps(addrs), ib_id))
+                    
+                if isinstance(tr, dict) and 'headers' in tr and isinstance(tr['headers'], dict):
+                    tr['headers']['Host'] = domain_val
+                    opt['transport'] = tr
+                    cur.execute('UPDATE inbounds SET options=? WHERE id=?', (json.dumps(opt), ib_id))
+                    
+                con.commit()
+        except Exception:
+            pass
+        break
 
 con.close()
-if found_port and found_path:
+if found_port:
     print(f'FOUND|{found_port}|{found_path}')
 else:
     print('CREATE')
@@ -2933,6 +2956,7 @@ case "${1:-}" in
   url)       change_panel_url ;;
   ssl)       change_ssl ;;
   caddy|cf|tunnel) caddy_menu ;;
+  reload_caddy) reload_caddy_proxy ;;
   cert|ssl_cf|acme|cf_ssl) cf_ssl_menu ;;
   view_cert) view_cf_ssl_certs ;;
   apply_cert) apply_cf_ssl_cert ;;
