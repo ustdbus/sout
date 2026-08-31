@@ -2368,15 +2368,14 @@ PYEOF
     fi
   fi
 
-  # 4. 重新生成纯净 Caddyfile (精确绑定当前检测到的隧道回源端口)
+  # 4. 重新生成纯净 Caddyfile (精确绑定当前检测到的隧道回源端口，并追加 SSL 域名自动续期块)
   mkdir -p /etc/caddy
   cat > /etc/caddy/Caddyfile <<EOF
 {
     admin off
-    auto_https off
 }
 
-:${tunnel_port} {
+http://127.0.0.1:${tunnel_port}, http://:${tunnel_port} {
     redir /${sout_p} /${sout_p}/ 308
     redir /${sui_p} /${sui_p}/ 308
     redir /${sub_p} /${sub_p}/ 308
@@ -2410,6 +2409,25 @@ PYEOF
     }
 }
 EOF
+
+  # 附加所有已申请的 Cloudflare SSL 域名 (由 Caddy 全自动管理续期)
+  if [[ -f "${WORK_DIR}/cf_ssl_domains.json" ]]; then
+    python3 -c '
+import json, os
+p = "/var/lib/sout/cf_ssl_domains.json"
+try:
+    with open(p) as f:
+        d = json.load(f)
+    with open("/etc/caddy/Caddyfile", "a") as cf:
+        for dom, info in d.items():
+            tok = info.get("token", "")
+            if dom and tok:
+                block = f"\n{dom} {{\n    tls {{\n        dns cloudflare \"{tok}\"\n    }}\n    respond \"SSL Ready\" 200\n}}\n"
+                cf.write(block)
+except Exception:
+    pass
+' 2>/dev/null || true
+  fi
 
   # 5. 更新 caddy_meta.json
   python3 -c "
@@ -2463,6 +2481,282 @@ with open(p, 'w') as f:
   fi
 }
 
+ensure_caddy_with_cloudflare() {
+  if command -v caddy >/dev/null 2>&1 && caddy list-modules 2>/dev/null | grep -q "dns.providers.cloudflare"; then
+    return 0
+  fi
+
+  echo -e "  ${B}[+] 正在获取集成 Cloudflare DNS 模块的 Caddy 反代服务...${N}"
+  local arch
+  arch=$(get_caddy_arch)
+  local tmp
+  tmp=$(mktemp -d)
+  local url="https://caddyserver.com/api/download?os=linux&arch=${arch}&p=github.com%2Fcaddy-dns%2Fcloudflare"
+
+  if ! curl -fsSL "$url" -o "$tmp/caddy"; then
+    echo -e "  ${Y}[!] 官方下载稍慢，正在重试...${N}"
+    if ! curl -fsSL "$url" -o "$tmp/caddy"; then
+      echo -e "  ${R}[✗] Caddy (Cloudflare 模块版) 下载失败，请检查网络连接${N}" >&2
+      rm -rf "$tmp"
+      return 1
+    fi
+  fi
+
+  systemctl stop caddy 2>/dev/null || true
+  install -m 755 "$tmp/caddy" /usr/local/bin/caddy
+  rm -rf "$tmp"
+
+  mkdir -p /etc/caddy /var/log/caddy /var/lib/caddy /home/acme
+  chmod 755 /etc/caddy /var/log/caddy
+  chmod 700 /home/acme
+  mkdir -p /etc/systemd/system
+
+  if [[ ! -f /etc/systemd/system/caddy.service ]]; then
+    cat > /etc/systemd/system/caddy.service <<'EOF'
+[Unit]
+Description=Caddy Web Server
+Documentation=https://caddyserver.com/docs/
+After=network.target network-online.target
+Requires=network-online.target
+
+[Service]
+Type=notify
+User=root
+Group=root
+ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
+ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force
+TimeoutStopSec=5s
+LimitNOFILE=1048576
+LimitNPROC=512
+PrivateTmp=true
+ProtectSystem=full
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload 2>/dev/null || true
+  fi
+
+  return 0
+}
+
+view_cf_ssl_certs() {
+  echo
+  echo -e "${B}========================================${N}"
+  echo -e "${B}  当前已申请的域名证书列表 (/home/acme)${N}"
+  echo -e "${B}========================================${N}"
+  local count=0
+  if [[ -d "/home/acme" ]]; then
+    for dir in /home/acme/*/; do
+      [[ ! -d "$dir" ]] && continue
+      local dom
+      dom=$(basename "$dir")
+      local cert_f="" key_f=""
+      if [[ -s "${dir}fullchain.pem" ]]; then
+        cert_f="${dir}fullchain.pem"
+      elif [[ -s "${dir}cert.crt" ]]; then
+        cert_f="${dir}cert.crt"
+      elif [[ -s "${dir}${dom}.crt" ]]; then
+        cert_f="${dir}${dom}.crt"
+      fi
+
+      if [[ -s "${dir}privkey.pem" ]]; then
+        key_f="${dir}privkey.pem"
+      elif [[ -s "${dir}private.key" ]]; then
+        key_f="${dir}private.key"
+      elif [[ -s "${dir}${dom}.key" ]]; then
+        key_f="${dir}${dom}.key"
+      fi
+
+      if [[ -n "$cert_f" && -n "$key_f" ]]; then
+        count=$((count + 1))
+        echo -e "  ${G}[${count}] 域名: ${B}${dom}${N}"
+        echo -e "      公钥路径: ${Y}${cert_f}${N}"
+        echo -e "      私钥路径: ${Y}${key_f}${N}"
+        if command -v openssl >/dev/null 2>&1; then
+          local issuer not_after
+          issuer=$(openssl x509 -in "$cert_f" -noout -issuer 2>/dev/null | sed 's/issuer=//' | sed 's/.*CN = //' | tr -d '\n')
+          not_after=$(openssl x509 -in "$cert_f" -noout -enddate 2>/dev/null | sed 's/notAfter=//')
+          if [[ -n "$not_after" ]]; then
+            local expire_sec now_sec diff_days
+            expire_sec=$(date -d "$not_after" +%s 2>/dev/null || date -jf "%b %d %T %Y %Z" "$not_after" +%s 2>/dev/null || echo "0")
+            now_sec=$(date +%s)
+            if (( expire_sec > now_sec )); then
+              diff_days=$(( (expire_sec - now_sec) / 86400 ))
+              local disp_issuer="${issuer:-Lets Encrypt}"
+              echo -e "      签发机构: ${C}${disp_issuer}${N}"
+              echo -e "      证书状态: ${G}有效 (剩余 ${diff_days} 天，到期时间: ${not_after})${N}"
+            else
+              echo -e "      证书状态: ${R}已过期 (到期时间: ${not_after})${N}"
+            fi
+          fi
+        fi
+        echo -e "      自动续期: ${G}默认开启 (由 Caddy 服务后台自动托管续期)${N}"
+        echo -e "  ${D}----------------------------------------${N}"
+      fi
+    done
+  fi
+  if (( count == 0 )); then
+    echo -e "  ${Y}暂未在 /home/acme 目录下检索到任何已申请的域名证书。${N}"
+    echo -e "  ${D}提示: 您可以通过选项 [2] 输入域名与 Cloudflare API 令牌立即申请。${N}"
+  else
+    echo -e "  共检索到 ${G}${count}${N} 个有效域名证书。"
+  fi
+  echo
+}
+
+apply_cf_ssl_cert() {
+  echo
+  echo -e "${B}========================================${N}"
+  echo -e "${B}  申请 Cloudflare SSL 证书 (Caddy DNS-01)${N}"
+  echo -e "${B}========================================${N}"
+  echo -e "  ${D}• 使用 Cloudflare DNS-01 验证，无需开放 80/443 端口即可申请${N}"
+  echo -e "  ${D}• 证书将自动存放在 /home/acme/<域名>/ 目录下，默认开启自动续期${N}"
+  echo
+
+  local domain cf_token
+  read -rp "  [1/2] 请输入要申请证书的域名 (如 example.com): " domain
+  domain=$(echo "$domain" | tr -d ' \r\n' | sed -e 's|^https\?://||' -e 's|/.*||')
+  if [[ -z "$domain" ]]; then
+    echo -e "  ${R}域名不能为空，已取消申请。${N}"
+    return
+  fi
+
+  # 检查本地是否已存在完整证书
+  local cert_dir="/home/acme/${domain}"
+  local cert_file="${cert_dir}/fullchain.pem"
+  local key_file="${cert_dir}/privkey.pem"
+  if [[ -s "$cert_file" && -s "$key_file" ]]; then
+    echo
+    echo -e "  ${Y}⚠️  检测到本地已存在域名 [${domain}] 的完整证书与私钥：${N}"
+    echo -e "      公钥: ${B}${cert_file}${N}"
+    echo -e "      私钥: ${B}${key_file}${N}"
+    if command -v openssl >/dev/null 2>&1; then
+      local not_after
+      not_after=$(openssl x509 -in "$cert_file" -noout -enddate 2>/dev/null | sed 's/notAfter=//')
+      [[ -n "$not_after" ]] && echo -e "      有效期至: ${G}${not_after}${N}"
+    fi
+    echo
+    read -rp "  是否要强制申请并覆盖本地所保存的证书？[y/N] (默认 N): " overwrite
+    overwrite=$(echo "$overwrite" | tr -d ' \r\n')
+    if [[ "$overwrite" != "y" && "$overwrite" != "Y" ]]; then
+      echo -e "  ${Y}已保留本地现有证书，取消重新申请。${N}"
+      return
+    fi
+    echo -e "  ${Y}用户确认强制覆盖，将重新向 Cloudflare 发起申请...${N}"
+  fi
+
+  echo
+  echo -e "  [2/2] 请输入 Cloudflare API 令牌 (API Token):"
+  echo -e "  ${D}提示: 该令牌需包含权限「区域.DNS / 编辑」 (Zone.DNS:Edit)${N}"
+  read -rp "  API Token: " cf_token
+  cf_token=$(echo "$cf_token" | tr -d ' \r\n')
+  if [[ -z "$cf_token" ]]; then
+    echo -e "  ${R}API Token 不能为空，已取消申请。${N}"
+    return
+  fi
+
+  echo
+  echo -e "  ${B}[1/4] 正在检查并准备 Caddy 服务 (集成 Cloudflare DNS 模块)...${N}"
+  ensure_caddy_with_cloudflare || { echo -e "  ${R}准备 Caddy 失败${N}"; return 1; }
+
+  echo -e "  ${B}[2/4] 正在创建证书存储目录: ${cert_dir}...${N}"
+  mkdir -p "$cert_dir"
+  chmod 700 /home/acme "$cert_dir"
+
+  echo -e "  ${B}[3/4] 正在配置 Caddy 并通过 Cloudflare DNS-01 验证发起申请...${N}"
+
+  # 记录域名到 Meta 文件供持久化和自动续期
+  local cf_domains_meta="${WORK_DIR}/cf_ssl_domains.json"
+  python3 -c '
+import json, os, time, sys
+p = sys.argv[1]
+dom = sys.argv[2]
+tok = sys.argv[3]
+cdir = sys.argv[4]
+d = {}
+if os.path.exists(p):
+    try:
+        with open(p) as f:
+            d = json.load(f)
+    except Exception:
+        pass
+d[dom] = {
+    "token": tok,
+    "applied_at": int(time.time()),
+    "cert_dir": cdir
+}
+with open(p, "w") as f:
+    json.dump(d, f, indent=2)
+try:
+    os.chmod(p, 0o600)
+except Exception:
+    pass
+' "$cf_domains_meta" "$domain" "$cf_token" "$cert_dir" 2>/dev/null || true
+
+  # 重新渲染主 Caddyfile (包含所有隧道反代规则 + 所有 SSL 域名申请与续期块)
+  reload_caddy_proxy
+
+  echo -e "  ${B}[4/4] 正在等待 Cloudflare DNS 解析生效并签发证书 (通常需 15-40 秒)...${N}"
+  local ok=false
+  for i in $(seq 1 35); do
+    echo -ne "  正在等待签发中... (${i}/35s)\r"
+    local found_crt found_key
+    found_crt=$(find /var/lib/caddy /root/.local/share/caddy /root/.config/caddy /etc/caddy -name "${domain}.crt" -size +100c 2>/dev/null | head -1)
+    found_key=$(find /var/lib/caddy /root/.local/share/caddy /root/.config/caddy /etc/caddy -name "${domain}.key" -size +100c 2>/dev/null | head -1)
+    if [[ -n "$found_crt" && -n "$found_key" ]]; then
+      cp -f "$found_crt" "${cert_dir}/fullchain.pem"
+      cp -f "$found_key" "${cert_dir}/privkey.pem"
+      cp -f "$found_crt" "${cert_dir}/cert.crt"
+      cp -f "$found_key" "${cert_dir}/private.key"
+      chmod 600 "${cert_dir}"/*
+      ok=true
+      break
+    fi
+    sleep 2
+  done
+  echo
+
+  if [[ "$ok" == "true" ]]; then
+    echo -e "  ${G}🎉 恭喜！Cloudflare SSL 证书申请成功！${N}"
+    echo -e "${B}========================================${N}"
+    echo -e "  托管域名:    ${B}${domain}${N}"
+    echo -e "  公钥路径:    ${G}${cert_dir}/fullchain.pem${N}"
+    echo -e "  私钥路径:    ${G}${cert_dir}/privkey.pem${N}"
+    echo -e "  备用公钥:    ${G}${cert_dir}/cert.crt${N}"
+    echo -e "  备用私钥:    ${G}${cert_dir}/private.key${N}"
+    echo -e "  自动续期:    ${G}已默认开启 (Caddy 后台静默自动续期)${N}"
+    echo -e "${B}========================================${N}"
+    echo -e "  ${D}提示: 您可以直接在 s-ui / X-UI 或 sout 面板中使用上述公钥和私钥路径。${N}"
+  else
+    echo -e "  ${Y}[!] 签发超时或正在后台排队验证，请查看 Caddy 运行日志：${N}"
+    journalctl -u caddy -n 25 --no-pager 2>/dev/null || true
+    echo
+    echo -e "  ${Y}若 Cloudflare DNS API 权限正确，Caddy 会在后台继续完成签发并自动存入 ${cert_dir}/${N}"
+  fi
+}
+
+cf_ssl_menu() {
+  while true; do
+    echo
+    echo -e "${B}========================================${N}"
+    echo -e "${B}  Cloudflare SSL 证书申请与管理 (Caddy)${N}"
+    echo -e "${B}========================================${N}"
+    echo -e "   1) 查看当前域名证书"
+    echo -e "   2) 申请证书 (Cloudflare DNS-01 API)"
+    echo -e "   0) 返回上级菜单"
+    echo -e "${D}----------------------------------------${N}"
+    read -rp "  请选择 [0-2]: " opt
+    case "$opt" in
+      1) view_cf_ssl_certs; pause ;;
+      2) apply_cf_ssl_cert; pause ;;
+      0) break ;;
+      *) ;;
+    esac
+  done
+}
+
 caddy_menu() {
   while true; do
     echo
@@ -2480,9 +2774,23 @@ caddy_menu() {
       tun_p=$(grep -oE '"tunnel_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
       [[ -z "$tun_p" ]] && tun_p="8081"
 
+      local cf_desc
+      if [[ "$cf_st" == "active" ]]; then
+        cf_desc="${G}运行中${N}"
+      else
+        cf_desc="${R}已停止 [${cf_st}]${N}"
+      fi
+
+      local caddy_desc
+      if [[ "$st" == "active" ]]; then
+        caddy_desc="${G}运行中${N}"
+      else
+        caddy_desc="${R}已停止 [${st}]${N}"
+      fi
+
       echo -e "  反代状态:      ${G}已开启 (Cloudflare 隧道模式)${N}"
-      echo -e "  隧道服务:      $([[ "$cf_st" == "active" ]] && echo -e "${G}运行中${N}" || echo -e "${R}已停止(${cf_st})${N}")"
-      echo -e "  Caddy 服务:    $([[ "$st" == "active" ]] && echo -e "${G}运行中${N}" || echo -e "${R}已停止(${st})${N}")"
+      echo -e "  隧道服务:      ${cf_desc}"
+      echo -e "  Caddy 服务:    ${caddy_desc}"
       echo -e "  托管域名:      ${B}${dom}${N}"
       echo -e "  本地回源:      ${Y}127.0.0.1:${tun_p}${N}"
       echo -e "${D}----------------------------------------${N}"
@@ -2581,10 +2889,11 @@ menu() {
     echo -e "   7) 面板 URL 设置     8) SSL / HTTPS 设置"
     echo -e "   9) 修改面板监听地址和端口"
     echo -e "  10) Cloudflare隧道/Caddy配置"
-    echo -e "  11) 检查/更新版本    12) 卸载"
+    echo -e "  11) 申请 Cloudflare SSL 证书"
+    echo -e "  12) 检查/更新版本    13) 卸载"
     echo -e "   0) 退出脚本"
     echo -e "${D}----------------------------------------${N}"
-    read -rp "  请选择 [0-12]: " choice
+    read -rp "  请选择 [0-13]: " choice
 
     case "$choice" in
       1) svc_start   && echo -e "\n  ${G}已启动${N}"; pause ;;
@@ -2597,8 +2906,9 @@ menu() {
       8) change_ssl; pause ;;
       9) change_listen_and_port; pause ;;
       10) caddy_menu; pause ;;
-      11) check_and_update; pause ;;
-      12) do_uninstall; pause ;;
+      11) cf_ssl_menu ;;
+      12) check_and_update; pause ;;
+      13) do_uninstall; pause ;;
       0) exit 0 ;;
       *) ;;
     esac
@@ -2623,12 +2933,15 @@ case "${1:-}" in
   url)       change_panel_url ;;
   ssl)       change_ssl ;;
   caddy|cf|tunnel) caddy_menu ;;
+  cert|ssl_cf|acme|cf_ssl) cf_ssl_menu ;;
+  view_cert) view_cf_ssl_certs ;;
+  apply_cert) apply_cf_ssl_cert ;;
   update)    check_and_update ;;
   upgrade)   check_and_update ;;
   uninstall) do_uninstall ;;
   "")        menu ;;
   *)
-    echo "用法: sout [start|stop|restart|status|log|info|listen|port|url|ssl|caddy|update|uninstall]"
+    echo "用法: sout [start|stop|restart|status|log|info|listen|port|url|ssl|caddy|cert|update|uninstall]"
     echo "直接在终端输入 sout 即可进入交互控制菜单"
     ;;
 esac
