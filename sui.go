@@ -878,6 +878,82 @@ func countryNameCN(code, name string) string {
 	}
 }
 
+type branchBinding struct {
+	TemplateID int    `json:"template_id"`
+	Slot       int    `json:"slot,omitempty"`
+	Host       string `json:"host,omitempty"`
+	Region     string `json:"region,omitempty"`
+	PoolType   string `json:"pool_type,omitempty"`
+}
+
+func branchBindingsPath(workDir string) string {
+	if workDir == "" {
+		workDir = "/var/lib/sout"
+	}
+	return filepath.Join(workDir, "branch_bindings.json")
+}
+
+func loadBranchBindings(workDir string) []branchBinding {
+	blob, err := os.ReadFile(branchBindingsPath(workDir))
+	if err != nil {
+		return nil
+	}
+	var list []branchBinding
+	_ = json.Unmarshal(blob, &list)
+	return list
+}
+
+func saveBranchBinding(workDir string, binding branchBinding) {
+	list := loadBranchBindings(workDir)
+	var updated []branchBinding
+	exists := false
+	for _, b := range list {
+		if b.TemplateID == binding.TemplateID && (b.Host == binding.Host || (b.Slot > 0 && b.Slot == binding.Slot)) {
+			updated = append(updated, binding)
+			exists = true
+		} else {
+			updated = append(updated, b)
+		}
+	}
+	if !exists {
+		updated = append(updated, binding)
+	}
+	data, err := json.MarshalIndent(updated, "", "  ")
+	if err == nil {
+		_ = os.WriteFile(branchBindingsPath(workDir), data, 0600)
+	}
+}
+
+func removeBranchBinding(workDir string, templateID int, host string, slot int) {
+	list := loadBranchBindings(workDir)
+	var updated []branchBinding
+	for _, b := range list {
+		match := false
+		if templateID > 0 && b.TemplateID == templateID {
+			if host != "" && (b.Host == host || sanitizeTag(b.Host) == sanitizeTag(host)) {
+				match = true
+			}
+			if slot > 0 && b.Slot == slot {
+				match = true
+			}
+		} else if templateID <= 0 {
+			if host != "" && (b.Host == host || sanitizeTag(b.Host) == sanitizeTag(host)) {
+				match = true
+			}
+			if slot > 0 && b.Slot == slot {
+				match = true
+			}
+		}
+		if !match {
+			updated = append(updated, b)
+		}
+	}
+	data, err := json.MarshalIndent(updated, "", "  ")
+	if err == nil {
+		_ = os.WriteFile(branchBindingsPath(workDir), data, 0600)
+	}
+}
+
 // CloneToTunnels 采用单端口多用户 (Client) 架构：在同一个母入站下创建分流 Client，并配置 sing-box 用户路由
 func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) ([]int, error) {
 	inboundsObj, err := s.callAPI(http.MethodGet, fmt.Sprintf("inbounds?id=%d", templateID), nil)
@@ -934,12 +1010,27 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 
 		cName := "海外"
 		poolName := "家宽"
+		slot := 0
+		region := ""
+		poolType := ""
 		if targetTunnel != nil {
 			cName = countryNameCN(targetTunnel.Node.CountryCode, targetTunnel.Node.Country)
 			if targetTunnel.IPType == "datacenter" {
 				poolName = "机房"
 			}
+			slot = targetTunnel.Slot
+			region = targetTunnel.TargetRegion
+			poolType = targetTunnel.TargetPoolType
 		}
+
+		// 持久化保存分流绑定意图，确保重启或节点轮换后自动恢复
+		saveBranchBinding(s.workDir, branchBinding{
+			TemplateID: templateID,
+			Slot:       slot,
+			Host:       host,
+			Region:     region,
+			PoolType:   poolType,
+		})
 
 		clientName := fmt.Sprintf("soutu%d%s", templateID, sanitizeTag(host))
 		clientRemark := fmt.Sprintf("%s%s", cName, poolName)
@@ -1161,6 +1252,7 @@ func (s *SUI) DeleteBranchesByHost(host string, tunnels []*Tunnel) error {
 		_ = s.BindUserRoute(userName, "", tunnels)
 	}
 
+	removeBranchBinding(s.workDir, 0, host, 0)
 	for userName, boundHost := range boundMap {
 		if boundHost == host || boundHost == oldHostTag {
 			deleteByName(userName)
@@ -1194,6 +1286,7 @@ func (s *SUI) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
 		if clientName != "" {
 			_ = s.apiDeleteClient(id)
 			_ = s.BindUserRoute(clientName, "", tunnels)
+			removeBranchBinding(s.workDir, 0, clientName, 0)
 			continue
 		}
 
@@ -1207,6 +1300,7 @@ func (s *SUI) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
 			}
 			_, _ = s.callAPI(http.MethodPost, "save", form)
 			_ = s.BindUserRoute(inbTag, "", tunnels)
+			removeBranchBinding(s.workDir, 0, inbTag, 0)
 		}
 	}
 
@@ -1911,23 +2005,70 @@ func (s *SUI) OnTunnelsChanged(tunnels []*Tunnel) error {
 	if err := s.syncOutbounds(tunnels); err != nil {
 		return err
 	}
+	s.reconcileBranchBindings(tunnels)
 	return s.cleanStaleRoutesAndClients(tunnels)
+}
+
+// reconcileBranchBindings 自动将持久化保存的分流绑定恢复到活跃隧道
+func (s *SUI) reconcileBranchBindings(tunnels []*Tunnel) {
+	bindings := loadBranchBindings(s.workDir)
+	if len(bindings) == 0 {
+		return
+	}
+	for _, b := range bindings {
+		if b.TemplateID <= 0 {
+			continue
+		}
+		var targetTunnel *Tunnel
+		for _, t := range tunnels {
+			if t.Status == "up" {
+				if b.Host != "" && (t.Node.HostName == b.Host || sanitizeTag(t.Node.HostName) == sanitizeTag(b.Host)) {
+					targetTunnel = t
+					break
+				}
+				if b.Slot > 0 && t.Slot == b.Slot {
+					targetTunnel = t
+					break
+				}
+			}
+		}
+		if targetTunnel == nil {
+			continue
+		}
+		clientName := fmt.Sprintf("soutu%d%s", b.TemplateID, sanitizeTag(targetTunnel.Node.HostName))
+		if _, ok, err := s.apiClientByName(clientName); err == nil && !ok {
+			log.Printf("自动自愈并恢复家宽分流绑定: 模板入站 %d -> 节点 %s (%s)", b.TemplateID, targetTunnel.Node.HostName, targetTunnel.Node.Country)
+			_, _ = s.CloneToTunnels(b.TemplateID, []string{targetTunnel.Node.HostName}, tunnels)
+		}
+	}
 }
 
 func isSplitUser(u string) bool {
 	return strings.HasPrefix(u, "soutu") || strings.HasPrefix(u, "sout-u-") || strings.HasPrefix(u, "fanoutu") || strings.HasPrefix(u, "fanout-u-")
 }
 
-// cleanStaleRoutesAndClients 自动清理不存在于活跃隧道中的残余路由规则与分流用户
+// cleanStaleRoutesAndClients 自动清理不存在于活跃隧道及持久化配置中的残余路由规则与分流用户
 func (s *SUI) cleanStaleRoutesAndClients(tunnels []*Tunnel) error {
 	activeTags := make(map[string]bool)
+	configuredHosts := make(map[string]bool)
 	for _, t := range tunnels {
-		if t.Status == "up" && t.Node.HostName != "" {
-			activeTags[suiTagPrefix+sanitizeTag(t.Node.HostName)] = true
+		if t.Node.HostName != "" {
+			configuredHosts[sanitizeTag(t.Node.HostName)] = true
+			if t.Status == "up" {
+				activeTags[suiTagPrefix+sanitizeTag(t.Node.HostName)] = true
+			}
 		}
 	}
 
-	// 1. 通过 s-ui API 清理失效分流客户端
+	// 保护持久化分流配置中的 Host
+	bindings := loadBranchBindings(s.workDir)
+	for _, b := range bindings {
+		if b.Host != "" {
+			configuredHosts[sanitizeTag(b.Host)] = true
+		}
+	}
+
+	// 1. 通过 s-ui API 清理失效分流客户端（仅清理已彻底被删除的无主客户端）
 	clients, err := s.apiClients(0)
 	if err == nil {
 		for _, c := range clients {
@@ -1936,9 +2077,8 @@ func (s *SUI) cleanStaleRoutesAndClients(tunnels []*Tunnel) error {
 				continue
 			}
 			matched := false
-			for tag := range activeTags {
-				hostPart := strings.TrimPrefix(tag, suiTagPrefix)
-				if strings.HasSuffix(name, hostPart) {
+			for hostTag := range configuredHosts {
+				if strings.HasSuffix(name, hostTag) {
 					matched = true
 					break
 				}
@@ -1950,7 +2090,6 @@ func (s *SUI) cleanStaleRoutesAndClients(tunnels []*Tunnel) error {
 			}
 		}
 	}
-
 
 	// 2. 清理 sing-box 路由规则中失效的 sout/fanout 分流项
 	configObj, err := s.callAPI(http.MethodGet, "config", nil)
@@ -1973,8 +2112,8 @@ func (s *SUI) cleanStaleRoutesAndClients(tunnels []*Tunnel) error {
 						continue
 					}
 					outbound, _ := ruleMap["outbound"].(string)
-					// 如果该规则指向 sout 出站但当前已无该活跃隧道，直接丢弃
-					if isSUIOutboundTag(outbound) && !activeTags[outbound] {
+					// 如果该规则指向 sout 出站但当前已无该配置的隧道，清理
+					if isSUIOutboundTag(outbound) && !configuredHosts[strings.TrimPrefix(outbound, suiTagPrefix)] {
 						changed = true
 						continue
 					}
@@ -1985,9 +2124,8 @@ func (s *SUI) cleanStaleRoutesAndClients(tunnels []*Tunnel) error {
 						for _, u := range users {
 							if isSplitUser(u) {
 								userMatched := false
-								for tag := range activeTags {
-									hostPart := strings.TrimPrefix(tag, suiTagPrefix)
-									if strings.HasSuffix(u, hostPart) {
+								for hostTag := range configuredHosts {
+									if strings.HasSuffix(u, hostTag) {
 										userMatched = true
 										break
 									}
