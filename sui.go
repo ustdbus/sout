@@ -471,21 +471,11 @@ func (s *SUI) getDBInboundIDs(inboundsRaw json.RawMessage) []int {
 	return ids
 }
 
-func slotOutboundTag(slot int) string {
-	if slot <= 0 {
-		slot = 1
-	}
-	return fmt.Sprintf("sout_slot%d", slot)
-}
-
 func isSUIOutboundTag(outbound string) bool {
 	return strings.HasPrefix(outbound, "sout") || strings.HasPrefix(outbound, "fanout")
 }
 
 func extractSUIHost(outbound string) string {
-	if strings.HasPrefix(outbound, "sout_slot") || strings.HasPrefix(outbound, "sout-slot") {
-		return outbound
-	}
 	if strings.HasPrefix(outbound, "sout-") {
 		return strings.TrimPrefix(outbound, "sout-")
 	}
@@ -499,22 +489,6 @@ func extractSUIHost(outbound string) string {
 		return strings.TrimPrefix(outbound, "fanout")
 	}
 	return outbound
-}
-
-func extractSUISlot(outbound string) int {
-	if strings.HasPrefix(outbound, "sout_slot") {
-		slotStr := strings.TrimPrefix(outbound, "sout_slot")
-		if val, err := strconv.Atoi(slotStr); err == nil && val > 0 {
-			return val
-		}
-	}
-	if strings.HasPrefix(outbound, "sout-slot") {
-		slotStr := strings.TrimPrefix(outbound, "sout-slot")
-		if val, err := strconv.Atoi(slotStr); err == nil && val > 0 {
-			return val
-		}
-	}
-	return 0
 }
 
 // getBoundUserRoutes 读取 sing-box 路由规则中按用户 (auth_user) 分流的映射
@@ -621,20 +595,10 @@ func (s *SUI) Inbounds(live map[string]bool) ([]Inbound, error) {
 			continue
 		}
 
-		hasBase := false
 		for _, c := range matchedClients {
 			boundHost := boundUserMap[c.Name]
 			isFanoutClient := strings.HasPrefix(c.Name, "soutu") || strings.HasPrefix(c.Name, "sout-u-") || strings.HasPrefix(c.Name, "fanoutu") || strings.HasPrefix(c.Name, "fanout-u-")
 			isBase := !isFanoutClient && boundHost == ""
-
-			// 基础直连去重：同一个入站下若有多个默认母用户，只在前端展示一条基础直连
-			if isBase {
-				if hasBase {
-					continue
-				}
-				hasBase = true
-			}
-
 			branchTag := item.Tag
 			if !isBase {
 				if c.Remark != "" {
@@ -664,7 +628,7 @@ func (s *SUI) Inbounds(live map[string]bool) ([]Inbound, error) {
 }
 
 // BindUserRoute 在 sing-box 路由规则中为指定 Client 用户绑定出口隧道
-func (s *SUI) BindUserRoute(userName string, targetTagOrHost string, tunnels []*Tunnel) error {
+func (s *SUI) BindUserRoute(userName string, hostname string, tunnels []*Tunnel) error {
 	if err := s.syncOutbounds(tunnels); err != nil {
 		return fmt.Errorf("同步 s-ui 出站失败: %w", err)
 	}
@@ -688,21 +652,12 @@ func (s *SUI) BindUserRoute(userName string, targetTagOrHost string, tunnels []*
 	}
 	rules, _ := route["rules"].([]any)
 
-	var targetOutbound string
-	if targetTagOrHost != "" {
-		if strings.HasPrefix(targetTagOrHost, "sout_slot") {
-			targetOutbound = targetTagOrHost
-		} else {
-			// 查找对应的隧道槽位
-			for _, t := range tunnels {
-				if t.Node.HostName == targetTagOrHost || sanitizeTag(t.Node.HostName) == sanitizeTag(targetTagOrHost) {
-					targetOutbound = slotOutboundTag(t.Slot)
-					break
-				}
-			}
-			if targetOutbound == "" {
-				targetOutbound = slotOutboundTag(1)
-			}
+	validOutboundTags := make(map[string]bool)
+	validOutboundTags["direct"] = true
+	validOutboundTags["block"] = true
+	for _, t := range tunnels {
+		if t.Node.HostName != "" {
+			validOutboundTags[suiTagPrefix+sanitizeTag(t.Node.HostName)] = true
 		}
 	}
 
@@ -713,13 +668,17 @@ func (s *SUI) BindUserRoute(userName string, targetTagOrHost string, tunnels []*
 			newRules = append(newRules, r)
 			continue
 		}
+		outbound, _ := ruleMap["outbound"].(string)
 		action, _ := ruleMap["action"].(string)
 		if action != "route" {
 			newRules = append(newRules, r)
 			continue
 		}
-		outbound, _ := ruleMap["outbound"].(string)
 		if isSUIOutboundTag(outbound) {
+			// 如果该出站已经在当前活跃隧道中失效/不存在，直接丢弃该悬空规则
+			if !validOutboundTags[outbound] && outbound != (suiTagPrefix+sanitizeTag(hostname)) {
+				continue
+			}
 			users := toSUITagSlice(ruleMap["auth_user"])
 			if len(users) == 0 {
 				users = toSUITagSlice(ruleMap["user"])
@@ -741,11 +700,11 @@ func (s *SUI) BindUserRoute(userName string, targetTagOrHost string, tunnels []*
 		newRules = append(newRules, r)
 	}
 
-	if targetOutbound != "" {
+	if hostname != "" {
 		newRules = append(newRules, map[string]any{
 			"action":    "route",
 			"auth_user": []string{userName},
-			"outbound":  targetOutbound,
+			"outbound":  suiTagPrefix + sanitizeTag(hostname),
 		})
 	}
 
@@ -795,20 +754,19 @@ func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {
 		_ = json.Unmarshal(outboundsObj, &list)
 	}
 
-	existingTags := make(map[string]int)
+	existingFanoutTags := make(map[string]int)
 	for _, ob := range list {
 		if isSUIOutboundTag(ob.Tag) {
-			existingTags[ob.Tag] = ob.ID
+			existingFanoutTags[ob.Tag] = ob.ID
 		}
 	}
 
 	activeTags := make(map[string]bool)
 	for _, t := range tunnels {
-		if t.Status != "up" || t.Slot <= 0 {
+		if t.Status != "up" {
 			continue
 		}
-		// 槽位出站永久固定为 sout_slot1, sout_slot2
-		tag := slotOutboundTag(t.Slot)
+		tag := suiTagPrefix + sanitizeTag(t.Node.HostName)
 		activeTags[tag] = true
 
 		cred := t.credential()
@@ -825,7 +783,7 @@ func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {
 		}
 
 		action := "new"
-		if id, exists := existingTags[tag]; exists {
+		if id, exists := existingFanoutTags[tag]; exists {
 			action = "edit"
 			outboundPayload["id"] = id
 		}
@@ -839,8 +797,7 @@ func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {
 		_, _ = s.callAPI(http.MethodPost, "save", form)
 	}
 
-	// 清理废弃的旧格式 soutvpn... 出站或已彻底移除槽位的出站
-	for tag, id := range existingTags {
+	for tag := range existingFanoutTags {
 		if !activeTags[tag] {
 			tagBytes, _ := json.Marshal(tag)
 			form := url.Values{
@@ -849,7 +806,6 @@ func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {
 				"data":   {string(tagBytes)},
 			}
 			_, _ = s.callAPI(http.MethodPost, "save", form)
-			_ = id
 		}
 	}
 
@@ -998,61 +954,74 @@ func removeBranchBinding(workDir string, templateID int, host string, slot int) 
 	}
 }
 
-func ensureSUIClientProtocolConfig(clientCfgObj map[string]map[string]any, proto string, clientName string, uuid string, pass string, flow string) {
-	if proto == "" {
-		proto = "vless"
+func ensureSUIClientProtocolConfig(clientCfgObj map[string]map[string]any, tplType string, clientName, uuidStr, passStr, flowStr string) {
+	if tplType == "" {
+		tplType = "vless"
 	}
-	proto = strings.ToLower(strings.TrimSpace(proto))
-	vals, exists := clientCfgObj[proto]
-	if !exists || vals == nil {
-		vals = make(map[string]any)
+	if clientCfgObj[tplType] == nil {
+		clientCfgObj[tplType] = make(map[string]any)
 	}
-	vals["name"] = clientName
-	switch proto {
+	targetCfg := clientCfgObj[tplType]
+	switch tplType {
 	case "vless":
-		if _, ok := vals["uuid"]; !ok || vals["uuid"] == "" {
-			vals["uuid"] = uuid
+		if _, ok := targetCfg["name"]; !ok {
+			targetCfg["name"] = clientName
 		}
-		if flow != "" {
-			vals["flow"] = flow
+		if _, ok := targetCfg["uuid"]; !ok {
+			targetCfg["uuid"] = uuidStr
+		}
+		if flowStr != "" {
+			targetCfg["flow"] = flowStr
 		}
 	case "vmess":
-		if _, ok := vals["uuid"]; !ok || vals["uuid"] == "" {
-			vals["uuid"] = uuid
+		if _, ok := targetCfg["name"]; !ok {
+			targetCfg["name"] = clientName
 		}
-		if _, ok := vals["alter_id"]; !ok {
-			vals["alter_id"] = 0
+		if _, ok := targetCfg["uuid"]; !ok {
+			targetCfg["uuid"] = uuidStr
+		}
+		if _, ok := targetCfg["alterId"]; !ok {
+			targetCfg["alterId"] = 0
 		}
 	case "tuic":
-		if _, ok := vals["uuid"]; !ok || vals["uuid"] == "" {
-			vals["uuid"] = uuid
+		if _, ok := targetCfg["name"]; !ok {
+			targetCfg["name"] = clientName
 		}
-		if _, ok := vals["password"]; !ok || vals["password"] == "" {
-			vals["password"] = pass
+		if _, ok := targetCfg["uuid"]; !ok {
+			targetCfg["uuid"] = uuidStr
 		}
-	case "trojan", "hysteria2", "hy2", "shadowtls":
-		if _, ok := vals["password"]; !ok || vals["password"] == "" {
-			vals["password"] = pass
+		if _, ok := targetCfg["password"]; !ok {
+			targetCfg["password"] = passStr
 		}
-	case "shadowsocks":
-		if _, ok := vals["password"]; !ok || vals["password"] == "" {
-			vals["password"] = pass
+	case "trojan", "hysteria2", "hy2":
+		if _, ok := targetCfg["name"]; !ok {
+			targetCfg["name"] = clientName
 		}
-		if _, ok := vals["method"]; !ok || vals["method"] == "" {
-			vals["method"] = "aes-128-gcm"
+		if _, ok := targetCfg["password"]; !ok {
+			targetCfg["password"] = passStr
 		}
-	default:
-		if _, ok := vals["username"]; !ok || vals["username"] == "" {
-			vals["username"] = clientName
+	case "shadowsocks", "ss":
+		if _, ok := targetCfg["name"]; !ok {
+			targetCfg["name"] = clientName
 		}
-		if _, ok := vals["password"]; !ok || vals["password"] == "" {
-			vals["password"] = pass
+		if _, ok := targetCfg["password"]; !ok {
+			targetCfg["password"] = passStr
+		}
+		if _, ok := targetCfg["method"]; !ok {
+			targetCfg["method"] = "2022-blake3-aes-128-gcm"
+		}
+	case "socks", "socks5", "http", "mixed":
+		if _, ok := targetCfg["username"]; !ok {
+			targetCfg["username"] = clientName
+		}
+		if _, ok := targetCfg["password"]; !ok {
+			targetCfg["password"] = passStr
 		}
 	}
-	clientCfgObj[proto] = vals
+	clientCfgObj[tplType] = targetCfg
 }
 
-// CloneToTunnels 为每个指定隧道创建/更新分流客户端并绑定出站
+// CloneToTunnels 采用单端口多用户 (Client) 架构：在同一个母入站下创建分流 Client，并配置 sing-box 用户路由
 func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) ([]int, error) {
 	inboundsObj, err := s.callAPI(http.MethodGet, fmt.Sprintf("inbounds?id=%d", templateID), nil)
 	if err != nil {
@@ -1105,7 +1074,7 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 	for _, host := range hosts {
 		var targetTunnel *Tunnel
 		for _, t := range tunnels {
-			if t.Node.HostName == host || sanitizeTag(t.Node.HostName) == sanitizeTag(host) {
+			if t.Node.HostName == host {
 				targetTunnel = t
 				break
 			}
@@ -1125,10 +1094,6 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 			region = targetTunnel.TargetRegion
 			poolType = targetTunnel.TargetPoolType
 		}
-		if slot <= 0 {
-			slot = 1
-		}
-		slotTag := slotOutboundTag(slot)
 
 		// 持久化保存分流绑定意图，确保重启或节点轮换后自动恢复
 		saveBranchBinding(s.workDir, branchBinding{
@@ -1139,18 +1104,22 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 			PoolType:   poolType,
 		})
 
+		clientName := fmt.Sprintf("soutu%d%s", templateID, sanitizeTag(host))
 		clientRemark := fmt.Sprintf("%s%s", cName, poolName)
-		clientName := fmt.Sprintf("soutu%d_%s", templateID, sanitizeTag(host))
 
-		existing, existingOK, _ := s.apiClientByName(clientName)
+		existing, existingOK, err := s.apiClientByName(clientName)
+		if err != nil {
+			return createdPorts, fmt.Errorf("查询分流客户端失败: %w", err)
+		}
 		clientID := 0
 		var existingFull map[string]any
 		if existingOK {
 			if idVal, ok := existing["id"].(float64); ok {
 				clientID = int(idVal)
-				if full, ferr := s.apiClients(clientID); ferr == nil && len(full) > 0 {
-					existingFull = full[0]
-				}
+			}
+			full, ferr := s.apiClients(clientID)
+			if ferr == nil && len(full) > 0 {
+				existingFull = full[0]
 			}
 		}
 		preserveCred := false
@@ -1166,20 +1135,25 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 				preserveCred = true
 			}
 		}
-		if len(clientCfgObj) == 0 {
-			// 优先读取同入站下的已有客户端配置
-			tmplJSON, _ := s.sqliteJSONQuery(fmt.Sprintf("SELECT config FROM clients WHERE enable=1 AND %d IN (SELECT json_each.value FROM json_each(clients.inbounds)) LIMIT 1;", templateID))
-			if string(tmplJSON) == "[]" || len(tmplJSON) == 0 {
-				tmplJSON, _ = s.sqliteJSONQuery("SELECT config FROM clients WHERE enable=1 AND name NOT LIKE 'soutu%' AND name NOT LIKE 'sout-u-%' AND name NOT LIKE 'fanoutu%' AND name NOT LIKE 'fanout-u-%' LIMIT 1;")
-			}
-			var tmplClients []suiDBClient
-			_ = json.Unmarshal(tmplJSON, &tmplClients)
-			if len(tmplClients) > 0 {
-				clientCfgObj = parseSUIClientConfig(tmplClients[0].Config)
-			}
+		tmplJSON, _ := s.sqliteJSONQuery(fmt.Sprintf("SELECT config FROM clients WHERE enable=1 AND %d IN (SELECT json_each.value FROM json_each(clients.inbounds)) LIMIT 1;", templateID))
+		if string(tmplJSON) == "[]" || len(tmplJSON) == 0 {
+			tmplJSON, _ = s.sqliteJSONQuery("SELECT config FROM clients WHERE enable=1 AND name NOT LIKE 'soutu%' AND name NOT LIKE 'sout-u-%' AND name NOT LIKE 'fanoutu%' AND name NOT LIKE 'fanout-u-%' LIMIT 1;")
 		}
-		if len(clientCfgObj) > 0 {
-			// 遍历模板中真实存在的协议并替换凭据，绝不塞入未使用的冗余协议
+		var tmplClients []suiDBClient
+		_ = json.Unmarshal(tmplJSON, &tmplClients)
+		if len(tmplClients) > 0 && len(clientCfgObj) == 0 {
+			clientCfgObj = parseSUIClientConfig(tmplClients[0].Config)
+		}
+		if len(clientCfgObj) == 0 {
+			clientCfgObj = map[string]map[string]any{
+				"vless": {
+					"name": clientName,
+					"uuid": newUUID,
+					"flow": baseFlow,
+				},
+			}
+		} else {
+			// 仅遍历模板中真实存在的协议并替换凭据，绝不塞入未使用的冗余协议
 			for proto, vals := range clientCfgObj {
 				if vals == nil {
 					vals = make(map[string]any)
@@ -1212,7 +1186,6 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 			}
 		}
 
-		// 确保当前模板入站协议在 clientCfgObj 中 100% 存在且结构合法
 		ensureSUIClientProtocolConfig(clientCfgObj, tplType, clientName, newUUID, newPass, baseFlow)
 
 		// 通过 s-ui 自身 API 保存/更新分流客户端，由 s-ui 自动生成订阅链接（含 ed/fp 等参数）
@@ -1248,7 +1221,7 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 			return createdPorts, fmt.Errorf("保存分流客户端 (%s) 失败: %w", clientName, err)
 		}
 
-		if err := s.BindUserRoute(clientName, slotTag, tunnels); err != nil {
+		if err := s.BindUserRoute(clientName, host, tunnels); err != nil {
 			return createdPorts, fmt.Errorf("绑定分流路由 (%s) 失败: %w", clientName, err)
 		}
 
@@ -1262,6 +1235,8 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 
 // syncSUIDatabaseLinks 通过 s-ui API 重新保存分流客户端，让 s-ui 自己生成权威订阅链接
 func (s *SUI) syncSUIDatabaseLinks(publicHost string) {
+	// s-ui 自身会在 /apiv2/save object=clients 时自动生成 clients.links（含 ed/fp 等参数）。
+	// 这里只对旧的/直连 SQLite 插入过的分流客户端做一次 API 重保存迁移，让 s-ui 重新生成权威链接。
 	allClients, err := s.apiClients(0)
 	if err != nil {
 		return
@@ -1302,10 +1277,12 @@ func (s *SUI) syncSUIDatabaseLinks(publicHost string) {
 }
 
 func (s *SUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
-	if err := s.syncOutbounds(tunnels); err != nil {
+	boundMap, err := s.getBoundUserRoutes()
+	if err != nil {
 		return err
 	}
-	slotTag := slotOutboundTag(target.Slot)
+	oldHostTag := sanitizeTag(oldHost)
+
 	cName := countryNameCN(target.Node.CountryCode, target.Node.Country)
 	poolName := "家宽"
 	if target.IPType == "datacenter" {
@@ -1313,14 +1290,13 @@ func (s *SUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
 	}
 	newRemark := fmt.Sprintf("%s%s", cName, poolName)
 
-	boundMap, err := s.getBoundUserRoutes()
-	if err == nil {
-		oldHostTag := sanitizeTag(oldHost)
-		for userName, host := range boundMap {
-			if host == slotTag || host == oldHost || host == oldHostTag {
-				_ = s.BindUserRoute(userName, slotTag, tunnels)
-				_ = s.sqliteQuery(fmt.Sprintf("UPDATE clients SET remark = '%s' WHERE name = '%s';", newRemark, userName))
+	for userName, host := range boundMap {
+		if host == oldHost || host == oldHostTag {
+			if err := s.BindUserRoute(userName, target.Node.HostName, tunnels); err != nil {
+				return err
 			}
+			// 同步更新 SQLite 中 client 的 remark，使 tag 变成新的「国家+机房/家宽」
+			_ = s.sqliteQuery(fmt.Sprintf("UPDATE clients SET remark = '%s' WHERE name = '%s';", newRemark, userName))
 		}
 	}
 	s.syncSUIDatabaseLinks(hostPublicIP())
@@ -2134,7 +2110,11 @@ func (s *SUI) reconcileBranchBindings(tunnels []*Tunnel) {
 		if targetTunnel == nil {
 			continue
 		}
-		_, _ = s.CloneToTunnels(b.TemplateID, []string{targetTunnel.Node.HostName}, tunnels)
+		clientName := fmt.Sprintf("soutu%d%s", b.TemplateID, sanitizeTag(targetTunnel.Node.HostName))
+		if _, ok, err := s.apiClientByName(clientName); err == nil && !ok {
+			log.Printf("自动自愈并恢复家宽分流绑定: 模板入站 %d -> 节点 %s (%s)", b.TemplateID, targetTunnel.Node.HostName, targetTunnel.Node.Country)
+			_, _ = s.CloneToTunnels(b.TemplateID, []string{targetTunnel.Node.HostName}, tunnels)
+		}
 	}
 }
 
@@ -2144,21 +2124,22 @@ func isSplitUser(u string) bool {
 
 // cleanStaleRoutesAndClients 自动清理不存在于活跃隧道及持久化配置中的残余路由规则与分流用户
 func (s *SUI) cleanStaleRoutesAndClients(tunnels []*Tunnel) error {
-	activeSlots := make(map[int]bool)
-	configuredSlots := make(map[int]bool)
+	activeTags := make(map[string]bool)
+	configuredHosts := make(map[string]bool)
 	for _, t := range tunnels {
-		if t.Slot > 0 {
-			configuredSlots[t.Slot] = true
+		if t.Node.HostName != "" {
+			configuredHosts[sanitizeTag(t.Node.HostName)] = true
 			if t.Status == "up" {
-				activeSlots[t.Slot] = true
+				activeTags[suiTagPrefix+sanitizeTag(t.Node.HostName)] = true
 			}
 		}
 	}
 
+	// 保护持久化分流配置中的 Host
 	bindings := loadBranchBindings(s.workDir)
 	for _, b := range bindings {
-		if b.Slot > 0 {
-			configuredSlots[b.Slot] = true
+		if b.Host != "" {
+			configuredHosts[sanitizeTag(b.Host)] = true
 		}
 	}
 
@@ -2171,19 +2152,10 @@ func (s *SUI) cleanStaleRoutesAndClients(tunnels []*Tunnel) error {
 				continue
 			}
 			matched := false
-			for slot := range configuredSlots {
-				if strings.Contains(name, fmt.Sprintf("slot%d", slot)) {
+			for hostTag := range configuredHosts {
+				if strings.HasSuffix(name, hostTag) {
 					matched = true
 					break
-				}
-			}
-			// 兼容旧版按 HostName 命名的 client
-			if !matched {
-				for _, t := range tunnels {
-					if t.Node.HostName != "" && strings.HasSuffix(name, sanitizeTag(t.Node.HostName)) {
-						matched = true
-						break
-					}
 				}
 			}
 			if !matched {
@@ -2215,12 +2187,37 @@ func (s *SUI) cleanStaleRoutesAndClients(tunnels []*Tunnel) error {
 						continue
 					}
 					outbound, _ := ruleMap["outbound"].(string)
-					// 如果该规则指向 sout 出站但当前已无该配置的槽位，清理
-					if isSUIOutboundTag(outbound) {
-						slot := extractSUISlot(outbound)
-						if slot > 0 && !configuredSlots[slot] {
+					// 如果该规则指向 sout 出站但当前已无该配置的隧道，清理
+					if isSUIOutboundTag(outbound) && !configuredHosts[strings.TrimPrefix(outbound, suiTagPrefix)] {
+						changed = true
+						continue
+					}
+					// 检查 auth_user 中是否包含失效的分流用户
+					users := toSUITagSlice(ruleMap["auth_user"])
+					if len(users) > 0 {
+						var validUsers []string
+						for _, u := range users {
+							if isSplitUser(u) {
+								userMatched := false
+								for hostTag := range configuredHosts {
+									if strings.HasSuffix(u, hostTag) {
+										userMatched = true
+										break
+									}
+								}
+								if userMatched {
+									validUsers = append(validUsers, u)
+								}
+							} else {
+								validUsers = append(validUsers, u)
+							}
+						}
+						if len(validUsers) != len(users) {
 							changed = true
-							continue
+							if len(validUsers) == 0 {
+								continue
+							}
+							ruleMap["auth_user"] = validUsers
 						}
 					}
 					cleanRules = append(cleanRules, ruleMap)
