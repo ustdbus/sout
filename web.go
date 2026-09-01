@@ -10,6 +10,9 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
 	_, _ = w.Write([]byte(indexHTML))
 }
 
@@ -307,13 +310,13 @@ option{background:#161b22;color:var(--text);padding:8px}
         </div>
 
         <!-- 客户端 TLS 开关与 SNI -->
-        <div style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px 12px;margin-top:8px">
+        <div style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:9px 12px;margin-top:10px">
           <div style="display:flex;align-items:center;justify-content:space-between">
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0">
-              <input type="checkbox" id="clientTlsToggle" style="width:15px;height:15px;accent-color:var(--accent);cursor:pointer;margin:0">
-              <span style="font-size:12px;font-weight:600;color:var(--text)">启用客户端 TLS (适用于 CDN / Argo / 隧道节点)</span>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0;user-select:none">
+              <input type="checkbox" id="clientTlsToggle" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;margin:0">
+              <span style="font-size:12px;font-weight:600;color:var(--text)">启用客户端 TLS (适用于 CDN / Argo / 隧道代理)</span>
             </label>
-            <span style="font-size:11px;color:var(--dim)">TLS / SNI</span>
+            <span style="font-size:11px;color:var(--dim)">TLS</span>
           </div>
 
           <div id="clientTlsBox" style="display:none;margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)">
