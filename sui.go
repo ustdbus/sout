@@ -2156,37 +2156,68 @@ func (s *SUI) NodeDetail(id int) (*NodeDetailInfo, error) {
 		}
 	}
 
+	var tlsEnabled bool
+	var sni string
+	var fingerprint string = "chrome"
+
+	var outJSON map[string]any
+	rawOutHex := s.sqliteQuery(fmt.Sprintf("SELECT hex(out_json) FROM inbounds WHERE id = %d;", id))
+	if rawOutHex != "" {
+		if b, err := hex.DecodeString(rawOutHex); err == nil {
+			_ = json.Unmarshal(b, &outJSON)
+		}
+	}
+	if outJSON != nil {
+		if tlsMap, ok := outJSON["tls"].(map[string]any); ok {
+			if en, ok := tlsMap["enabled"].(bool); ok {
+				tlsEnabled = en
+			}
+			if s, ok := tlsMap["server_name"].(string); ok {
+				sni = s
+			}
+			if utlsMap, ok := tlsMap["utls"].(map[string]any); ok {
+				if fp, ok := utlsMap["fingerprint"].(string); ok && fp != "" {
+					fingerprint = fp
+				}
+			}
+		}
+		if sni == "" {
+			if tr, ok := outJSON["transport"].(map[string]any); ok {
+				if hdrs, ok := tr["headers"].(map[string]any); ok {
+					if h, ok := hdrs["Host"].(string); ok {
+						sni = h
+					}
+				}
+			}
+		}
+	}
+
 	return &NodeDetailInfo{
 		ID:         id,
 		Name:       tag,
 		Protocol:   strings.ToUpper(typ),
 		Listen:     listen,
 		ListenPort: listenPort,
+		TLSEnabled: tlsEnabled,
+		SNI:        sni,
 		Addrs:      addrs,
 	}, nil
 }
 
-func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []NodeAddrItem, tunnels []*Tunnel) error {
-	inboundsObj, err := s.callAPI(http.MethodGet, fmt.Sprintf("inbounds?id=%d", id), nil)
-	if err != nil {
-		return err
+func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []NodeAddrItem, tlsEnabled bool, sni string, tunnels []*Tunnel) error {
+	// 1. 读取原有的 out_json
+	var origOutJSON map[string]any
+	rawOutJSONHex := s.sqliteQuery(fmt.Sprintf("SELECT hex(out_json) FROM inbounds WHERE id = %d;", id))
+	if rawOutJSONHex != "" {
+		if b, err := hex.DecodeString(rawOutJSONHex); err == nil {
+			_ = json.Unmarshal(b, &origOutJSON)
+		}
 	}
-	var rawWrap struct {
-		Inbounds []map[string]any `json:"inbounds"`
-	}
-	if err := json.Unmarshal(inboundsObj, &rawWrap); err != nil || len(rawWrap.Inbounds) == 0 {
-		return fmt.Errorf("未找到入站 %d", id)
-	}
-	inb := rawWrap.Inbounds[0]
-
-	delete(inb, "options")
-	if listen != "" {
-		inb["listen"] = listen
-	}
-	if listenPort > 0 {
-		inb["listen_port"] = listenPort
+	if origOutJSON == nil {
+		origOutJSON = make(map[string]any)
 	}
 
+	// 2. 组装多域名列表
 	addrsList := make([]map[string]any, 0, len(addrs))
 	for _, a := range addrs {
 		srv := strings.TrimSpace(a.Server)
@@ -2202,25 +2233,8 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 		}
 		addrsList = append(addrsList, item)
 	}
-	inb["addrs"] = addrsList
 
-	// 1. 读取原有的 out_json（保留 tls / transport / alter_id 等全部客户端配置）
-	var origOutJSON map[string]any
-	rawOutJSONHex := s.sqliteQuery(fmt.Sprintf("SELECT hex(out_json) FROM inbounds WHERE id = %d;", id))
-	if rawOutJSONHex != "" {
-		if b, err := hex.DecodeString(rawOutJSONHex); err == nil {
-			_ = json.Unmarshal(b, &origOutJSON)
-		}
-	}
-	if origOutJSON == nil {
-		if curOut, ok := inb["out_json"].(map[string]any); ok && curOut != nil {
-			origOutJSON = curOut
-		} else {
-			origOutJSON = make(map[string]any)
-		}
-	}
-
-	// 2. 将首个地址同步到 out_json
+	// 3. 将首个地址同步到 out_json
 	if len(addrsList) > 0 {
 		if firstSrv, ok := addrsList[0]["server"].(string); ok && firstSrv != "" {
 			origOutJSON["server"] = firstSrv
@@ -2230,36 +2244,29 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 		}
 	}
 
-	// 3. 确保 CDN/Argo 节点（端口 443 或有 Host）的 TLS 和 SNI 完好保留
-	if _, hasTLS := origOutJSON["tls"]; !hasTLS {
-		if tr, ok := origOutJSON["transport"].(map[string]any); ok {
-			if hdrs, ok := tr["headers"].(map[string]any); ok {
-				if host, ok := hdrs["Host"].(string); ok && host != "" {
-					origOutJSON["tls"] = map[string]any{
-						"enabled":     true,
-						"server_name": host,
-						"utls": map[string]any{
-							"enabled":     true,
-							"fingerprint": "chrome",
-						},
-					}
+	// 4. 根据客户端 TLS 开关配置 TLS 与 SNI
+	if tlsEnabled {
+		serverName := strings.TrimSpace(sni)
+		origOutJSON["tls"] = map[string]any{
+			"enabled":     true,
+			"server_name": serverName,
+			"utls": map[string]any{
+				"enabled":     true,
+				"fingerprint": "chrome",
+			},
+		}
+		if serverName != "" {
+			if tr, ok := origOutJSON["transport"].(map[string]any); ok {
+				if hdrs, ok := tr["headers"].(map[string]any); ok {
+					hdrs["Host"] = serverName
 				}
 			}
 		}
-	}
-	inb["out_json"] = origOutJSON
-
-	dataBytes, _ := json.Marshal(inb)
-	form := url.Values{
-		"object": {"inbounds"},
-		"action": {"edit"},
-		"data":   {string(dataBytes)},
-	}
-	if _, err := s.callAPI(http.MethodPost, "save", form); err != nil {
-		return fmt.Errorf("保存入站配置失败: %w", err)
+	} else {
+		delete(origOutJSON, "tls")
 	}
 
-	// 同步更新 SQLite 数据库（使用 hex 写入 BLOB，确保 GORM 正确解析并且 TLS/SNI 永远持久化）
+	// 5. 更新 options 里的 listen / listen_port
 	optMap := make(map[string]any)
 	rawOptHex := s.sqliteQuery(fmt.Sprintf("SELECT hex(options) FROM inbounds WHERE id = %d;", id))
 	if rawOptHex != "" {
@@ -2273,9 +2280,12 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 	if listenPort > 0 {
 		optMap["listen_port"] = listenPort
 	}
+
 	newOptJSON, _ := json.Marshal(optMap)
 	addrsJSON, _ := json.Marshal(addrsList)
 	newOutJSON, _ := json.Marshal(origOutJSON)
+
+	// 6. 持久化到 SQLite 并重启 sing-box
 	_ = s.sqliteQuery(fmt.Sprintf(
 		"UPDATE inbounds SET options=X'%s', addrs=X'%s', out_json=X'%s', listen_port=%d WHERE id=%d;",
 		hex.EncodeToString(newOptJSON),

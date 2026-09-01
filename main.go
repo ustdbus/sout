@@ -913,6 +913,8 @@ func apiNodeUpdate(m *Manager) http.HandlerFunc {
 			ID         int            `json:"id"`
 			Listen     string         `json:"listen"`
 			ListenPort int            `json:"listen_port"`
+			TLSEnabled bool           `json:"tls_enabled"`
+			SNI        string         `json:"sni"`
 			Addrs      []NodeAddrItem `json:"addrs"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -938,7 +940,7 @@ func apiNodeUpdate(m *Manager) http.HandlerFunc {
 			return
 		}
 
-		if err := p.UpdateNodeConfig(req.ID, req.Listen, req.ListenPort, req.Addrs, m.Tunnels()); err != nil {
+		if err := p.UpdateNodeConfig(req.ID, req.Listen, req.ListenPort, req.Addrs, req.TLSEnabled, req.SNI, m.Tunnels()); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}

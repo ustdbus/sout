@@ -31,7 +31,7 @@ type Panel interface {
 	CreateInbound(spec NewInboundSpec, tunnels []*Tunnel) (*CreatedInbound, error)
 	UpdateInbound(id int, patch InboundPatch, tunnels []*Tunnel) error
 	NodeDetail(id int) (*NodeDetailInfo, error)
-	UpdateNodeConfig(id int, listen string, listenPort int, addrs []NodeAddrItem, tunnels []*Tunnel) error
+	UpdateNodeConfig(id int, listen string, listenPort int, addrs []NodeAddrItem, tlsEnabled bool, sni string, tunnels []*Tunnel) error
 
 	AddClient(id int, email string, tunnels []*Tunnel) error
 	DeleteClient(id int, email string, tunnels []*Tunnel) error
@@ -53,6 +53,8 @@ type NodeDetailInfo struct {
 	Protocol   string         `json:"protocol"`
 	Listen     string         `json:"listen"`
 	ListenPort int            `json:"listen_port"`
+	TLSEnabled bool           `json:"tls_enabled"`
+	SNI        string         `json:"sni"`
 	Addrs      []NodeAddrItem `json:"addrs"`
 }
 

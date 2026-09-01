@@ -305,6 +305,30 @@ option{background:#161b22;color:var(--text);padding:8px}
           <div style="margin-bottom:2px">连接地址与端口 (一行一个，支持批量直接粘贴)</div>
           格式示例：<code style="color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace">66.66.55.44</code>、<code style="color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace">66.66.55.44:443</code> 或 <code style="color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace">66.66.55.44:443#备注</code>（如未写端口将自动使用下方的监听端口）
         </div>
+
+        <!-- 客户端 TLS 开关与 SNI -->
+        <div style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px 12px;margin-top:8px">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0">
+              <input type="checkbox" id="clientTlsToggle" style="width:15px;height:15px;accent-color:var(--accent);cursor:pointer;margin:0">
+              <span style="font-size:12px;font-weight:600;color:var(--text)">启用客户端 TLS (适用于 CDN / Argo / 隧道节点)</span>
+            </label>
+            <span style="font-size:11px;color:var(--dim)">TLS / SNI</span>
+          </div>
+
+          <div id="clientTlsBox" style="display:none;margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)">
+            <div style="display:grid;grid-template-columns:1fr 120px;gap:10px">
+              <div>
+                <span style="display:block;color:var(--dim);font-size:11px;margin-bottom:4px">SNI (Server Name)</span>
+                <input type="text" id="clientSniInput" placeholder="如 example.com" style="border:none;background:transparent;padding:0;font-weight:600;font-size:13px;width:100%;color:var(--text)">
+              </div>
+              <div>
+                <span style="display:block;color:var(--dim);font-size:11px;margin-bottom:4px">Fingerprint</span>
+                <span style="display:block;font-weight:600;font-size:13px;color:var(--text);padding:0">Chrome</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div style="border-top:1px solid var(--line);margin-bottom:14px"></div>
@@ -726,6 +750,9 @@ document.addEventListener('click', async e => {
     $('#editNodeTitle').textContent = '修改节点 - ' + name;
     $('#nodeClientAddrsText').value = '';
     $('#nodeListenPort').value = '';
+    $('#clientTlsToggle').checked = false;
+    $('#clientTlsBox').style.display = 'none';
+    $('#clientSniInput').value = '';
     setListenAddr('::');
     openModal('editNodeModal');
 
@@ -734,12 +761,16 @@ document.addEventListener('click', async e => {
       if(detail){
         setListenAddr(detail.listen);
         $('#nodeListenPort').value = detail.listen_port || '';
+        
+        const isTls = !!detail.tls_enabled;
+        $('#clientTlsToggle').checked = isTls;
+        $('#clientTlsBox').style.display = isTls ? 'block' : 'none';
+        $('#clientSniInput').value = detail.sni || '';
+
         if(detail.addrs && detail.addrs.length){
           const lines = detail.addrs.map(a => {
             let s = a.server || '';
-            if(a.server_port && a.server_port !== detail.listen_port) {
-              s += ':' + a.server_port;
-            } else if(a.server_port) {
+            if(a.server_port) {
               s += ':' + a.server_port;
             }
             if(a.remark) s += '#' + a.remark;
@@ -934,6 +965,9 @@ $('#saveEditNodeBtn').onclick = async () => {
     parsedAddrs.push({ server, server_port: port, remark });
   }
 
+  const tlsEnabled = $('#clientTlsToggle').checked;
+  const sni = $('#clientSniInput').value.trim();
+
   const btn = $('#saveEditNodeBtn');
   btn.disabled = true;
   btn.textContent = '保存中…';
@@ -946,6 +980,8 @@ $('#saveEditNodeBtn').onclick = async () => {
         id: editNodeTargetID,
         listen: listenAddr,
         listen_port: listenPort,
+        tls_enabled: tlsEnabled,
+        sni: sni,
         addrs: parsedAddrs
       })
     });
@@ -958,6 +994,10 @@ $('#saveEditNodeBtn').onclick = async () => {
     btn.disabled = false;
     btn.textContent = '保存修改';
   }
+};
+
+$('#clientTlsToggle').onchange = e => {
+  $('#clientTlsBox').style.display = e.target.checked ? 'block' : 'none';
 };
 
 // 从无出口提示跳转到新建出口

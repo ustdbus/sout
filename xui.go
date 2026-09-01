@@ -1417,7 +1417,7 @@ func (x *XUI) NodeDetail(id int) (*NodeDetailInfo, error) {
 	}, nil
 }
 
-func (x *XUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []NodeAddrItem, tunnels []*Tunnel) error {
+func (x *XUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []NodeAddrItem, tlsEnabled bool, sni string, tunnels []*Tunnel) error {
 	var pPort *int
 	if listenPort > 0 {
 		pPort = &listenPort
