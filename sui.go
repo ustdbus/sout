@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -2203,18 +2204,50 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 	}
 	inb["addrs"] = addrsList
 
-	// 同步首个地址至客户端基础出站模板 (out_json)，保持 TLS、UUID、传输协议等其它客户端配置不变
-	if len(addrsList) > 0 {
-		if outJSON, ok := inb["out_json"].(map[string]any); ok && outJSON != nil {
-			if firstSrv, ok := addrsList[0]["server"].(string); ok && firstSrv != "" {
-				outJSON["server"] = firstSrv
-			}
-			if firstPort, ok := addrsList[0]["server_port"].(int); ok && firstPort > 0 {
-				outJSON["server_port"] = firstPort
-			}
-			inb["out_json"] = outJSON
+	// 1. 读取原有的 out_json（保留 tls / transport / alter_id 等全部客户端配置）
+	var origOutJSON map[string]any
+	rawOutJSONHex := s.sqliteQuery(fmt.Sprintf("SELECT hex(out_json) FROM inbounds WHERE id = %d;", id))
+	if rawOutJSONHex != "" {
+		if b, err := hex.DecodeString(rawOutJSONHex); err == nil {
+			_ = json.Unmarshal(b, &origOutJSON)
 		}
 	}
+	if origOutJSON == nil {
+		if curOut, ok := inb["out_json"].(map[string]any); ok && curOut != nil {
+			origOutJSON = curOut
+		} else {
+			origOutJSON = make(map[string]any)
+		}
+	}
+
+	// 2. 将首个地址同步到 out_json
+	if len(addrsList) > 0 {
+		if firstSrv, ok := addrsList[0]["server"].(string); ok && firstSrv != "" {
+			origOutJSON["server"] = firstSrv
+		}
+		if firstPort, ok := addrsList[0]["server_port"].(int); ok && firstPort > 0 {
+			origOutJSON["server_port"] = firstPort
+		}
+	}
+
+	// 3. 确保 CDN/Argo 节点（端口 443 或有 Host）的 TLS 和 SNI 完好保留
+	if _, hasTLS := origOutJSON["tls"]; !hasTLS {
+		if tr, ok := origOutJSON["transport"].(map[string]any); ok {
+			if hdrs, ok := tr["headers"].(map[string]any); ok {
+				if host, ok := hdrs["Host"].(string); ok && host != "" {
+					origOutJSON["tls"] = map[string]any{
+						"enabled":     true,
+						"server_name": host,
+						"utls": map[string]any{
+							"enabled":     true,
+							"fingerprint": "chrome",
+						},
+					}
+				}
+			}
+		}
+	}
+	inb["out_json"] = origOutJSON
 
 	dataBytes, _ := json.Marshal(inb)
 	form := url.Values{
@@ -2226,11 +2259,13 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 		return fmt.Errorf("保存入站配置失败: %w", err)
 	}
 
-	// 同步更新 SQLite 数据库
+	// 同步更新 SQLite 数据库（使用 hex 写入 BLOB，确保 GORM 正确解析并且 TLS/SNI 永远持久化）
 	optMap := make(map[string]any)
-	optJSONStr := s.sqliteQuery(fmt.Sprintf("SELECT options FROM inbounds WHERE id = %d;", id))
-	if optJSONStr != "" {
-		_ = json.Unmarshal([]byte(optJSONStr), &optMap)
+	rawOptHex := s.sqliteQuery(fmt.Sprintf("SELECT hex(options) FROM inbounds WHERE id = %d;", id))
+	if rawOptHex != "" {
+		if b, err := hex.DecodeString(rawOptHex); err == nil {
+			_ = json.Unmarshal(b, &optMap)
+		}
 	}
 	if listen != "" {
 		optMap["listen"] = listen
@@ -2240,10 +2275,12 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 	}
 	newOptJSON, _ := json.Marshal(optMap)
 	addrsJSON, _ := json.Marshal(addrsList)
+	newOutJSON, _ := json.Marshal(origOutJSON)
 	_ = s.sqliteQuery(fmt.Sprintf(
-		"UPDATE inbounds SET options=%s, addrs=%s, listen_port=%d WHERE id=%d;",
-		sqliteQuote(string(newOptJSON)),
-		sqliteQuote(string(addrsJSON)),
+		"UPDATE inbounds SET options=X'%s', addrs=X'%s', out_json=X'%s', listen_port=%d WHERE id=%d;",
+		hex.EncodeToString(newOptJSON),
+		hex.EncodeToString(addrsJSON),
+		hex.EncodeToString(newOutJSON),
 		listenPort,
 		id,
 	))
