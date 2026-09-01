@@ -291,17 +291,17 @@ select:focus,textarea:focus,input:focus{outline:none;border-color:var(--accent)}
           <div style="position:absolute;top:50%;left:0;right:0;height:1px;background:var(--line)"></div>
         </div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-          <span style="font-size:11px;color:var(--dim)">客户端开启时连接的服务器地址 (生成订阅，支持多域名/IP)</span>
+          <span style="font-size:11px;color:var(--dim)">若该节点为CDN/argo节点，此处可填写优选域名/ip。</span>
           <span style="font-size:12px;color:var(--dim);font-weight:500">连接</span>
         </div>
 
-        <div class="card-input-box" style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px 12px;transition:border-color .15s">
-          <span style="display:block;color:var(--dim);font-size:11px;margin-bottom:6px">连接地址与端口 (一行一个，支持批量直接粘贴)</span>
+        <div class="card-input-box" style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:10px 12px;transition:border-color .15s">
           <textarea id="nodeClientAddrsText" rows="6" spellcheck="false"
             placeholder="66.66.55.44:443&#10;example.com:443#HK1-线路 246 Mbps&#10;88.88.77.66:443&#10;99.99.88.77"
             style="width:100%;border:none;background:transparent;color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.7;resize:vertical;min-height:130px;padding:0;outline:none"></textarea>
         </div>
         <div style="color:var(--dim);font-size:11px;line-height:1.5;margin-top:6px">
+          <div style="margin-bottom:2px">连接地址与端口 (一行一个，支持批量直接粘贴)</div>
           格式示例：<code style="color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace">66.66.55.44</code>、<code style="color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace">66.66.55.44:443</code> 或 <code style="color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace">66.66.55.44:443#备注</code>（如未写端口将自动使用下方的监听端口）
         </div>
       </div>
