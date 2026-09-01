@@ -2186,6 +2186,26 @@ func (s *SUI) NodeDetail(id int) (*NodeDetailInfo, error) {
 		}
 	}
 
+	var allAddrs []NodeAddrItem
+	if outJSON != nil {
+		if srv, ok := outJSON["server"].(string); ok && srv != "" {
+			p := 0
+			if pFloat, ok := outJSON["server_port"].(float64); ok {
+				p = int(pFloat)
+			}
+			allAddrs = append(allAddrs, NodeAddrItem{
+				Server:     srv,
+				ServerPort: p,
+			})
+		}
+	}
+	for _, a := range addrs {
+		if len(allAddrs) == 1 && allAddrs[0].Server == a.Server && allAddrs[0].ServerPort == a.ServerPort && a.Remark == "" {
+			continue
+		}
+		allAddrs = append(allAddrs, a)
+	}
+
 	return &NodeDetailInfo{
 		ID:         id,
 		Name:       tag,
@@ -2194,7 +2214,7 @@ func (s *SUI) NodeDetail(id int) (*NodeDetailInfo, error) {
 		ListenPort: listenPort,
 		TLSEnabled: tlsEnabled,
 		SNI:        sni,
-		Addrs:      addrs,
+		Addrs:      allAddrs,
 	}, nil
 }
 
@@ -2211,30 +2231,28 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 		origOutJSON = make(map[string]any)
 	}
 
-	// 2. 组装多域名列表
-	addrsList := make([]map[string]any, 0, len(addrs))
-	for _, a := range addrs {
-		srv := strings.TrimSpace(a.Server)
-		if srv == "" {
-			continue
+	// 2. 分离首个主地址 (写入 out_json) 与多域名列表 (写入 addrs)
+	subAddrsList := make([]map[string]any, 0)
+	if len(addrs) > 0 {
+		first := addrs[0]
+		if srv := strings.TrimSpace(first.Server); srv != "" {
+			origOutJSON["server"] = srv
+			origOutJSON["server_port"] = first.ServerPort
 		}
-		item := map[string]any{
-			"server":      srv,
-			"server_port": a.ServerPort,
-		}
-		if a.Remark != "" {
-			item["remark"] = a.Remark
-		}
-		addrsList = append(addrsList, item)
-	}
-
-	// 3. 将首个地址同步到 out_json
-	if len(addrsList) > 0 {
-		if firstSrv, ok := addrsList[0]["server"].(string); ok && firstSrv != "" {
-			origOutJSON["server"] = firstSrv
-		}
-		if firstPort, ok := addrsList[0]["server_port"].(int); ok && firstPort > 0 {
-			origOutJSON["server_port"] = firstPort
+		for i := 1; i < len(addrs); i++ {
+			a := addrs[i]
+			srv := strings.TrimSpace(a.Server)
+			if srv == "" {
+				continue
+			}
+			item := map[string]any{
+				"server":      srv,
+				"server_port": a.ServerPort,
+			}
+			if a.Remark != "" {
+				item["remark"] = a.Remark
+			}
+			subAddrsList = append(subAddrsList, item)
 		}
 	}
 
@@ -2276,7 +2294,7 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 	}
 
 	newOptJSON, _ := json.Marshal(optMap)
-	addrsJSON, _ := json.Marshal(addrsList)
+	addrsJSON, _ := json.Marshal(subAddrsList)
 	newOutJSON, _ := json.Marshal(origOutJSON)
 
 	// 6. 持久化到 SQLite 并重启 sing-box

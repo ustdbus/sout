@@ -314,7 +314,7 @@ option{background:#161b22;color:var(--text);padding:8px}
           <div style="display:flex;align-items:center;justify-content:space-between">
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0;user-select:none">
               <input type="checkbox" id="clientTlsToggle" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;margin:0">
-              <span style="font-size:12px;font-weight:600;color:var(--text)">启用客户端 TLS (适用于 CDN / Argo / 隧道代理)</span>
+              <span style="font-size:12px;font-weight:600;color:var(--text)">启用客户端 TLS（适用于隧道代理节点，开启后需填入隧道域名）</span>
             </label>
             <span style="font-size:11px;color:var(--dim)">TLS</span>
           </div>
