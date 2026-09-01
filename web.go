@@ -321,8 +321,8 @@ select:focus,textarea:focus,input:focus{outline:none;border-color:var(--accent)}
           <div class="card-input-box" style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px 12px;transition:border-color .15s">
             <span style="display:block;color:var(--dim);font-size:11px;margin-bottom:4px">地址</span>
             <select id="nodeListenAddr" style="border:none;background:transparent;color:var(--text);color-scheme:dark;padding:0;font-weight:600;font-size:13px;cursor:pointer;width:100%">
-              <option value="::" style="background:#161b22;color:#e6edf3">::</option>
-              <option value="127.0.0.1" style="background:#161b22;color:#e6edf3">127.0.0.1</option>
+              <option value="::" style="background:#161b22;color:#e6edf3">::（ipv4/6外网通信）</option>
+              <option value="127.0.0.1" style="background:#161b22;color:#e6edf3">127.0.0.1（隧道内网反代）</option>
             </select>
           </div>
           <div class="card-input-box" style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px 12px;transition:border-color .15s">
