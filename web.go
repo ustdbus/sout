@@ -117,6 +117,7 @@ label.f{display:block;margin-bottom:16px}
 label.f>span{display:block;color:var(--dim);font-size:12px;margin-bottom:6px;font-weight:500}
 select,textarea,input[type=search],input[type=text],input[type=password]{font:inherit;background:#0d1117;border:1px solid var(--line);color:var(--text);border-radius:6px;padding:7px 10px;width:100%}
 select:focus,textarea:focus,input:focus{outline:none;border-color:var(--accent)}
+.card-input-box:focus-within{border-color:var(--accent)!important}
 .regions{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:6px;max-height:240px;overflow:auto;margin-top:8px}
 .rg{border:1px solid var(--line);background:#0d1117;border-radius:6px;padding:7px 9px;cursor:pointer;text-align:left;display:block;width:100%}
 .rg:hover{border-color:var(--accent)}
@@ -287,17 +288,20 @@ select:focus,textarea:focus,input:focus{outline:none;border-color:var(--accent)}
           <span style="background:var(--panel);padding:0 12px;position:relative;z-index:1">客户端</span>
           <div style="position:absolute;top:50%;left:0;right:0;height:1px;background:var(--line)"></div>
         </div>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-          <span style="font-size:11px;color:var(--dim)">客户端开启时连接的地址（生成订阅/节点链接，支持多域名/IP）</span>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <span style="font-size:11px;color:var(--dim)">客户端开启时连接的服务器地址 (生成订阅，支持多域名/IP)</span>
           <span style="font-size:12px;color:var(--dim);font-weight:500">连接</span>
         </div>
 
-        <!-- 动态地址列表卡片 -->
-        <div id="clientAddrsList" style="display:flex;flex-direction:column;gap:8px"></div>
-
-        <button type="button" id="addClientAddrRowBtn" style="width:100%;border:1px dashed var(--line);background:rgba(255,255,255,.02);color:var(--accent);padding:8px;border-radius:6px;display:flex;align-items:center;justify-content:center;gap:6px;font-size:12px;margin-top:8px;font-weight:500;cursor:pointer;transition:all .15s">
-          <svg viewBox="0 0 24 24" style="width:14px;height:14px"><path d="M12 5v14"/><path d="M5 12h14"/></svg> 添加连接地址 (多域名/IP)
-        </button>
+        <div class="card-input-box" style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px 12px;transition:border-color .15s">
+          <span style="display:block;color:var(--dim);font-size:11px;margin-bottom:6px">连接地址与端口 (一行一个，支持批量直接粘贴)</span>
+          <textarea id="nodeClientAddrsText" rows="6" spellcheck="false"
+            placeholder="66.66.55.44:443&#10;example.com:443#HK1-线路 246 Mbps&#10;88.88.77.66:443&#10;99.99.88.77"
+            style="width:100%;border:none;background:transparent;color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.7;resize:vertical;min-height:130px;padding:0;outline:none"></textarea>
+        </div>
+        <div style="color:var(--dim);font-size:11px;line-height:1.5;margin-top:6px">
+          格式示例：<code style="color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace">66.66.55.44</code>、<code style="color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace">66.66.55.44:443</code> 或 <code style="color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace">66.66.55.44:443#备注</code>（如未写端口将自动使用下方的监听端口）
+        </div>
       </div>
 
       <div style="border-top:1px solid var(--line);margin-bottom:20px"></div>
@@ -312,14 +316,14 @@ select:focus,textarea:focus,input:focus{outline:none;border-color:var(--accent)}
           <span style="font-size:12px;color:var(--dim);font-weight:500">监听</span>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-          <div style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px 12px">
+          <div class="card-input-box" style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px 12px;transition:border-color .15s">
             <span style="display:block;color:var(--dim);font-size:11px;margin-bottom:4px">地址</span>
             <select id="nodeListenAddr" style="border:none;background:transparent;padding:0;font-weight:600;font-size:13px;cursor:pointer;width:100%">
               <option value="::">::</option>
               <option value="127.0.0.1">127.0.0.1</option>
             </select>
           </div>
-          <div style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px 12px">
+          <div class="card-input-box" style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px 12px;transition:border-color .15s">
             <span style="display:block;color:var(--dim);font-size:11px;margin-bottom:4px">端口</span>
             <input type="text" id="nodeListenPort" inputmode="numeric" style="border:none;background:transparent;padding:0;font-weight:600;font-size:13px;width:100%" placeholder="26060">
           </div>
@@ -663,65 +667,6 @@ async function poll(){
 
 let editNodeTargetID = 0;
 
-function createClientAddrRow(item = {}) {
-  const div = document.createElement('div');
-  div.className = 'client-addr-row';
-  div.style.cssText = 'display:grid;grid-template-columns:1fr 96px 1fr 32px;gap:8px;align-items:center';
-
-  const hostVal = esc(item.server || '');
-  const portVal = (item.server_port && item.server_port > 0) ? item.server_port : '';
-  const remarkVal = esc(item.remark || '');
-
-  div.innerHTML = '<div style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:6px 10px">'
-    + '<span style="display:block;color:var(--dim);font-size:10px;margin-bottom:2px">域名 / IP</span>'
-    + '<input type="text" class="c-addr-host" value="' + hostVal + '" placeholder="如 69.33.210.21 或 domain.com" style="border:none;background:transparent;padding:0;font-weight:600;font-size:12px;width:100%">'
-    + '</div>'
-    + '<div style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:6px 10px">'
-    + '<span style="display:block;color:var(--dim);font-size:10px;margin-bottom:2px">端口</span>'
-    + '<input type="text" class="c-addr-port" inputmode="numeric" value="' + portVal + '" placeholder="如 28626" style="border:none;background:transparent;padding:0;font-weight:600;font-size:12px;width:100%">'
-    + '</div>'
-    + '<div style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:6px 10px">'
-    + '<span style="display:block;color:var(--dim);font-size:10px;margin-bottom:2px">备注 (可选)</span>'
-    + '<input type="text" class="c-addr-remark" value="' + remarkVal + '" placeholder="如 备用线路" style="border:none;background:transparent;padding:0;font-size:12px;width:100%">'
-    + '</div>'
-    + '<button type="button" class="icon danger c-addr-del" title="删除此地址" style="height:38px;padding:0;display:flex;align-items:center;justify-content:center">'
-    + ICON.trash
-    + '</button>';
-
-  const hostInput = div.querySelector('.c-addr-host');
-  const portInput = div.querySelector('.c-addr-port');
-  const remarkInput = div.querySelector('.c-addr-remark');
-
-  // 智能粘贴解析：用户粘贴 example.com:443 或 example.com:443#备注 时自动拆分
-  hostInput.addEventListener('input', () => {
-    const val = hostInput.value.trim();
-    const match = val.match(/^([^:#\s]+|\[[a-fA-F0-9:]+\]):(\d{1,5})(?:#(.*))?$/);
-    if(match){
-      hostInput.value = match[1];
-      portInput.value = match[2];
-      if(match[3]) remarkInput.value = match[3].trim();
-    }
-  });
-
-  div.querySelector('.c-addr-del').onclick = () => {
-    const list = $('#clientAddrsList');
-    if(list.children.length <= 1){
-      hostInput.value = '';
-      portInput.value = '';
-      remarkInput.value = '';
-    } else {
-      div.remove();
-    }
-  };
-
-  return div;
-}
-
-$('#addClientAddrRowBtn').onclick = () => {
-  const defaultPort = $('#nodeListenPort').value || '';
-  $('#clientAddrsList').appendChild(createClientAddrRow({ server_port: defaultPort }));
-};
-
 // ---- 事件绑定 ----
 document.addEventListener('click', async e => {
   // 点击节点的「修改节点」
@@ -731,7 +676,7 @@ document.addEventListener('click', async e => {
     const name = editBtn.dataset.nodeName || '';
     editNodeTargetID = id;
     $('#editNodeTitle').textContent = '修改节点 - ' + name;
-    $('#clientAddrsList').innerHTML = '';
+    $('#nodeClientAddrsText').value = '';
     $('#nodeListenPort').value = '';
     $('#nodeListenAddr').value = '::';
     openModal('editNodeModal');
@@ -741,14 +686,20 @@ document.addEventListener('click', async e => {
       if(detail){
         $('#nodeListenAddr').value = (detail.listen === '127.0.0.1') ? '127.0.0.1' : '::';
         $('#nodeListenPort').value = detail.listen_port || '';
-        const list = $('#clientAddrsList');
-        list.innerHTML = '';
         if(detail.addrs && detail.addrs.length){
-          detail.addrs.forEach(a => {
-            list.appendChild(createClientAddrRow(a));
-          });
+          const lines = detail.addrs.map(a => {
+            let s = a.server || '';
+            if(a.server_port && a.server_port !== detail.listen_port) {
+              s += ':' + a.server_port;
+            } else if(a.server_port) {
+              s += ':' + a.server_port;
+            }
+            if(a.remark) s += '#' + a.remark;
+            return s;
+          }).filter(Boolean);
+          $('#nodeClientAddrsText').value = lines.join('\n');
         } else {
-          list.appendChild(createClientAddrRow({ server_port: detail.listen_port }));
+          $('#nodeClientAddrsText').value = '';
         }
       }
     } catch(err) {
@@ -881,6 +832,7 @@ $('#confirmChooseExitBtn').onclick = async e => {
 // 保存修改节点配置
 $('#saveEditNodeBtn').onclick = async () => {
   if(!editNodeTargetID) return;
+  const rawText = $('#nodeClientAddrsText').value.trim();
   const listenAddr = $('#nodeListenAddr').value;
   const listenPortStr = $('#nodeListenPort').value.trim();
 
@@ -890,28 +842,48 @@ $('#saveEditNodeBtn').onclick = async () => {
     return;
   }
 
-  const rows = document.querySelectorAll('#clientAddrsList .client-addr-row');
+  const rawLines = rawText ? rawText.split('\n').map(l => l.trim()).filter(Boolean) : [];
   const parsedAddrs = [];
 
-  for(let i = 0; i < rows.length; i++){
-    const row = rows[i];
-    const host = row.querySelector('.c-addr-host').value.trim();
-    const portStr = row.querySelector('.c-addr-port').value.trim();
-    const remark = row.querySelector('.c-addr-remark').value.trim();
+  for(let i = 0; i < rawLines.length; i++){
+    const line = rawLines[i];
+    let remark = '';
+    let hostPort = line;
+    const hashIdx = line.indexOf('#');
+    if(hashIdx !== -1){
+      hostPort = line.substring(0, hashIdx).trim();
+      remark = line.substring(hashIdx + 1).trim();
+    }
 
-    if(!host && !portStr && !remark && rows.length > 1){
-      continue; // 忽略完全空白的多余行
+    let server = hostPort;
+    let port = listenPort;
+
+    if(hostPort.startsWith('[') && hostPort.includes(']')){
+      const endBracket = hostPort.indexOf(']');
+      server = hostPort.substring(0, endBracket + 1);
+      const colon = hostPort.indexOf(':', endBracket);
+      if(colon !== -1){
+        const pStr = hostPort.substring(colon + 1).trim();
+        const p = parseInt(pStr, 10);
+        if(!isNaN(p) && p > 0 && p <= 65535) port = p;
+      }
+    } else {
+      const colonIdx = hostPort.lastIndexOf(':');
+      if(colonIdx !== -1 && colonIdx === hostPort.indexOf(':')){
+        const pStr = hostPort.substring(colonIdx + 1).trim();
+        const p = parseInt(pStr, 10);
+        if(!isNaN(p) && p > 0 && p <= 65535){
+          server = hostPort.substring(0, colonIdx).trim();
+          port = p;
+        }
+      }
     }
-    if(!host){
-      toast('第 ' + (i + 1) + ' 条连接地址的域名/IP不能为空', true);
+
+    if(!server){
+      toast('第 ' + (i + 1) + ' 行地址为空', true);
       return;
     }
-    let p = portStr ? parseInt(portStr, 10) : listenPort;
-    if(!p || p < 1 || p > 65535){
-      toast('第 ' + (i + 1) + ' 条连接端口无效 (1-65535)', true);
-      return;
-    }
-    parsedAddrs.push({ server: host, server_port: p, remark });
+    parsedAddrs.push({ server, server_port: port, remark });
   }
 
   const btn = $('#saveEditNodeBtn');
