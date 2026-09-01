@@ -2145,14 +2145,19 @@ func (s *SUI) NodeDetail(id int) (*NodeDetailInfo, error) {
 	}
 
 	var addrs []NodeAddrItem
-	if addrsRaw, ok := inb["addrs"]; ok {
-		b, _ := json.Marshal(addrsRaw)
-		_ = json.Unmarshal(b, &addrs)
+	var rawAddrsList []map[string]any
+	rawAddrsHex := s.sqliteQuery(fmt.Sprintf("SELECT hex(addrs) FROM inbounds WHERE id = %d;", id))
+	if rawAddrsHex != "" {
+		if b, err := hex.DecodeString(rawAddrsHex); err == nil {
+			_ = json.Unmarshal(b, &rawAddrsList)
+			_ = json.Unmarshal(b, &addrs)
+		}
 	}
 	if len(addrs) == 0 {
-		addrsJSON := s.sqliteQuery(fmt.Sprintf("SELECT addrs FROM inbounds WHERE id = %d;", id))
-		if addrsJSON != "" {
-			_ = json.Unmarshal([]byte(addrsJSON), &addrs)
+		if addrsRaw, ok := inb["addrs"]; ok {
+			b, _ := json.Marshal(addrsRaw)
+			_ = json.Unmarshal(b, &rawAddrsList)
+			_ = json.Unmarshal(b, &addrs)
 		}
 	}
 
@@ -2181,6 +2186,23 @@ func (s *SUI) NodeDetail(id int) (*NodeDetailInfo, error) {
 					if h, ok := hdrs["Host"].(string); ok {
 						sni = h
 					}
+				}
+			}
+		}
+	}
+
+	// 若 out_json 未开启，但 addrs 中某项开启了 TLS，亦识别为开启
+	if !tlsEnabled && len(rawAddrsList) > 0 {
+		for _, rawItem := range rawAddrsList {
+			if tlsMap, ok := rawItem["tls"].(map[string]any); ok {
+				if en, ok := tlsMap["enabled"].(bool); ok && en {
+					tlsEnabled = true
+					if sni == "" {
+						if s, ok := tlsMap["server_name"].(string); ok {
+							sni = s
+						}
+					}
+					break
 				}
 			}
 		}
