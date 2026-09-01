@@ -21,6 +21,7 @@ const indexHTML = `<!DOCTYPE html>
 <title>sout - s-ui 动态家宽出口插件</title>
 <style>
 :root{
+  color-scheme: dark;
   --bg:#0e1117; --panel:#161b22; --card:#1b212b; --line:#2d333b; --text:#e6edf3;
   --dim:#8b949e; --accent:#58a6ff; --accent-hover:#79b8ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
 }
@@ -115,7 +116,8 @@ main{padding:20px;max-width:1120px;margin:0 auto}
 
 label.f{display:block;margin-bottom:16px}
 label.f>span{display:block;color:var(--dim);font-size:12px;margin-bottom:6px;font-weight:500}
-select,textarea,input[type=search],input[type=text],input[type=password]{font:inherit;background:#0d1117;border:1px solid var(--line);color:var(--text);border-radius:6px;padding:7px 10px;width:100%}
+select,textarea,input[type=search],input[type=text],input[type=password]{font:inherit;background:#0d1117;border:1px solid var(--line);color:var(--text);border-radius:6px;padding:7px 10px;width:100%;color-scheme:dark}
+option{background:#161b22;color:var(--text);padding:8px}
 select:focus,textarea:focus,input:focus{outline:none;border-color:var(--accent)}
 .card-input-box:focus-within{border-color:var(--accent)!important}
 .regions{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:6px;max-height:240px;overflow:auto;margin-top:8px}
@@ -318,9 +320,9 @@ select:focus,textarea:focus,input:focus{outline:none;border-color:var(--accent)}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
           <div class="card-input-box" style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px 12px;transition:border-color .15s">
             <span style="display:block;color:var(--dim);font-size:11px;margin-bottom:4px">地址</span>
-            <select id="nodeListenAddr" style="border:none;background:transparent;padding:0;font-weight:600;font-size:13px;cursor:pointer;width:100%">
-              <option value="::">::</option>
-              <option value="127.0.0.1">127.0.0.1</option>
+            <select id="nodeListenAddr" style="border:none;background:transparent;color:var(--text);color-scheme:dark;padding:0;font-weight:600;font-size:13px;cursor:pointer;width:100%">
+              <option value="::" style="background:#161b22;color:#e6edf3">::</option>
+              <option value="127.0.0.1" style="background:#161b22;color:#e6edf3">127.0.0.1</option>
             </select>
           </div>
           <div class="card-input-box" style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px 12px;transition:border-color .15s">
