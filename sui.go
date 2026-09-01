@@ -2158,7 +2158,6 @@ func (s *SUI) NodeDetail(id int) (*NodeDetailInfo, error) {
 
 	var tlsEnabled bool
 	var sni string
-	var fingerprint string = "chrome"
 
 	var outJSON map[string]any
 	rawOutHex := s.sqliteQuery(fmt.Sprintf("SELECT hex(out_json) FROM inbounds WHERE id = %d;", id))
@@ -2174,11 +2173,6 @@ func (s *SUI) NodeDetail(id int) (*NodeDetailInfo, error) {
 			}
 			if s, ok := tlsMap["server_name"].(string); ok {
 				sni = s
-			}
-			if utlsMap, ok := tlsMap["utls"].(map[string]any); ok {
-				if fp, ok := utlsMap["fingerprint"].(string); ok && fp != "" {
-					fingerprint = fp
-				}
 			}
 		}
 		if sni == "" {
