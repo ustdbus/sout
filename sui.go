@@ -2178,24 +2178,13 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 	}
 	inb := rawWrap.Inbounds[0]
 
+	delete(inb, "options")
 	if listen != "" {
 		inb["listen"] = listen
 	}
 	if listenPort > 0 {
 		inb["listen_port"] = listenPort
 	}
-
-	optMap, ok := inb["options"].(map[string]any)
-	if !ok || optMap == nil {
-		optMap = make(map[string]any)
-	}
-	if listen != "" {
-		optMap["listen"] = listen
-	}
-	if listenPort > 0 {
-		optMap["listen_port"] = listenPort
-	}
-	inb["options"] = optMap
 
 	addrsList := make([]map[string]any, 0, len(addrs))
 	for _, a := range addrs {
@@ -2224,11 +2213,23 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 		return fmt.Errorf("保存入站配置失败: %w", err)
 	}
 
+	// 同步更新 SQLite 数据库
+	optMap := make(map[string]any)
+	optJSONStr := s.sqliteQuery(fmt.Sprintf("SELECT options FROM inbounds WHERE id = %d;", id))
+	if optJSONStr != "" {
+		_ = json.Unmarshal([]byte(optJSONStr), &optMap)
+	}
+	if listen != "" {
+		optMap["listen"] = listen
+	}
+	if listenPort > 0 {
+		optMap["listen_port"] = listenPort
+	}
+	newOptJSON, _ := json.Marshal(optMap)
 	addrsJSON, _ := json.Marshal(addrsList)
-	optJSON, _ := json.Marshal(optMap)
 	_ = s.sqliteQuery(fmt.Sprintf(
 		"UPDATE inbounds SET options=%s, addrs=%s, listen_port=%d WHERE id=%d;",
-		sqliteQuote(string(optJSON)),
+		sqliteQuote(string(newOptJSON)),
 		sqliteQuote(string(addrsJSON)),
 		listenPort,
 		id,
