@@ -118,8 +118,9 @@ label.f{display:block;margin-bottom:16px}
 label.f>span{display:block;color:var(--dim);font-size:12px;margin-bottom:6px;font-weight:500}
 select,textarea,input[type=search],input[type=text],input[type=password]{font:inherit;background:#0d1117;border:1px solid var(--line);color:var(--text);border-radius:6px;padding:7px 10px;width:100%;color-scheme:dark}
 option{background:#161b22;color:var(--text);padding:8px}
-select:focus,textarea:focus,input:focus{outline:none;border-color:var(--accent)}
 .card-input-box:focus-within{border-color:var(--accent)!important}
+.listen-opt-item:hover{background:rgba(88,166,255,.15)!important;color:var(--accent)!important}
+.listen-opt-item.selected{background:rgba(88,166,255,.08);color:var(--accent)}
 .regions{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:6px;max-height:240px;overflow:auto;margin-top:8px}
 .rg{border:1px solid var(--line);background:#0d1117;border-radius:6px;padding:7px 9px;cursor:pointer;text-align:left;display:block;width:100%}
 .rg:hover{border-color:var(--accent)}
@@ -318,12 +319,24 @@ select:focus,textarea:focus,input:focus{outline:none;border-color:var(--accent)}
           <span style="font-size:12px;color:var(--dim);font-weight:500">监听</span>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-          <div class="card-input-box" style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px 12px;transition:border-color .15s">
+          <div class="card-input-box" id="nodeListenAddrBox" style="position:relative;background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px 12px;cursor:pointer;user-select:none;transition:border-color .15s">
             <span style="display:block;color:var(--dim);font-size:11px;margin-bottom:4px">地址</span>
-            <select id="nodeListenAddr" style="border:none;background:transparent;color:var(--text);color-scheme:dark;padding:0;font-weight:600;font-size:13px;cursor:pointer;width:100%">
-              <option value="::" style="background:#161b22;color:#e6edf3">::（ipv4/6外网通信）</option>
-              <option value="127.0.0.1" style="background:#161b22;color:#e6edf3">127.0.0.1（隧道内网反代）</option>
-            </select>
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <span id="nodeListenAddrDisplay" style="font-weight:600;font-size:13px;color:var(--text)">::</span>
+              <svg id="nodeListenAddrArrow" viewBox="0 0 24 24" style="width:14px;height:14px;color:var(--dim);transition:transform .2s"><path d="m6 9 6 6 6-6"/></svg>
+            </div>
+            <input type="hidden" id="nodeListenAddr" value="::">
+            
+            <div id="nodeListenAddrMenu" style="display:none;position:absolute;left:-1px;right:-1px;top:calc(100% + 4px);background:#161b22;border:1px solid var(--line);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.6);z-index:99;overflow:hidden">
+              <div class="listen-opt-item" data-val="::" style="padding:9px 12px;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;color:var(--text);transition:background .15s">
+                <span style="font-weight:600">::</span>
+                <span style="color:var(--dim);font-size:11px">（ipv4/6外网通信）</span>
+              </div>
+              <div class="listen-opt-item" data-val="127.0.0.1" style="padding:9px 12px;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;color:var(--text);border-top:1px solid var(--line);transition:background .15s">
+                <span style="font-weight:600">127.0.0.1</span>
+                <span style="color:var(--dim);font-size:11px">（隧道内网反代）</span>
+              </div>
+            </div>
           </div>
           <div class="card-input-box" style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px 12px;transition:border-color .15s">
             <span style="display:block;color:var(--dim);font-size:11px;margin-bottom:4px">端口</span>
@@ -669,6 +682,39 @@ async function poll(){
 
 let editNodeTargetID = 0;
 
+function setListenAddr(val){
+  const realVal = (val === '127.0.0.1') ? '127.0.0.1' : '::';
+  $('#nodeListenAddr').value = realVal;
+  $('#nodeListenAddrDisplay').textContent = realVal;
+  document.querySelectorAll('.listen-opt-item').forEach(el => {
+    el.classList.toggle('selected', el.dataset.val === realVal);
+  });
+  $('#nodeListenAddrMenu').style.display = 'none';
+  $('#nodeListenAddrArrow').style.transform = 'rotate(0deg)';
+}
+
+$('#nodeListenAddrBox').onclick = e => {
+  const opt = e.target.closest('.listen-opt-item');
+  if(opt){
+    setListenAddr(opt.dataset.val);
+    return;
+  }
+  const menu = $('#nodeListenAddrMenu');
+  const arrow = $('#nodeListenAddrArrow');
+  const open = menu.style.display === 'block';
+  menu.style.display = open ? 'none' : 'block';
+  arrow.style.transform = open ? 'rotate(0deg)' : 'rotate(180deg)';
+};
+
+document.addEventListener('click', e => {
+  if(!e.target.closest('#nodeListenAddrBox')){
+    const m = $('#nodeListenAddrMenu');
+    if(m) m.style.display = 'none';
+    const a = $('#nodeListenAddrArrow');
+    if(a) a.style.transform = 'rotate(0deg)';
+  }
+});
+
 // ---- 事件绑定 ----
 document.addEventListener('click', async e => {
   // 点击节点的「修改节点」
@@ -680,13 +726,13 @@ document.addEventListener('click', async e => {
     $('#editNodeTitle').textContent = '修改节点 - ' + name;
     $('#nodeClientAddrsText').value = '';
     $('#nodeListenPort').value = '';
-    $('#nodeListenAddr').value = '::';
+    setListenAddr('::');
     openModal('editNodeModal');
 
     try {
       const detail = await api('/api/node/detail?id=' + id);
       if(detail){
-        $('#nodeListenAddr').value = (detail.listen === '127.0.0.1') ? '127.0.0.1' : '::';
+        setListenAddr(detail.listen);
         $('#nodeListenPort').value = detail.listen_port || '';
         if(detail.addrs && detail.addrs.length){
           const lines = detail.addrs.map(a => {
