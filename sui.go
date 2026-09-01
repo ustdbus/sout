@@ -2064,6 +2064,180 @@ func (s *SUI) UpdateInbound(id int, patch InboundPatch, tunnels []*Tunnel) error
 	return nil
 }
 
+func sqliteQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+func (s *SUI) NodeDetail(id int) (*NodeDetailInfo, error) {
+	inboundsObj, err := s.callAPI(http.MethodGet, fmt.Sprintf("inbounds?id=%d", id), nil)
+	var rawWrap struct {
+		Inbounds []map[string]any `json:"inbounds"`
+	}
+	if err == nil {
+		_ = json.Unmarshal(inboundsObj, &rawWrap)
+	}
+
+	if len(rawWrap.Inbounds) == 0 {
+		// 从 sqlite 兜底
+		rowJSON, qErr := s.sqliteJSONQuery(fmt.Sprintf("SELECT id, type, tag, options, addrs FROM inbounds WHERE id=%d LIMIT 1;", id))
+		if qErr != nil || len(rowJSON) == 0 {
+			return nil, fmt.Errorf("未找到节点 %d", id)
+		}
+		var rows []struct {
+			ID      int             `json:"id"`
+			Type    string          `json:"type"`
+			Tag     string          `json:"tag"`
+			Options json.RawMessage `json:"options"`
+			Addrs   json.RawMessage `json:"addrs"`
+		}
+		if err := json.Unmarshal(rowJSON, &rows); err != nil || len(rows) == 0 {
+			return nil, fmt.Errorf("未找到节点 %d", id)
+		}
+		row := rows[0]
+		listen := "::"
+		listenPort := 0
+		if len(row.Options) > 0 {
+			var opt map[string]any
+			if json.Unmarshal(row.Options, &opt) == nil {
+				if l, ok := opt["listen"].(string); ok && l != "" {
+					listen = l
+				}
+				if p, ok := opt["listen_port"].(float64); ok {
+					listenPort = int(p)
+				}
+			}
+		}
+		var addrs []NodeAddrItem
+		if len(row.Addrs) > 0 {
+			_ = json.Unmarshal(row.Addrs, &addrs)
+		}
+		return &NodeDetailInfo{
+			ID:         row.ID,
+			Name:       row.Tag,
+			Protocol:   strings.ToUpper(row.Type),
+			Listen:     listen,
+			ListenPort: listenPort,
+			Addrs:      addrs,
+		}, nil
+	}
+
+	inb := rawWrap.Inbounds[0]
+	tag, _ := inb["tag"].(string)
+	typ, _ := inb["type"].(string)
+	listen := "::"
+	listenPort := 0
+	if l, ok := inb["listen"].(string); ok && l != "" {
+		listen = l
+	}
+	if p, ok := inb["listen_port"].(float64); ok {
+		listenPort = int(p)
+	}
+
+	// 检查 options 里的 listen / listen_port
+	if optMap, ok := inb["options"].(map[string]any); ok {
+		if l, ok := optMap["listen"].(string); ok && l != "" {
+			listen = l
+		}
+		if p, ok := optMap["listen_port"].(float64); ok {
+			listenPort = int(p)
+		}
+	}
+
+	var addrs []NodeAddrItem
+	if addrsRaw, ok := inb["addrs"]; ok {
+		b, _ := json.Marshal(addrsRaw)
+		_ = json.Unmarshal(b, &addrs)
+	}
+	if len(addrs) == 0 {
+		addrsJSON := s.sqliteQuery(fmt.Sprintf("SELECT addrs FROM inbounds WHERE id = %d;", id))
+		if addrsJSON != "" {
+			_ = json.Unmarshal([]byte(addrsJSON), &addrs)
+		}
+	}
+
+	return &NodeDetailInfo{
+		ID:         id,
+		Name:       tag,
+		Protocol:   strings.ToUpper(typ),
+		Listen:     listen,
+		ListenPort: listenPort,
+		Addrs:      addrs,
+	}, nil
+}
+
+func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []NodeAddrItem, tunnels []*Tunnel) error {
+	inboundsObj, err := s.callAPI(http.MethodGet, fmt.Sprintf("inbounds?id=%d", id), nil)
+	if err != nil {
+		return err
+	}
+	var rawWrap struct {
+		Inbounds []map[string]any `json:"inbounds"`
+	}
+	if err := json.Unmarshal(inboundsObj, &rawWrap); err != nil || len(rawWrap.Inbounds) == 0 {
+		return fmt.Errorf("未找到入站 %d", id)
+	}
+	inb := rawWrap.Inbounds[0]
+
+	if listen != "" {
+		inb["listen"] = listen
+	}
+	if listenPort > 0 {
+		inb["listen_port"] = listenPort
+	}
+
+	optMap, ok := inb["options"].(map[string]any)
+	if !ok || optMap == nil {
+		optMap = make(map[string]any)
+	}
+	if listen != "" {
+		optMap["listen"] = listen
+	}
+	if listenPort > 0 {
+		optMap["listen_port"] = listenPort
+	}
+	inb["options"] = optMap
+
+	addrsList := make([]map[string]any, 0, len(addrs))
+	for _, a := range addrs {
+		srv := strings.TrimSpace(a.Server)
+		if srv == "" {
+			continue
+		}
+		item := map[string]any{
+			"server":      srv,
+			"server_port": a.ServerPort,
+		}
+		if a.Remark != "" {
+			item["remark"] = a.Remark
+		}
+		addrsList = append(addrsList, item)
+	}
+	inb["addrs"] = addrsList
+
+	dataBytes, _ := json.Marshal(inb)
+	form := url.Values{
+		"object": {"inbounds"},
+		"action": {"edit"},
+		"data":   {string(dataBytes)},
+	}
+	if _, err := s.callAPI(http.MethodPost, "save", form); err != nil {
+		return fmt.Errorf("保存入站配置失败: %w", err)
+	}
+
+	addrsJSON, _ := json.Marshal(addrsList)
+	optJSON, _ := json.Marshal(optMap)
+	_ = s.sqliteQuery(fmt.Sprintf(
+		"UPDATE inbounds SET options=%s, addrs=%s, listen_port=%d WHERE id=%d;",
+		sqliteQuote(string(optJSON)),
+		sqliteQuote(string(addrsJSON)),
+		listenPort,
+		id,
+	))
+
+	s.restartSingBox()
+	return nil
+}
+
 func (s *SUI) AddClient(id int, email string, tunnels []*Tunnel) error {
 	return nil
 }

@@ -30,6 +30,8 @@ type Panel interface {
 
 	CreateInbound(spec NewInboundSpec, tunnels []*Tunnel) (*CreatedInbound, error)
 	UpdateInbound(id int, patch InboundPatch, tunnels []*Tunnel) error
+	NodeDetail(id int) (*NodeDetailInfo, error)
+	UpdateNodeConfig(id int, listen string, listenPort int, addrs []NodeAddrItem, tunnels []*Tunnel) error
 
 	AddClient(id int, email string, tunnels []*Tunnel) error
 	DeleteClient(id int, email string, tunnels []*Tunnel) error
@@ -37,6 +39,21 @@ type Panel interface {
 
 	OnTunnelsChanged(tunnels []*Tunnel) error
 	Close()
+}
+
+type NodeAddrItem struct {
+	Server     string `json:"server"`
+	ServerPort int    `json:"server_port"`
+	Remark     string `json:"remark,omitempty"`
+}
+
+type NodeDetailInfo struct {
+	ID         int            `json:"id"`
+	Name       string         `json:"name"`
+	Protocol   string         `json:"protocol"`
+	Listen     string         `json:"listen"`
+	ListenPort int            `json:"listen_port"`
+	Addrs      []NodeAddrItem `json:"addrs"`
 }
 
 type InboundPatch struct {

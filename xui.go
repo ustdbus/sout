@@ -1395,6 +1395,36 @@ func (x *XUI) UpdateInbound(id int, patch InboundPatch, tunnels []*Tunnel) error
 	return nil
 }
 
+func (x *XUI) NodeDetail(id int) (*NodeDetailInfo, error) {
+	raw, err := x.rawInbound(id)
+	if err != nil {
+		return nil, err
+	}
+	tag, _ := raw["remark"].(string)
+	proto, _ := raw["protocol"].(string)
+	port := int(toFloat(raw["port"]))
+	listen, _ := raw["listen"].(string)
+	if listen == "" {
+		listen = "::"
+	}
+	return &NodeDetailInfo{
+		ID:         id,
+		Name:       tag,
+		Protocol:   proto,
+		Listen:     listen,
+		ListenPort: port,
+		Addrs:      nil,
+	}, nil
+}
+
+func (x *XUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []NodeAddrItem, tunnels []*Tunnel) error {
+	var pPort *int
+	if listenPort > 0 {
+		pPort = &listenPort
+	}
+	return x.UpdateInbound(id, InboundPatch{Port: pPort}, tunnels)
+}
+
 // AddClient 给入站加一个客户端。
 func (x *XUI) AddClient(id int, email string, tunnels []*Tunnel) error {
 	raw, err := x.rawInbound(id)

@@ -272,6 +272,63 @@ select:focus,input:focus{outline:none;border-color:var(--accent)}
   </div>
 </div>
 
+<!-- Modal 2.5: 修改节点配置 -->
+<div class="modal" id="editNodeModal">
+  <div class="sheet" style="max-width:540px">
+    <div class="head">
+      <h2 id="editNodeTitle">修改节点配置</h2>
+      <span class="spacer"></span>
+      <button class="icon" data-close="editNodeModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="body">
+      <!-- 上半部分：客户端 -->
+      <div style="margin-bottom:18px">
+        <div style="font-weight:600;font-size:13px;margin-bottom:4px;color:var(--text);display:flex;align-items:center;gap:6px">
+          <span>客户端连接地址与端口</span>
+          <span style="font-weight:normal;font-size:11px;color:var(--dim)">(用于生成订阅/连接链接)</span>
+        </div>
+        <label class="f" style="margin-bottom:4px">
+          <textarea id="nodeClientAddrs" rows="4" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical;font-size:12px;line-height:1.6" placeholder="example.com:443&#10;123.45.67.89:26060#备用节点"></textarea>
+        </label>
+        <div style="color:var(--dim);font-size:11px;line-height:1.4">
+          一行一个地址，格式如 <code style="color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace">域名/IP:端口</code> 或 <code style="color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace">域名/IP:端口#备注</code>
+        </div>
+      </div>
+
+      <div style="border-top:1px solid var(--line);margin-bottom:18px"></div>
+
+      <!-- 下半部分：服务端（参考图二） -->
+      <div>
+        <div style="text-align:center;font-weight:600;font-size:13px;color:var(--text);margin-bottom:12px;position:relative">
+          <span style="background:var(--panel);padding:0 12px;position:relative;z-index:1">服务端</span>
+          <div style="position:absolute;top:50%;left:0;right:0;height:1px;background:var(--line)"></div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:8px">
+          <span style="font-size:12px;color:var(--dim);font-weight:500">监听</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px 12px">
+            <span style="display:block;color:var(--dim);font-size:11px;margin-bottom:4px">地址</span>
+            <select id="nodeListenAddr" style="border:none;background:transparent;padding:0;font-weight:600;font-size:13px">
+              <option value="::">::</option>
+              <option value="127.0.0.1">127.0.0.1</option>
+            </select>
+          </div>
+          <div style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px 12px">
+            <span style="display:block;color:var(--dim);font-size:11px;margin-bottom:4px">端口</span>
+            <input type="text" id="nodeListenPort" inputmode="numeric" style="border:none;background:transparent;padding:0;font-weight:600;font-size:13px" placeholder="26060">
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="foot">
+      <span class="spacer"></span>
+      <button data-close="editNodeModal">取消</button>
+      <button class="primary" id="saveEditNodeBtn">保存修改</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal 3: SOCKS5 凭据与端口设置 -->
 <div class="modal" id="credModal">
   <div class="sheet">
@@ -440,7 +497,8 @@ const ICON = {
   plus:'<svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>',
   trash:'<svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
   redo:'<svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>',
-  lock:'<svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>'
+  lock:'<svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+  edit:'<svg viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>'
 };
 
 async function api(path, opts){
@@ -554,9 +612,14 @@ function renderNodes(){
       +     '<h3>' + esc(n.name) + '</h3>'
       +     '<span class="base-port">默认端口 :' + n.port + '</span>'
       +   '</div>'
-      +   '<button class="primary" data-add-node="' + n.base_id + '" data-node-name="' + esc(n.name) + '" style="box-shadow:0 2px 6px rgba(88,166,255,.3)">'
-      +     ICON.plus + ' 添加出口分流'
-      +   '</button>'
+      +   '<div style="display:flex;gap:8px;align-items:center">'
+      +     '<button class="primary" data-add-node="' + n.base_id + '" data-node-name="' + esc(n.name) + '" style="box-shadow:0 2px 6px rgba(88,166,255,.3)">'
+      +       ICON.plus + ' 添加出口分流'
+      +     '</button>'
+      +     '<button data-edit-node="' + n.base_id + '" data-node-name="' + esc(n.name) + '" title="修改节点配置">'
+      +       ICON.edit + ' 修改节点'
+      +     '</button>'
+      +   '</div>'
       + '</div>'
       + '<div class="branch-table">'
       +   branches.map(b => {
@@ -593,8 +656,40 @@ async function poll(){
   }catch(e){}
 }
 
+let editNodeTargetID = 0;
+
 // ---- 事件绑定 ----
 document.addEventListener('click', async e => {
+  // 点击节点的「修改节点」
+  const editBtn = e.target.closest('[data-edit-node]');
+  if(editBtn){
+    const id = Number(editBtn.dataset.editNode);
+    const name = editBtn.dataset.nodeName || '';
+    editNodeTargetID = id;
+    $('#editNodeTitle').textContent = '修改节点 - ' + name;
+    $('#nodeClientAddrs').value = '';
+    $('#nodeListenPort').value = '';
+    $('#nodeListenAddr').value = '::';
+    openModal('editNodeModal');
+
+    try {
+      const detail = await api('/api/node/detail?id=' + id);
+      if(detail){
+        $('#nodeListenAddr').value = (detail.listen === '127.0.0.1') ? '127.0.0.1' : '::';
+        $('#nodeListenPort').value = detail.listen_port || '';
+        const lines = (detail.addrs || []).map(a => {
+          let s = a.server || '';
+          if(a.server_port) s += ':' + a.server_port;
+          if(a.remark) s += '#' + a.remark;
+          return s;
+        }).filter(Boolean);
+        $('#nodeClientAddrs').value = lines.join('\n');
+      }
+    } catch(err) {
+      toast(err.message, true);
+    }
+  }
+
   // 点击节点的「+ 添加出口分流」-> 仅从已有出站中选择
   const addBtn = e.target.closest('[data-add-node]');
   if(addBtn){
@@ -715,6 +810,66 @@ $('#confirmChooseExitBtn').onclick = async e => {
     poll();
   }catch(err){ toast(err.message, true); }
   e.target.disabled = false;
+};
+
+// 保存修改节点配置
+$('#saveEditNodeBtn').onclick = async () => {
+  if(!editNodeTargetID) return;
+  const rawAddrsText = $('#nodeClientAddrs').value.trim();
+  const listenAddr = $('#nodeListenAddr').value;
+  const listenPortStr = $('#nodeListenPort').value.trim();
+
+  const listenPort = parseInt(listenPortStr, 10);
+  if(!listenPort || listenPort < 1 || listenPort > 65535){
+    toast('请输入有效的新服务端监听端口 (1-65535)', true);
+    return;
+  }
+
+  const lines = rawAddrsText ? rawAddrsText.split('\n').map(l => l.trim()).filter(Boolean) : [];
+  const parsedAddrs = [];
+  const addrRegex = /^([^:#\s]+|\[[a-fA-F0-9:]+\]):(\d{1,5})(?:#(.*))?$/;
+
+  for(let i = 0; i < lines.length; i++){
+    const line = lines[i];
+    const match = line.match(addrRegex);
+    if(!match){
+      toast('第 ' + (i + 1) + ' 行格式错误，请填写如 example.com:443 或 1.2.3.4:443#备注', true);
+      return;
+    }
+    const server = match[1];
+    const port = parseInt(match[2], 10);
+    const remark = (match[3] || '').trim();
+    if(port < 1 || port > 65535){
+      toast('第 ' + (i + 1) + ' 行端口无效 (1-65535)', true);
+      return;
+    }
+    parsedAddrs.push({ server, server_port: port, remark });
+  }
+
+  const btn = $('#saveEditNodeBtn');
+  btn.disabled = true;
+  btn.textContent = '保存中…';
+
+  try {
+    await api('/api/node/update', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        id: editNodeTargetID,
+        listen: listenAddr,
+        listen_port: listenPort,
+        addrs: parsedAddrs
+      })
+    });
+    toast('节点配置已保存并生效');
+    closeModal('editNodeModal');
+    poll();
+  } catch(err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '保存修改';
+  }
 };
 
 // 从无出口提示跳转到新建出口

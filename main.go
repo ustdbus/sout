@@ -109,6 +109,8 @@ func main() {
 	mux.HandleFunc("/api/regions", apiRegions(mgr))
 	mux.HandleFunc("/api/provision", apiProvision(mgr))
 	mux.HandleFunc("/api/node/add_branch", apiAddNodeBranch(mgr))
+	mux.HandleFunc("/api/node/detail", apiNodeDetail)
+	mux.HandleFunc("/api/node/update", apiNodeUpdate(mgr))
 	mux.HandleFunc("/api/jobs", apiJobs(mgr))
 	mux.HandleFunc("/api/jobs/dismiss", apiJobDismiss(mgr))
 	mux.HandleFunc("/api/exits", apiExits(mgr))
@@ -879,6 +881,69 @@ func apiInboundUpdate(m *Manager) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"ok": "已保存"})
+	}
+}
+
+func apiNodeDetail(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.URL.Query().Get("id"))
+	if err != nil || id <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id 参数无效"})
+		return
+	}
+	p, err := openPanel()
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	detail, err := p.NodeDetail(id)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func apiNodeUpdate(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
+			return
+		}
+		var req struct {
+			ID         int            `json:"id"`
+			Listen     string         `json:"listen"`
+			ListenPort int            `json:"listen_port"`
+			Addrs      []NodeAddrItem `json:"addrs"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体 JSON 解析失败: " + err.Error()})
+			return
+		}
+		if req.ID <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少或无效的 id"})
+			return
+		}
+		if req.Listen != "::" && req.Listen != "127.0.0.1" && req.Listen != "0.0.0.0" && req.Listen != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "监听地址仅支持 :: 或 127.0.0.1"})
+			return
+		}
+		if req.ListenPort <= 0 || req.ListenPort > 65535 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "监听端口必须在 1-65535 之间"})
+			return
+		}
+
+		p, err := openPanel()
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+
+		if err := p.UpdateNodeConfig(req.ID, req.Listen, req.ListenPort, req.Addrs, m.Tunnels()); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		invalidateInbounds()
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "msg": "节点配置已更新"})
 	}
 }
 
