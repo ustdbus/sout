@@ -2203,6 +2203,19 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 	}
 	inb["addrs"] = addrsList
 
+	// 同步首个地址至客户端基础出站模板 (out_json)，保持 TLS、UUID、传输协议等其它客户端配置不变
+	if len(addrsList) > 0 {
+		if outJSON, ok := inb["out_json"].(map[string]any); ok && outJSON != nil {
+			if firstSrv, ok := addrsList[0]["server"].(string); ok && firstSrv != "" {
+				outJSON["server"] = firstSrv
+			}
+			if firstPort, ok := addrsList[0]["server_port"].(int); ok && firstPort > 0 {
+				outJSON["server_port"] = firstPort
+			}
+			inb["out_json"] = outJSON
+		}
+	}
+
 	dataBytes, _ := json.Marshal(inb)
 	form := url.Values{
 		"object": {"inbounds"},
