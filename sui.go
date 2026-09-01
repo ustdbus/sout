@@ -2193,14 +2193,19 @@ func (s *SUI) NodeDetail(id int) (*NodeDetailInfo, error) {
 			if pFloat, ok := outJSON["server_port"].(float64); ok {
 				p = int(pFloat)
 			}
+			rem := ""
+			if r, ok := outJSON["remark"].(string); ok {
+				rem = r
+			}
 			allAddrs = append(allAddrs, NodeAddrItem{
 				Server:     srv,
 				ServerPort: p,
+				Remark:     rem,
 			})
 		}
 	}
 	for _, a := range addrs {
-		if len(allAddrs) == 1 && allAddrs[0].Server == a.Server && allAddrs[0].ServerPort == a.ServerPort && a.Remark == "" {
+		if len(allAddrs) == 1 && allAddrs[0].Server == a.Server && allAddrs[0].ServerPort == a.ServerPort && allAddrs[0].Remark == a.Remark {
 			continue
 		}
 		allAddrs = append(allAddrs, a)
@@ -2238,6 +2243,11 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 		if srv := strings.TrimSpace(first.Server); srv != "" {
 			origOutJSON["server"] = srv
 			origOutJSON["server_port"] = first.ServerPort
+			if first.Remark != "" {
+				origOutJSON["remark"] = first.Remark
+			} else {
+				delete(origOutJSON, "remark")
+			}
 		}
 		for i := 1; i < len(addrs); i++ {
 			a := addrs[i]
