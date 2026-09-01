@@ -278,13 +278,13 @@ option{background:#161b22;color:var(--text);padding:8px}
 
 <!-- Modal 2.5: 修改节点配置 -->
 <div class="modal" id="editNodeModal">
-  <div class="sheet" style="max-width:580px">
+  <div class="sheet" style="max-width:580px;overflow:visible">
     <div class="head">
       <h2 id="editNodeTitle">修改节点配置</h2>
       <span class="spacer"></span>
       <button class="icon" data-close="editNodeModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
-    <div class="body" style="padding:14px 18px">
+    <div class="body" style="padding:14px 18px 20px;overflow:visible">
       <!-- 上半部分：客户端 -->
       <div style="margin-bottom:14px">
         <div style="text-align:center;font-weight:600;font-size:13px;color:var(--text);margin-bottom:10px;position:relative">
@@ -327,7 +327,7 @@ option{background:#161b22;color:var(--text);padding:8px}
             </div>
             <input type="hidden" id="nodeListenAddr" value="::">
             
-            <div id="nodeListenAddrMenu" style="display:none;position:absolute;left:-1px;right:-1px;bottom:calc(100% + 4px);background:#161b22;border:1px solid var(--line);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.7);z-index:99;overflow:hidden">
+            <div id="nodeListenAddrMenu" style="display:none;position:absolute;left:-1px;right:-1px;top:calc(100% + 4px);background:#161b22;border:1px solid var(--line);border-radius:6px;box-shadow:0 12px 28px rgba(0,0,0,.85);z-index:999;overflow:hidden">
               <div class="listen-opt-item" data-val="::" style="padding:9px 12px;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;color:var(--text);transition:background .15s">
                 <span style="font-weight:600">::</span>
                 <span style="color:var(--dim);font-size:11px">（ipv4/6外网通信）</span>
