@@ -2187,7 +2187,9 @@ func (s *SUI) NodeDetail(id int) (*NodeDetailInfo, error) {
 	}
 
 	var allAddrs []NodeAddrItem
-	if outJSON != nil {
+	if len(addrs) > 0 {
+		allAddrs = addrs
+	} else if outJSON != nil {
 		if srv, ok := outJSON["server"].(string); ok && srv != "" {
 			p := 0
 			if pFloat, ok := outJSON["server_port"].(float64); ok {
@@ -2203,12 +2205,6 @@ func (s *SUI) NodeDetail(id int) (*NodeDetailInfo, error) {
 				Remark:     rem,
 			})
 		}
-	}
-	for _, a := range addrs {
-		if len(allAddrs) == 1 && allAddrs[0].Server == a.Server && allAddrs[0].ServerPort == a.ServerPort && allAddrs[0].Remark == a.Remark {
-			continue
-		}
-		allAddrs = append(allAddrs, a)
 	}
 
 	return &NodeDetailInfo{
@@ -2236,40 +2232,10 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 		origOutJSON = make(map[string]any)
 	}
 
-	// 2. 分离首个主地址 (写入 out_json) 与多域名列表 (写入 addrs)
-	subAddrsList := make([]map[string]any, 0)
-	if len(addrs) > 0 {
-		first := addrs[0]
-		if srv := strings.TrimSpace(first.Server); srv != "" {
-			origOutJSON["server"] = srv
-			origOutJSON["server_port"] = first.ServerPort
-			if first.Remark != "" {
-				origOutJSON["remark"] = first.Remark
-			} else {
-				delete(origOutJSON, "remark")
-			}
-		}
-		for i := 1; i < len(addrs); i++ {
-			a := addrs[i]
-			srv := strings.TrimSpace(a.Server)
-			if srv == "" {
-				continue
-			}
-			item := map[string]any{
-				"server":      srv,
-				"server_port": a.ServerPort,
-			}
-			if a.Remark != "" {
-				item["remark"] = a.Remark
-			}
-			subAddrsList = append(subAddrsList, item)
-		}
-	}
-
-	// 4. 根据客户端 TLS 开关配置 TLS 与 SNI
+	serverName := strings.TrimSpace(sni)
+	var tlsMap map[string]any
 	if tlsEnabled {
-		serverName := strings.TrimSpace(sni)
-		origOutJSON["tls"] = map[string]any{
+		tlsMap = map[string]any{
 			"enabled":     true,
 			"server_name": serverName,
 			"utls": map[string]any{
@@ -2277,6 +2243,7 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 				"fingerprint": "chrome",
 			},
 		}
+		origOutJSON["tls"] = tlsMap
 		if serverName != "" {
 			if tr, ok := origOutJSON["transport"].(map[string]any); ok {
 				if hdrs, ok := tr["headers"].(map[string]any); ok {
@@ -2288,7 +2255,36 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 		delete(origOutJSON, "tls")
 	}
 
-	// 5. 更新 options 里的 listen / listen_port
+	// 2. 组装 addrs 列表（包含所有多域名条目，并附加 tls 配置）
+	addrsList := make([]map[string]any, 0, len(addrs))
+	for i, a := range addrs {
+		srv := strings.TrimSpace(a.Server)
+		if srv == "" {
+			continue
+		}
+		item := map[string]any{
+			"server":      srv,
+			"server_port": a.ServerPort,
+		}
+		if a.Remark != "" {
+			item["remark"] = a.Remark
+		}
+		if tlsEnabled && tlsMap != nil {
+			item["tls"] = tlsMap
+		}
+		if i == 0 {
+			origOutJSON["server"] = srv
+			origOutJSON["server_port"] = a.ServerPort
+			if a.Remark != "" {
+				origOutJSON["remark"] = a.Remark
+			} else {
+				delete(origOutJSON, "remark")
+			}
+		}
+		addrsList = append(addrsList, item)
+	}
+
+	// 3. 更新 options
 	optMap := make(map[string]any)
 	rawOptHex := s.sqliteQuery(fmt.Sprintf("SELECT hex(options) FROM inbounds WHERE id = %d;", id))
 	if rawOptHex != "" {
@@ -2304,10 +2300,10 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 	}
 
 	newOptJSON, _ := json.Marshal(optMap)
-	addrsJSON, _ := json.Marshal(subAddrsList)
+	addrsJSON, _ := json.Marshal(addrsList)
 	newOutJSON, _ := json.Marshal(origOutJSON)
 
-	// 6. 持久化到 SQLite 并重启 sing-box
+	// 4. 持久化到 SQLite 并重启 sing-box
 	_ = s.sqliteQuery(fmt.Sprintf(
 		"UPDATE inbounds SET options=X'%s', addrs=X'%s', out_json=X'%s', listen_port=%d WHERE id=%d;",
 		hex.EncodeToString(newOptJSON),
