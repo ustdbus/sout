@@ -284,38 +284,38 @@ option{background:#161b22;color:var(--text);padding:8px}
       <span class="spacer"></span>
       <button class="icon" data-close="editNodeModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
-    <div class="body">
+    <div class="body" style="padding:14px 18px">
       <!-- 上半部分：客户端 -->
-      <div style="margin-bottom:20px">
-        <div style="text-align:center;font-weight:600;font-size:13px;color:var(--text);margin-bottom:12px;position:relative">
+      <div style="margin-bottom:14px">
+        <div style="text-align:center;font-weight:600;font-size:13px;color:var(--text);margin-bottom:10px;position:relative">
           <span style="background:var(--panel);padding:0 12px;position:relative;z-index:1">客户端</span>
           <div style="position:absolute;top:50%;left:0;right:0;height:1px;background:var(--line)"></div>
         </div>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
           <span style="font-size:11px;color:var(--dim)">若该节点为CDN/argo节点，此处可填写优选域名/ip。</span>
           <span style="font-size:12px;color:var(--dim);font-weight:500">连接</span>
         </div>
 
-        <div class="card-input-box" style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:10px 12px;transition:border-color .15s">
-          <textarea id="nodeClientAddrsText" rows="6" spellcheck="false"
+        <div class="card-input-box" style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px 12px;transition:border-color .15s">
+          <textarea id="nodeClientAddrsText" rows="4" spellcheck="false"
             placeholder="66.66.55.44:443&#10;example.com:443#HK1-线路 246 Mbps&#10;88.88.77.66:443&#10;99.99.88.77"
-            style="width:100%;border:none;background:transparent;color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.7;resize:vertical;min-height:130px;padding:0;outline:none"></textarea>
+            style="width:100%;border:none;background:transparent;color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.6;resize:vertical;min-height:90px;padding:0;outline:none"></textarea>
         </div>
-        <div style="color:var(--dim);font-size:11px;line-height:1.5;margin-top:6px">
+        <div style="color:var(--dim);font-size:11px;line-height:1.4;margin-top:6px">
           <div style="margin-bottom:2px">连接地址与端口 (一行一个，支持批量直接粘贴)</div>
           格式示例：<code style="color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace">66.66.55.44</code>、<code style="color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace">66.66.55.44:443</code> 或 <code style="color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace">66.66.55.44:443#备注</code>（如未写端口将自动使用下方的监听端口）
         </div>
       </div>
 
-      <div style="border-top:1px solid var(--line);margin-bottom:20px"></div>
+      <div style="border-top:1px solid var(--line);margin-bottom:14px"></div>
 
       <!-- 下半部分：服务端（参考图二） -->
       <div>
-        <div style="text-align:center;font-weight:600;font-size:13px;color:var(--text);margin-bottom:12px;position:relative">
+        <div style="text-align:center;font-weight:600;font-size:13px;color:var(--text);margin-bottom:10px;position:relative">
           <span style="background:var(--panel);padding:0 12px;position:relative;z-index:1">服务端</span>
           <div style="position:absolute;top:50%;left:0;right:0;height:1px;background:var(--line)"></div>
         </div>
-        <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:8px">
+        <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:6px">
           <span style="font-size:12px;color:var(--dim);font-weight:500">监听</span>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
@@ -327,7 +327,7 @@ option{background:#161b22;color:var(--text);padding:8px}
             </div>
             <input type="hidden" id="nodeListenAddr" value="::">
             
-            <div id="nodeListenAddrMenu" style="display:none;position:absolute;left:-1px;right:-1px;top:calc(100% + 4px);background:#161b22;border:1px solid var(--line);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.6);z-index:99;overflow:hidden">
+            <div id="nodeListenAddrMenu" style="display:none;position:absolute;left:-1px;right:-1px;bottom:calc(100% + 4px);background:#161b22;border:1px solid var(--line);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.7);z-index:99;overflow:hidden">
               <div class="listen-opt-item" data-val="::" style="padding:9px 12px;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;color:var(--text);transition:background .15s">
                 <span style="font-weight:600">::</span>
                 <span style="color:var(--dim);font-size:11px">（ipv4/6外网通信）</span>
