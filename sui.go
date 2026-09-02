@@ -443,18 +443,38 @@ func (s *SUI) apiClients(id int) ([]map[string]any, error) {
 	return raw.Clients, nil
 }
 
-// apiClientByName 在 s-ui 客户端列表中按名称查找。
-func (s *SUI) apiClientByName(name string) (map[string]any, bool, error) {
-	clients, err := s.apiClients(0)
+// apiSaveInbound 调用 s-ui 自身的入站保存接口，由 s-ui 原生处理配置持久化、出站更新、订阅刷新与 sing-box 热重载。
+func (s *SUI) apiSaveInbound(act string, inbound map[string]any) error {
+	dataBytes, err := json.Marshal(inbound)
 	if err != nil {
-		return nil, false, err
+		return err
 	}
-	for _, c := range clients {
-		if n, _ := c["name"].(string); n == name {
-			return c, true, nil
-		}
+	form := url.Values{
+		"object": {"inbounds"},
+		"action": {act},
+		"data":   {string(dataBytes)},
 	}
-	return nil, false, nil
+	_, err = s.callAPI(http.MethodPost, "save", form)
+	return err
+}
+
+// apiInbounds 通过 s-ui API 获取入站列表；id>0 时返回单个入站的完整信息。
+func (s *SUI) apiInbounds(id int) ([]map[string]any, error) {
+	endpoint := "inbounds"
+	if id > 0 {
+		endpoint = fmt.Sprintf("inbounds?id=%d", id)
+	}
+	obj, err := s.callAPI(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	var raw struct {
+		Inbounds []map[string]any `json:"inbounds"`
+	}
+	if err := json.Unmarshal(obj, &raw); err != nil {
+		return nil, err
+	}
+	return raw.Inbounds, nil
 }
 
 
@@ -2279,29 +2299,21 @@ func (s *SUI) NodeDetail(id int) (*NodeDetailInfo, error) {
 }
 
 func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []NodeAddrItem, tlsEnabled bool, sni string, tunnels []*Tunnel) error {
-	// 1. 读取原有的 out_json 与 tls_id
-	var origOutJSON map[string]any
-	rawOutJSONHex := s.sqliteQuery(fmt.Sprintf("SELECT hex(out_json) FROM inbounds WHERE id = %d;", id))
-	if rawOutJSONHex != "" {
-		if b, err := hex.DecodeString(rawOutJSONHex); err == nil {
-			_ = json.Unmarshal(b, &origOutJSON)
-		}
+	inbounds, err := s.apiInbounds(id)
+	if err != nil || len(inbounds) == 0 {
+		return fmt.Errorf("获取入站 (ID: %d) 失败: %w", id, err)
 	}
-	if origOutJSON == nil {
-		origOutJSON = make(map[string]any)
-	}
+	inbound := inbounds[0]
 
+	// 1. 读取原有 tls_id
 	var tlsID int
-	tlsIDStr := s.sqliteQuery(fmt.Sprintf("SELECT tls_id FROM inbounds WHERE id = %d;", id))
-	if n, err := strconv.Atoi(strings.TrimSpace(tlsIDStr)); err == nil {
-		tlsID = n
+	if tidVal, ok := inbound["tls_id"].(float64); ok {
+		tlsID = int(tidVal)
 	}
 
 	serverName := strings.TrimSpace(sni)
 	var tlsMap map[string]any
-
 	if tlsID == 0 {
-		// 仅对服务端无证书的隧道代理/CDN节点处理客户端TLS配置
 		if tlsEnabled {
 			tlsMap = map[string]any{
 				"enabled":     true,
@@ -2311,22 +2323,12 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 					"fingerprint": "chrome",
 				},
 			}
-			origOutJSON["tls"] = tlsMap
-			if serverName != "" {
-				if tr, ok := origOutJSON["transport"].(map[string]any); ok {
-					if hdrs, ok := tr["headers"].(map[string]any); ok {
-						hdrs["Host"] = serverName
-					}
-				}
-			}
-		} else {
-			delete(origOutJSON, "tls")
 		}
 	}
 
-	// 2. 组装 addrs 列表
+	// 2. 组装符合 s-ui 标准的 addrs 列表
 	addrsList := make([]map[string]any, 0, len(addrs))
-	for i, a := range addrs {
+	for _, a := range addrs {
 		srv := strings.TrimSpace(a.Server)
 		if srv == "" {
 			continue
@@ -2341,51 +2343,32 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 		if tlsID == 0 && tlsEnabled && tlsMap != nil {
 			item["tls"] = tlsMap
 		}
-		if i == 0 {
-			origOutJSON["server"] = srv
-			origOutJSON["server_port"] = a.ServerPort
-			if a.Remark != "" {
-				origOutJSON["remark"] = a.Remark
-			} else {
-				delete(origOutJSON, "remark")
-			}
-		}
 		addrsList = append(addrsList, item)
 	}
+	inbound["addrs"] = addrsList
 
-	// 3. 更新 options
-	optMap := make(map[string]any)
-	rawOptHex := s.sqliteQuery(fmt.Sprintf("SELECT hex(options) FROM inbounds WHERE id = %d;", id))
-	if rawOptHex != "" {
-		if b, err := hex.DecodeString(rawOptHex); err == nil {
-			_ = json.Unmarshal(b, &optMap)
-		}
-	}
+	// 3. 更新 listen 与 listen_port（若有指定）
 	if listen != "" {
-		optMap["listen"] = listen
+		inbound["listen"] = listen
 	}
 	if listenPort > 0 {
-		optMap["listen_port"] = listenPort
+		inbound["listen_port"] = listenPort
 	}
 
-	newOptJSON, _ := json.Marshal(optMap)
-	addrsJSON, _ := json.Marshal(addrsList)
-	newOutJSON, _ := json.Marshal(origOutJSON)
-
-	// 4. 持久化到 SQLite 并重启 sing-box 与 s-ui 服务
-	query := fmt.Sprintf(
-		"UPDATE inbounds SET options=X'%s', addrs=X'%s', out_json=X'%s' WHERE id=%d;",
-		hex.EncodeToString(newOptJSON),
-		hex.EncodeToString(addrsJSON),
-		hex.EncodeToString(newOutJSON),
-		id,
-	)
-	if _, err := runSQLite(s.dbPath, query); err != nil {
-		return fmt.Errorf("写入节点配置失败: %w", err)
+	// 4. 如果包含 WebSocket 等 transport 且指定了 SNI，同步 headers.Host
+	if serverName != "" && tlsEnabled {
+		if tr, ok := inbound["transport"].(map[string]any); ok {
+			if hdrs, ok := tr["headers"].(map[string]any); ok {
+				hdrs["Host"] = serverName
+			}
+		}
 	}
 
-	s.restartSingBox()
-	s.restartSUI()
+	// 5. 严格调用 s-ui 原生 API POST /apiv2/save (object=inbounds, action=edit) 提交保存
+	if err := s.apiSaveInbound("edit", inbound); err != nil {
+		return fmt.Errorf("通过 s-ui 原生 API 保存入站配置失败: %w", err)
+	}
+
 	return nil
 }
 
