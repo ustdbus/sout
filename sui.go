@@ -2260,19 +2260,20 @@ func (s *SUI) NodeDetail(id int) (*NodeDetailInfo, error) {
 	}
 
 	return &NodeDetailInfo{
-		ID:         id,
-		Name:       tag,
-		Protocol:   strings.ToUpper(typ),
-		Listen:     listen,
-		ListenPort: listenPort,
-		TLSEnabled: tlsEnabled,
-		SNI:        sni,
-		Addrs:      allAddrs,
+		ID:           id,
+		Name:         tag,
+		Protocol:     strings.ToUpper(typ),
+		Listen:       listen,
+		ListenPort:   listenPort,
+		TLSEnabled:   tlsEnabled,
+		SNI:          sni,
+		ServerHasTLS: tlsID > 0,
+		Addrs:        allAddrs,
 	}, nil
 }
 
 func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []NodeAddrItem, tlsEnabled bool, sni string, tunnels []*Tunnel) error {
-	// 1. 读取原有的 out_json
+	// 1. 读取原有的 out_json 与 tls_id
 	var origOutJSON map[string]any
 	rawOutJSONHex := s.sqliteQuery(fmt.Sprintf("SELECT hex(out_json) FROM inbounds WHERE id = %d;", id))
 	if rawOutJSONHex != "" {
@@ -2284,30 +2285,40 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 		origOutJSON = make(map[string]any)
 	}
 
-	serverName := strings.TrimSpace(sni)
-	var tlsMap map[string]any
-	if tlsEnabled {
-		tlsMap = map[string]any{
-			"enabled":     true,
-			"server_name": serverName,
-			"utls": map[string]any{
-				"enabled":     true,
-				"fingerprint": "chrome",
-			},
-		}
-		origOutJSON["tls"] = tlsMap
-		if serverName != "" {
-			if tr, ok := origOutJSON["transport"].(map[string]any); ok {
-				if hdrs, ok := tr["headers"].(map[string]any); ok {
-					hdrs["Host"] = serverName
-				}
-			}
-		}
-	} else {
-		delete(origOutJSON, "tls")
+	var tlsID int
+	tlsIDStr := s.sqliteQuery(fmt.Sprintf("SELECT tls_id FROM inbounds WHERE id = %d;", id))
+	if n, err := strconv.Atoi(strings.TrimSpace(tlsIDStr)); err == nil {
+		tlsID = n
 	}
 
-	// 2. 组装 addrs 列表（包含所有多域名条目，并附加 tls 配置）
+	serverName := strings.TrimSpace(sni)
+	var tlsMap map[string]any
+
+	if tlsID == 0 {
+		// 仅对服务端无证书的隧道代理/CDN节点处理客户端TLS配置
+		if tlsEnabled {
+			tlsMap = map[string]any{
+				"enabled":     true,
+				"server_name": serverName,
+				"utls": map[string]any{
+					"enabled":     true,
+					"fingerprint": "chrome",
+				},
+			}
+			origOutJSON["tls"] = tlsMap
+			if serverName != "" {
+				if tr, ok := origOutJSON["transport"].(map[string]any); ok {
+					if hdrs, ok := tr["headers"].(map[string]any); ok {
+						hdrs["Host"] = serverName
+					}
+				}
+			}
+		} else {
+			delete(origOutJSON, "tls")
+		}
+	}
+
+	// 2. 组装 addrs 列表
 	addrsList := make([]map[string]any, 0, len(addrs))
 	for i, a := range addrs {
 		srv := strings.TrimSpace(a.Server)
@@ -2321,7 +2332,7 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 		if a.Remark != "" {
 			item["remark"] = a.Remark
 		}
-		if tlsEnabled && tlsMap != nil {
+		if tlsID == 0 && tlsEnabled && tlsMap != nil {
 			item["tls"] = tlsMap
 		}
 		if i == 0 {

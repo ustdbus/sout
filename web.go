@@ -312,11 +312,15 @@ option{background:#161b22;color:var(--text);padding:8px}
         <!-- 客户端 TLS 开关与 SNI -->
         <div style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:9px 12px;margin-top:10px">
           <div style="display:flex;align-items:center;justify-content:space-between">
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0;user-select:none">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0;user-select:none" id="clientTlsLabel">
               <input type="checkbox" id="clientTlsToggle" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;margin:0">
-              <span style="font-size:12px;font-weight:600;color:var(--text)">启用客户端 TLS（适用于隧道代理节点，开启后需填入隧道域名）</span>
+              <span id="clientTlsText" style="font-size:12px;font-weight:600;color:var(--text)">启用客户端 TLS（适用于隧道代理节点，开启后需填入隧道域名）</span>
             </label>
-            <span style="font-size:11px;color:var(--dim)">TLS</span>
+            <span id="clientTlsBadge" style="font-size:11px;color:var(--dim)">TLS</span>
+          </div>
+
+          <div id="clientTlsServerHint" style="display:none;margin-top:6px;font-size:11px;color:#3fb950;line-height:1.4">
+            🔒 服务端已配置 TLS 证书模板，客户端自动继承加密连接（无需手动设置）
           </div>
 
           <div id="clientTlsBox" style="display:none;margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)">
@@ -752,8 +756,13 @@ document.addEventListener('click', async e => {
     editNodeTargetID = id;
     $('#editNodeTitle').textContent = '修改节点 - ' + name;
     $('#nodeClientAddrsText').value = '';
-    $('#nodeListenPort').value = '';
     $('#clientTlsToggle').checked = false;
+    $('#clientTlsToggle').disabled = false;
+    $('#clientTlsLabel').style.cursor = 'pointer';
+    $('#clientTlsText').textContent = '启用客户端 TLS（适用于隧道代理节点，开启后需填入隧道域名）';
+    $('#clientTlsBadge').textContent = 'TLS';
+    $('#clientTlsBadge').style.color = 'var(--dim)';
+    $('#clientTlsServerHint').style.display = 'none';
     $('#clientTlsBox').style.display = 'none';
     $('#clientSniInput').value = '';
     setListenAddr('::');
@@ -765,10 +774,30 @@ document.addEventListener('click', async e => {
         setListenAddr(detail.listen);
         $('#nodeListenPort').value = detail.listen_port || '';
         
-        const isTls = !!detail.tls_enabled;
-        $('#clientTlsToggle').checked = isTls;
-        $('#clientTlsBox').style.display = isTls ? 'block' : 'none';
-        $('#clientSniInput').value = detail.sni || '';
+        if (detail.server_has_tls) {
+          // 服务端自带证书：锁定显示
+          $('#clientTlsToggle').checked = true;
+          $('#clientTlsToggle').disabled = true;
+          $('#clientTlsLabel').style.cursor = 'not-allowed';
+          $('#clientTlsText').textContent = '客户端 TLS（已锁定）';
+          $('#clientTlsBadge').textContent = '服务端证书托管';
+          $('#clientTlsBadge').style.color = '#3fb950';
+          $('#clientTlsServerHint').style.display = 'block';
+          $('#clientTlsBox').style.display = 'none';
+        } else {
+          // 隧道代理/无证书节点：可自由配置
+          $('#clientTlsToggle').disabled = false;
+          $('#clientTlsLabel').style.cursor = 'pointer';
+          $('#clientTlsText').textContent = '启用客户端 TLS（适用于隧道代理节点，开启后需填入隧道域名）';
+          $('#clientTlsBadge').textContent = 'TLS';
+          $('#clientTlsBadge').style.color = 'var(--dim)';
+          $('#clientTlsServerHint').style.display = 'none';
+          
+          const isTls = !!detail.tls_enabled;
+          $('#clientTlsToggle').checked = isTls;
+          $('#clientTlsBox').style.display = isTls ? 'block' : 'none';
+          $('#clientSniInput').value = detail.sni || '';
+        }
 
         if(detail.addrs && detail.addrs.length){
           const lines = detail.addrs.map(a => {
