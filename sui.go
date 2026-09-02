@@ -2373,14 +2373,16 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 	newOutJSON, _ := json.Marshal(origOutJSON)
 
 	// 4. 持久化到 SQLite 并重启 sing-box 与 s-ui 服务
-	_ = s.sqliteQuery(fmt.Sprintf(
-		"UPDATE inbounds SET options=X'%s', addrs=X'%s', out_json=X'%s', listen_port=%d WHERE id=%d;",
+	query := fmt.Sprintf(
+		"UPDATE inbounds SET options=X'%s', addrs=X'%s', out_json=X'%s' WHERE id=%d;",
 		hex.EncodeToString(newOptJSON),
 		hex.EncodeToString(addrsJSON),
 		hex.EncodeToString(newOutJSON),
-		listenPort,
 		id,
-	))
+	)
+	if _, err := runSQLite(s.dbPath, query); err != nil {
+		return fmt.Errorf("写入节点配置失败: %w", err)
+	}
 
 	s.restartSingBox()
 	s.restartSUI()
