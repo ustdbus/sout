@@ -733,6 +733,12 @@ func (s *SUI) restartSingBox() {
 	_, _ = s.callAPI(http.MethodPost, "restartSb", nil)
 }
 
+func (s *SUI) restartSUI() {
+	_ = exec.Command("systemctl", "restart", "s-ui").Run()
+	_ = exec.Command("service", "s-ui", "restart").Run()
+	_ = exec.Command("rc-service", "s-ui", "restart").Run()
+}
+
 func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {
 	outboundsObj, err := s.callAPI(http.MethodGet, "outbounds", nil)
 	if err != nil {
@@ -2366,7 +2372,7 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 	addrsJSON, _ := json.Marshal(addrsList)
 	newOutJSON, _ := json.Marshal(origOutJSON)
 
-	// 4. 持久化到 SQLite 并重启 sing-box
+	// 4. 持久化到 SQLite 并重启 sing-box 与 s-ui 服务
 	_ = s.sqliteQuery(fmt.Sprintf(
 		"UPDATE inbounds SET options=X'%s', addrs=X'%s', out_json=X'%s', listen_port=%d WHERE id=%d;",
 		hex.EncodeToString(newOptJSON),
@@ -2377,6 +2383,7 @@ func (s *SUI) UpdateNodeConfig(id int, listen string, listenPort int, addrs []No
 	))
 
 	s.restartSingBox()
+	s.restartSUI()
 	return nil
 }
 
