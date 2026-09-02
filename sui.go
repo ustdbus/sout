@@ -2161,6 +2161,19 @@ func (s *SUI) NodeDetail(id int) (*NodeDetailInfo, error) {
 		}
 	}
 
+	var tlsID int
+	if tRaw, ok := inb["tls_id"]; ok {
+		if tFloat, ok := tRaw.(float64); ok {
+			tlsID = int(tFloat)
+		}
+	}
+	if tlsID == 0 {
+		tlsIDStr := s.sqliteQuery(fmt.Sprintf("SELECT tls_id FROM inbounds WHERE id = %d;", id))
+		if n, err := strconv.Atoi(strings.TrimSpace(tlsIDStr)); err == nil {
+			tlsID = n
+		}
+	}
+
 	var tlsEnabled bool
 	var sni string
 
@@ -2171,38 +2184,55 @@ func (s *SUI) NodeDetail(id int) (*NodeDetailInfo, error) {
 			_ = json.Unmarshal(b, &outJSON)
 		}
 	}
-	if outJSON != nil {
-		if tlsMap, ok := outJSON["tls"].(map[string]any); ok {
-			if en, ok := tlsMap["enabled"].(bool); ok {
-				tlsEnabled = en
-			}
-			if s, ok := tlsMap["server_name"].(string); ok {
-				sni = s
-			}
-		}
-		if sni == "" {
-			if tr, ok := outJSON["transport"].(map[string]any); ok {
-				if hdrs, ok := tr["headers"].(map[string]any); ok {
-					if h, ok := hdrs["Host"].(string); ok {
-						sni = h
-					}
-				}
-			}
-		}
-	}
 
-	// 若 out_json 未开启，但 addrs 中某项开启了 TLS，亦识别为开启
-	if !tlsEnabled && len(rawAddrsList) > 0 {
+	if tlsID > 0 {
+		// 服务端已自带 TLS 证书 (如 TUIC/Hysteria/Trojan 直连节点):
+		// 客户端默认继承服务端证书，仅当多域名 addrs 显式单独开启了客户端 TLS 覆写时才判定为开启
 		for _, rawItem := range rawAddrsList {
 			if tlsMap, ok := rawItem["tls"].(map[string]any); ok {
 				if en, ok := tlsMap["enabled"].(bool); ok && en {
 					tlsEnabled = true
-					if sni == "" {
-						if s, ok := tlsMap["server_name"].(string); ok {
-							sni = s
-						}
+					if s, ok := tlsMap["server_name"].(string); ok {
+						sni = s
 					}
 					break
+				}
+			}
+		}
+	} else {
+		// 服务端无证书 (如 CDN / Argo / 隧道代理节点):
+		// 从 out_json 或 addrs 中读取客户端 TLS 配置
+		if outJSON != nil {
+			if tlsMap, ok := outJSON["tls"].(map[string]any); ok {
+				if en, ok := tlsMap["enabled"].(bool); ok {
+					tlsEnabled = en
+				}
+				if s, ok := tlsMap["server_name"].(string); ok {
+					sni = s
+				}
+			}
+			if sni == "" {
+				if tr, ok := outJSON["transport"].(map[string]any); ok {
+					if hdrs, ok := tr["headers"].(map[string]any); ok {
+						if h, ok := hdrs["Host"].(string); ok {
+							sni = h
+						}
+					}
+				}
+			}
+		}
+		if !tlsEnabled && len(rawAddrsList) > 0 {
+			for _, rawItem := range rawAddrsList {
+				if tlsMap, ok := rawItem["tls"].(map[string]any); ok {
+					if en, ok := tlsMap["enabled"].(bool); ok && en {
+						tlsEnabled = true
+						if sni == "" {
+							if s, ok := tlsMap["server_name"].(string); ok {
+								sni = s
+							}
+						}
+						break
+					}
 				}
 			}
 		}
