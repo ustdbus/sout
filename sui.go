@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/tls"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -444,6 +443,20 @@ func (s *SUI) apiClients(id int) ([]map[string]any, error) {
 		return nil, err
 	}
 	return raw.Clients, nil
+}
+
+// apiClientByName 在 s-ui 客户端列表中按名称查找。
+func (s *SUI) apiClientByName(name string) (map[string]any, bool, error) {
+	clients, err := s.apiClients(0)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, c := range clients {
+		if n, _ := c["name"].(string); n == name {
+			return c, true, nil
+		}
+	}
+	return nil, false, nil
 }
 
 // apiSaveInbound 调用 s-ui 自身的入站保存接口，由 s-ui 原生处理配置持久化、出站更新、订阅刷新与 sing-box 热重载。
@@ -1092,7 +1105,7 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		if !isSplitUser(name) {
 			if inbList, ok := c["inbounds"].([]any); ok {
 				for _, item := range inbList {
-					if num, ok := item.(float64); int(num) == templateID {
+					if num, ok := item.(float64); ok && int(num) == templateID {
 						templateClient = c
 						break
 					}
