@@ -704,14 +704,12 @@ if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$
   echo "  [s-ui (Sing-Box) 节点面板]"
   echo "  s-ui 面板:     https://${c_dom}/${c_sui_p}/"
   echo "  s-ui 用户名:   ${SUI_ADMIN_USER:-${c_sui_u:-admin}}"
-  if [[ -n "$SUI_ADMIN_PASS" ]]; then
-    if [[ "$SUI_PASS_IS_RANDOM" == "1" ]]; then
-      echo "  s-ui 密  码:   ${SUI_ADMIN_PASS}"
-      echo "  ⚠️ 安全提示:   该随机密码仅在安装完成时显示一次，请务必妥善保存！"
-      echo "                 (若遗忘密码，可随时在终端输入 s-ui 进行重置修改)"
-    else
-      echo "  s-ui 密  码:   ${SUI_ADMIN_PASS}  [已按您输入的自定义密码生效，若遗忘密码，可随时在终端输入 s-ui 进行重置修改]"
-    fi
+  if [[ -n "$SUI_ADMIN_PASS" && "$SUI_PASS_IS_RANDOM" == "1" ]]; then
+    echo "  s-ui 密  码:   ${SUI_ADMIN_PASS}"
+    echo "  ⚠️ 安全提示:   该随机密码仅在安装完成时显示一次，请务必妥善保存！"
+    echo "                 (若遗忘密码，可随时在终端输入 s-ui 进行重置修改)"
+  elif [[ -n "$SUI_ADMIN_PASS" && "$SUI_PASS_IS_RANDOM" != "1" ]]; then
+    echo "  s-ui 密  码:   [已按您输入的自定义密码生效，若遗忘密码，可随时在终端输入 s-ui 进行重置修改]"
   else
     echo "  s-ui 密  码:   [由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]"
   fi
@@ -756,14 +754,12 @@ else
     echo "  [s-ui (Sing-Box) 节点面板]"
     echo "  s-ui 面板:     http://${IP}:${sui_port}${sui_path}"
     echo "  s-ui 用户名:   ${SUI_ADMIN_USER:-${sui_u}}"
-    if [[ -n "$SUI_ADMIN_PASS" ]]; then
-      if [[ "$SUI_PASS_IS_RANDOM" == "1" ]]; then
-        echo "  s-ui 密  码:   ${SUI_ADMIN_PASS}"
-        echo "  ⚠️ 安全提示:   该随机密码仅在安装完成时显示一次，请务必妥善保存！"
-        echo "                 (若遗忘密码，可随时在终端输入 s-ui 进行重置修改)"
-      else
-        echo "  s-ui 密  码:   ${SUI_ADMIN_PASS}  [已按您输入的自定义密码生效，若遗忘密码，可随时在终端输入 s-ui 进行重置修改]"
-      fi
+    if [[ -n "$SUI_ADMIN_PASS" && "$SUI_PASS_IS_RANDOM" == "1" ]]; then
+      echo "  s-ui 密  码:   ${SUI_ADMIN_PASS}"
+      echo "  ⚠️ 安全提示:   该随机密码仅在安装完成时显示一次，请务必妥善保存！"
+      echo "                 (若遗忘密码，可随时在终端输入 s-ui 进行重置修改)"
+    elif [[ -n "$SUI_ADMIN_PASS" && "$SUI_PASS_IS_RANDOM" != "1" ]]; then
+      echo "  s-ui 密  码:   [已按您输入的自定义密码生效，若遗忘密码，可随时在终端输入 s-ui 进行重置修改]"
     else
       echo "  s-ui 密  码:   [由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]"
     fi

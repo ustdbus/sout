@@ -2072,14 +2072,12 @@ METAEOF
   echo -e "  [2] s-ui 节点与分流管理面板"
   echo -e "      访问地址:  ${B}https://${domain}/${sui_path}/${N}"
   echo -e "      管理账号:  ${Y}${sui_admin_user}${N}"
-  if [[ -n "$in_sui_pass" ]]; then
-    if [[ "$in_sui_is_random" == "1" ]]; then
-      echo -e "      管理密码:  ${G}${in_sui_pass}${N}"
-      echo -e "      ${Y}⚠️ 安全提示: 该随机密码仅在安装完成时显示一次，请务必妥善保存！${N}"
-      echo -e "                 ${D}(若遗忘密码，可随时在终端输入 s-ui 进行重置修改)${N}"
-    else
-      echo -e "      管理密码:  ${G}${in_sui_pass}${N} ${D}[已按您输入的自定义密码生效，若遗忘密码，可随时在终端输入 s-ui 进行重置修改]${N}"
-    fi
+  if [[ -n "$in_sui_pass" && "$in_sui_is_random" == "1" ]]; then
+    echo -e "      管理密码:  ${G}${in_sui_pass}${N}"
+    echo -e "      ${Y}⚠️ 安全提示: 该随机密码仅在安装完成时显示一次，请务必妥善保存！${N}"
+    echo -e "                 ${D}(若遗忘密码，可随时在终端输入 s-ui 进行重置修改)${N}"
+  elif [[ -n "$in_sui_pass" && "$in_sui_is_random" != "1" ]]; then
+    echo -e "      管理密码:  ${D}[已按您输入的自定义密码生效，若遗忘密码，可随时在终端输入 s-ui 进行重置修改]${N}"
   else
     echo -e "      管理密码:  ${D}[由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]${N}"
   fi
