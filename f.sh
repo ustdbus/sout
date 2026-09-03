@@ -1545,15 +1545,24 @@ setup_caddy_proxy() {
   public_ip=$(curl -s4m 5 https://api.ipify.org 2>/dev/null || curl -s4m 5 https://ifconfig.me 2>/dev/null || echo "$domain")
   cur_cc=$(get_tcp_congestion)
 
-  # 3. 写入纯净本地 Caddyfile (双栈通配监听 :${tunnel_port})
+  local listen_ports=":${tunnel_port}"
+  if [[ "$tunnel_port" != "443" ]]; then
+    listen_ports=":443, :${tunnel_port}"
+  fi
+  local tls_block=""
+  if [[ -s "$cert_file" && -s "$key_file" ]]; then
+    tls_block="    tls ${cert_file} ${key_file}"
+  fi
+
+  # 3. 写入纯净本地 Caddyfile (双栈通配监听，支持 NAT 回源与本地隧道)
   mkdir -p /etc/caddy /var/log/caddy /var/lib/caddy
   cat > /etc/caddy/Caddyfile <<EOF
 {
     admin off
-    auto_https off
 }
 
-:${tunnel_port} {
+${listen_ports} {
+${tls_block}
     redir /${sout_path} /${sout_path}/ 308
     redir /${sui_path} /${sui_path}/ 308
     redir /${sub_path} /${sub_path}/ 308
