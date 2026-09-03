@@ -1548,60 +1548,7 @@ setup_caddy_proxy() {
   public_ip=$(curl -s4m 5 https://api.ipify.org 2>/dev/null || curl -s4m 5 https://ifconfig.me 2>/dev/null || echo "$domain")
   cur_cc=$(get_tcp_congestion)
 
-  local listen_ports=":${tunnel_port}"
-  if [[ "$tunnel_port" != "443" ]]; then
-    listen_ports=":443, :${tunnel_port}"
-  fi
-  local tls_block=""
-  if [[ -s "$cert_file" && -s "$key_file" ]]; then
-    tls_block="    tls ${cert_file} ${key_file}"
-  fi
-
-  # 3. 写入纯净本地 Caddyfile (双栈通配监听，支持 NAT 回源与本地隧道)
-  mkdir -p /etc/caddy /var/log/caddy /var/lib/caddy
-  cat > /etc/caddy/Caddyfile <<EOF
-{
-    admin off
-}
-
-${listen_ports} {
-${tls_block}
-    redir /${sout_path} /${sout_path}/ 308
-    redir /${sui_path} /${sui_path}/ 308
-    redir /${sub_path} /${sub_path}/ 308
-
-    # 1. sout 动态家宽管理面板
-    handle /${sout_path}* {
-        reverse_proxy 127.0.0.1:${sout_port}
-    }
-
-    # 2. s-ui 节点管理面板
-    handle /${sui_path}* {
-        reverse_proxy 127.0.0.1:${sui_port}
-    }
-
-      # 3. sout 订阅接口（重写到 sout 面板的 /sub）
-      handle /${sub_path}* {
-          rewrite * /${sout_path}/sub{uri}
-          reverse_proxy 127.0.0.1:${sout_port}
-      }
-
-    # 4. VLESS + WebSocket 节点 (实时零缓冲透传)
-    handle /${ws_path}* {
-        reverse_proxy 127.0.0.1:${node_port} {
-            flush_interval -1
-        }
-    }
-
-    # 5. 伪装根路径
-    handle {
-        respond "Service Ready" 200
-    }
-}
-EOF
-
-  echo -e "  [+] 正在启动本地 Caddy 分流服务与 Cloudflare 隧道..."
-  systemctl restart caddy 2>/dev/null || rc-service caddy restart 2>/dev/null || service caddy restart 2>/dev/null || true
+  echo -e "  [+] 正在启动 Cloudflare 隧道服务..."
   setup_cloudflared_service "$tunnel_token" "$tunnel_port"
 
   if [[ "$is_quick" == "true" ]]; then
@@ -2149,32 +2096,10 @@ with open(path, 'w') as f:
 METAEOF
   chmod 600 "$CADDY_META"
 
-  systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || true
+  systemctl restart sout 2>/dev/null || rc-service sout restart 2>/dev/null || service sout restart 2>/dev/null || true
 
-  echo
-  echo -e "${G}================================================================${N}"
-  if [[ "$is_quick" == "true" ]]; then
-    echo -e "${G}  🎉 Cloudflare 官方免费临时隧道连接和Caddy流量代理已成功开启！${N}"
-  else
-    echo -e "${G}  🎉 Cloudflare隧道连接和Caddy流量代理已成功开启！${N}"
-  fi
-  echo -e "${G}================================================================${N}"
-  echo -e "  访问域名:      ${B}https://${domain}${N}"
-  echo -e "  隧道服务:      ${G}cloudflared (运行中 / active)${N}"
-  echo -e "  本地回源端口:  ${Y}127.0.0.1:${tunnel_port}${N}"
-  echo -e "  ----------------------------------------------------------------"
-  echo -e "  [1] sout 家宽动态出口插件面板"
-  echo -e "      访问地址:  ${B}https://${domain}/${sout_path}/${N}"
-  echo -e "      访问口令:  ${Y}$(cat "${WORK_DIR}/password" 2>/dev/null || echo "未设置")${N}"
-  echo
-  echo -e "  [2] s-ui 节点与分流管理面板"
-  echo -e "      访问地址:  ${B}https://${domain}/${sui_path}/${N}"
-  echo -e "      管理账号:  ${Y}${sui_admin_user}${N}"
-  echo -e "      管理密码:  ${D}[由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]${N}"
-  echo
-    echo -e "  [3] sout 订阅地址:  ${B}https://${domain}/${sout_path}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")${N}"
-  echo -e "${G}================================================================${N}"
-  echo
+  # 7. 统一调用终端菜单中的 Caddy 探测并分流，确保 Caddyfile 规则与隧道回源完全一致
+  reload_caddy_proxy
 }
 
 disable_caddy_proxy() {
