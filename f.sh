@@ -2055,9 +2055,9 @@ METAEOF
   echo
   echo -e "${G}================================================================${N}"
   if [[ "$is_quick" == "true" ]]; then
-    echo -e "${G}  🎉 Cloudflare 官方免费临时隧道连接和Caddy流量代理已成功开启！${N}"
+    echo -e "${G}  🎉 sout 插件安装部署完成！(Cloudflare 官方免费临时隧道)${N}"
   else
-    echo -e "${G}  🎉 Cloudflare隧道连接和Caddy流量代理已成功开启！${N}"
+    echo -e "${G}  🎉 sout 插件安装部署完成！(Cloudflare隧道连接和Caddy流量代理)${N}"
   fi
   echo -e "${G}================================================================${N}"
   echo -e "  访问域名:      ${B}https://${domain}${N}"

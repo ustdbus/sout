@@ -621,6 +621,8 @@ if [[ "$WANT_TUNNEL" == "y" ]]; then
   if [[ -x /usr/local/bin/sout ]]; then
     /usr/local/bin/sout setup_tunnel "$TUNNEL_DOMAIN" "$TUNNEL_TOKEN" "$TUNNEL_PORT" "${APPLY_CERT:-n}" "${CF_DNS_KEY:-}" "$SUI_ADMIN_PASS" "$SUI_PASS_IS_RANDOM"
   fi
+  # setup_tunnel 已完整打印包含全部隧道、面板与订阅的部署完成日志，直接退出避免重复打印
+  exit 0
 fi
 
 IP=$(curl -s4m 5 https://api.ipify.org || curl -s4m 5 https://ifconfig.me || echo "127.0.0.1")
