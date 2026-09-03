@@ -1520,7 +1520,15 @@ setup_caddy_proxy() {
   fi
   echo -e "${B}================================================================${N}"
 
-  # 如果开启了固定隧道且要求申请证书
+  # 1. 确保 Caddy 与 cloudflared 安装
+  if [[ "$apply_cert" == "y" && -n "$domain" && -n "$cf_dns_key" ]]; then
+    ensure_caddy_with_cloudflare || install_caddy_bin || { echo -e "  ${R}安装 Caddy 失败${N}"; return 1; }
+  else
+    install_caddy_bin || { echo -e "  ${R}安装 Caddy 失败${N}"; return 1; }
+  fi
+  install_cloudflared_bin || { echo -e "  ${R}安装 cloudflared 失败${N}"; return 1; }
+
+  # 2. 如果开启了固定隧道且要求申请证书
   local cert_dir="/home/acme/${domain}"
   local cert_file="${cert_dir}/fullchain.pem"
   local key_file="${cert_dir}/privkey.pem"
@@ -1538,10 +1546,6 @@ setup_caddy_proxy() {
     echo -e "  ${G}[✓] 本地已存在域名 [${domain}] 的完整证书，直接复用。${N}"
     cert_ready="true"
   fi
-
-  # 1. 确保 Caddy 与 cloudflared 安装
-  install_caddy_bin || { echo -e "  ${R}安装 Caddy 失败${N}"; return 1; }
-  install_cloudflared_bin || { echo -e "  ${R}安装 cloudflared 失败${N}"; return 1; }
 
   # 2. 分配本地端口与安全路径
   local sout_port sui_port sub_port node_port reality_port tuic_port hy2_port
@@ -2107,7 +2111,34 @@ METAEOF
   systemctl restart sout 2>/dev/null || rc-service sout restart 2>/dev/null || service sout restart 2>/dev/null || true
 
   # 7. 统一调用终端菜单中的 Caddy 探测并分流，确保 Caddyfile 规则与隧道回源完全一致
-  reload_caddy_proxy
+  reload_caddy_proxy >/dev/null 2>&1 || true
+
+  echo
+  echo -e "${G}================================================================${N}"
+  if [[ "$is_quick" == "true" ]]; then
+    echo -e "${G}  🎉 Cloudflare 官方免费临时隧道连接和Caddy流量代理已成功开启！${N}"
+  else
+    echo -e "${G}  🎉 Cloudflare隧道连接和Caddy流量代理已成功开启！${N}"
+  fi
+  echo -e "${G}================================================================${N}"
+  echo -e "  访问域名:      ${B}https://${domain}${N}"
+  echo -e "  隧道服务:      ${G}cloudflared (运行中 / active)${N}"
+  echo -e "  本地回源端口:  ${Y}127.0.0.1:${tunnel_port}${N}"
+  echo -e "  ----------------------------------------------------------------"
+  echo -e "  [1] sout 家宽动态出口插件面板"
+  echo -e "      访问地址:  ${B}https://${domain}/${sout_path}/${N}"
+  echo -e "      访问口令:  ${Y}$(cat "${WORK_DIR}/password" 2>/dev/null || echo "未设置")${N}"
+  echo -e "      唤起命令:  sout"
+  echo
+  echo -e "  [2] s-ui 节点与分流管理面板"
+  echo -e "      访问地址:  ${B}https://${domain}/${sui_path}/${N}"
+  echo -e "      管理账号:  ${Y}${sui_admin_user}${N}"
+  echo -e "      管理密码:  ${D}[由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]${N}"
+  echo -e "      唤起命令:  s-ui"
+  echo
+  echo -e "  [3] sout 订阅地址:  ${B}https://${domain}/${sout_path}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")${N}"
+  echo -e "${G}================================================================${N}"
+  echo
 }
 
 disable_caddy_proxy() {
@@ -2754,27 +2785,6 @@ with open(p, 'w') as f:
 
   if [[ "$caddy_restart_ok" == "true" ]]; then
     echo -e "  ${G}[✓] Caddy 反代服务已重新加载最新分流配置并成功启动！${N}"
-    echo
-    echo -e "${B}========================================${N}"
-    echo -e "${B}  最新 Caddy 流量反代与分流详情${N}"
-    echo -e "${B}========================================${N}"
-    echo -e "  Caddy 正在监听:    ${Y}127.0.0.1:${tunnel_port}${N}"
-    echo
-    echo -e "  ${G}• Caddy 将 /${sout_p}/ 路径流量转发至:   127.0.0.1:${sout_port} (sout 管理面板)${N}"
-    echo -e "    外网访问: https://${domain}/${sout_p}/"
-    echo
-    echo -e "  ${G}• Caddy 将 /${sui_p}/ 路径流量转发至:    127.0.0.1:${sui_port} (s-ui 面板)${N}"
-    echo -e "    外网访问: https://${domain}/${sui_p}/"
-    echo
-    echo -e "  ${G}• Caddy 将 /${sout_p}/sub 路径流量转发至: 127.0.0.1:${sout_port} (订阅接口)${N}"
-    echo -e "    订阅链接: https://${domain}/${sout_p}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")"
-    if [[ -n "$ws_p" ]]; then
-      echo
-      echo -e "  ${G}• Caddy 将 /${ws_p}/ 路径流量转发至:     127.0.0.1:${node_port} (节点流量)${N}"
-    fi
-    echo
-    echo -e "  ${G}• Caddy 将 / 根路径流量响应:            200 OK (伪装服务就绪)${N}"
-    echo -e "${B}========================================${N}"
   else
     echo -e "  ${R}[×] Caddy 重启失败，请检查 Caddyfile 或端口占用${N}"
   fi
@@ -2832,15 +2842,40 @@ except Exception:
     pass
 ' "$cf_domains_meta" "$domain" "$cf_token" "$cert_dir" 2>/dev/null || true
 
-  reload_caddy_proxy
+  if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$CADDY_META" 2>/dev/null; then
+    reload_caddy_proxy
+  else
+    # 尚无隧道元数据时（如全新安装初期，或独立申请证书），直接生成包含该域名 DNS-01 验证的基础 Caddyfile 并启动 Caddy
+    mkdir -p /etc/caddy /var/log/caddy
+    cat > /etc/caddy/Caddyfile <<EOF
+{
+    admin off
+}
+
+${domain} {
+    tls {
+        dns cloudflare "${cf_token}"
+    }
+    respond "SSL Ready" 200
+}
+EOF
+    if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+      systemctl restart caddy 2>/dev/null || true
+      systemctl enable caddy 2>/dev/null || true
+    elif command -v rc-service >/dev/null 2>&1; then
+      rc-service caddy restart 2>/dev/null || true
+    elif command -v service >/dev/null 2>&1; then
+      service caddy restart 2>/dev/null || true
+    fi
+  fi
 
   echo -e "  ${B}[4/4] 正在等待 Cloudflare DNS 解析生效并签发证书 (通常需 15-40 秒)...${N}"
   local ok=false
-  for i in $(seq 1 35); do
-    echo -ne "  正在等待签发中... (${i}/35s)\r"
+  for i in $(seq 1 45); do
+    echo -ne "  正在等待签发中... (${i}/45s)\r"
     local found_crt found_key
-    found_crt=$(find /var/lib/caddy /root/.local/share/caddy /root/.config/caddy /etc/caddy -name "${domain}.crt" -size +100c 2>/dev/null | head -1)
-    found_key=$(find /var/lib/caddy /root/.local/share/caddy /root/.config/caddy /etc/caddy -name "${domain}.key" -size +100c 2>/dev/null | head -1)
+    found_crt=$(find /var/lib/caddy /root/.local/share/caddy /root/.config/caddy /etc/caddy /var/log/caddy "${HOME:-/root}/.local/share/caddy" -name "${domain}.crt" -size +100c 2>/dev/null | head -1)
+    found_key=$(find /var/lib/caddy /root/.local/share/caddy /root/.config/caddy /etc/caddy /var/log/caddy "${HOME:-/root}/.local/share/caddy" -name "${domain}.key" -size +100c 2>/dev/null | head -1)
     if [[ -n "$found_crt" && -n "$found_key" ]]; then
       cp -f "$found_crt" "${cert_dir}/fullchain.pem"
       cp -f "$found_key" "${cert_dir}/privkey.pem"
@@ -2850,7 +2885,7 @@ except Exception:
       ok=true
       break
     fi
-    sleep 2
+    sleep 1
   done
   echo
 
@@ -2867,7 +2902,7 @@ except Exception:
     return 0
   else
     echo -e "  ${Y}[!] 签发超时或正在后台排队验证，请查看 Caddy 运行日志：${N}"
-    journalctl -u caddy -n 25 --no-pager 2>/dev/null || true
+    journalctl -u caddy -n 25 --no-pager 2>/dev/null || tail -n 25 /var/log/caddy.log 2>/dev/null || tail -n 25 /var/log/messages 2>/dev/null || true
     echo
     echo -e "  ${Y}若 Cloudflare DNS API 权限正确，Caddy 会在后台继续完成签发并自动存入 ${cert_dir}/${N}"
     return 1
@@ -3106,84 +3141,7 @@ apply_cf_ssl_cert() {
     return
   fi
 
-  echo
-  echo -e "  ${B}[1/4] 正在检查并准备 Caddy 服务 (集成 Cloudflare DNS 模块)...${N}"
-  ensure_caddy_with_cloudflare || { echo -e "  ${R}准备 Caddy 失败${N}"; return 1; }
-
-  echo -e "  ${B}[2/4] 正在创建证书存储目录: ${cert_dir}...${N}"
-  mkdir -p "$cert_dir"
-  chmod 700 /home/acme "$cert_dir"
-
-  echo -e "  ${B}[3/4] 正在配置 Caddy 并通过 Cloudflare DNS-01 验证发起申请...${N}"
-
-  # 记录域名到 Meta 文件供持久化和自动续期
-  local cf_domains_meta="${WORK_DIR}/cf_ssl_domains.json"
-  python3 -c '
-import json, os, time, sys
-p = sys.argv[1]
-dom = sys.argv[2]
-tok = sys.argv[3]
-cdir = sys.argv[4]
-d = {}
-if os.path.exists(p):
-    try:
-        with open(p) as f:
-            d = json.load(f)
-    except Exception:
-        pass
-d[dom] = {
-    "token": tok,
-    "applied_at": int(time.time()),
-    "cert_dir": cdir
-}
-with open(p, "w") as f:
-    json.dump(d, f, indent=2)
-try:
-    os.chmod(p, 0o600)
-except Exception:
-    pass
-' "$cf_domains_meta" "$domain" "$cf_token" "$cert_dir" 2>/dev/null || true
-
-  # 重新渲染主 Caddyfile (包含所有隧道反代规则 + 所有 SSL 域名申请与续期块)
-  reload_caddy_proxy
-
-  echo -e "  ${B}[4/4] 正在等待 Cloudflare DNS 解析生效并签发证书 (通常需 15-40 秒)...${N}"
-  local ok=false
-  for i in $(seq 1 35); do
-    echo -ne "  正在等待签发中... (${i}/35s)\r"
-    local found_crt found_key
-    found_crt=$(find /var/lib/caddy /root/.local/share/caddy /root/.config/caddy /etc/caddy -name "${domain}.crt" -size +100c 2>/dev/null | head -1)
-    found_key=$(find /var/lib/caddy /root/.local/share/caddy /root/.config/caddy /etc/caddy -name "${domain}.key" -size +100c 2>/dev/null | head -1)
-    if [[ -n "$found_crt" && -n "$found_key" ]]; then
-      cp -f "$found_crt" "${cert_dir}/fullchain.pem"
-      cp -f "$found_key" "${cert_dir}/privkey.pem"
-      cp -f "$found_crt" "${cert_dir}/cert.crt"
-      cp -f "$found_key" "${cert_dir}/private.key"
-      chmod 600 "${cert_dir}"/*
-      ok=true
-      break
-    fi
-    sleep 2
-  done
-  echo
-
-  if [[ "$ok" == "true" ]]; then
-    echo -e "  ${G}🎉 恭喜！Cloudflare SSL 证书申请成功！${N}"
-    echo -e "${B}========================================${N}"
-    echo -e "  托管域名:    ${B}${domain}${N}"
-    echo -e "  公钥路径:    ${G}${cert_dir}/fullchain.pem${N}"
-    echo -e "  私钥路径:    ${G}${cert_dir}/privkey.pem${N}"
-    echo -e "  备用公钥:    ${G}${cert_dir}/cert.crt${N}"
-    echo -e "  备用私钥:    ${G}${cert_dir}/private.key${N}"
-    echo -e "  自动续期:    ${G}已默认开启 (Caddy 后台静默自动续期)${N}"
-    echo -e "${B}========================================${N}"
-    echo -e "  ${D}提示: 您可以直接在 s-ui / X-UI 或 sout 面板中使用上述公钥和私钥路径。${N}"
-  else
-    echo -e "  ${Y}[!] 签发超时或正在后台排队验证，请查看 Caddy 运行日志：${N}"
-    journalctl -u caddy -n 25 --no-pager 2>/dev/null || true
-    echo
-    echo -e "  ${Y}若 Cloudflare DNS API 权限正确，Caddy 会在后台继续完成签发并自动存入 ${cert_dir}/${N}"
-  fi
+  do_apply_cf_ssl_cert "$domain" "$cf_token" true
 }
 
 cf_ssl_menu() {
