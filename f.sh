@@ -1642,6 +1642,7 @@ cur_path_row = cur.fetchone()
 cur_path = cur_path_row[0] if cur_path_row and cur_path_row[0] else '/app/'
 if not cur_path.startswith('/'): cur_path = '/' + cur_path
 if not cur_path.endswith('/'): cur_path += '/'
+con.close()
 BASE = f'http://127.0.0.1:{cur_port}{cur_path}apiv2'
 TOKEN = os.environ['SUI_TOKEN']
 
@@ -1947,93 +1948,90 @@ else:
     created_inbound_tags.append(reality_tag)
 
 # 3. 重新查询最新所有入站 ID
-cur.execute("SELECT id FROM inbounds")
-all_current_ib_ids = [r[0] for r in cur.fetchall()]
+# 3. 重新查询最新所有入站 ID (100% 原生 API)
+inbounds_resp = api('GET', 'inbounds') or {}
+inbounds_obj = inbounds_resp.get('obj') or []
+if isinstance(inbounds_obj, dict):
+    inbound_rows = inbounds_obj.get('inbounds') or []
+else:
+    inbound_rows = inbounds_obj or []
+inbound_rows = [r for r in inbound_rows if isinstance(r, dict)]
+all_current_ib_ids = [r.get('id') for r in inbound_rows if r.get('id') is not None]
 
-# 4. 配置 admin 客户端，关联全部入站并自动生成对应协议凭据
+# 4. 配置 admin 客户端，关联全部入站 (100% 原生 API)
+clients_resp = api('GET', 'clients') or {}
+clients_obj = clients_resp.get('obj') or []
+if isinstance(clients_obj, dict):
+    clients_rows = clients_obj.get('clients') or []
+else:
+    clients_rows = clients_obj or []
+clients_rows = [r for r in clients_rows if isinstance(r, dict)]
+
 admin_name = os.environ.get('SUI_ADMIN_USER', 'admin')
+admin = None
+for c in clients_rows:
+    if c.get('name') == admin_name:
+        admin = c
+        break
+
 client_uuid = str(uuid.uuid4())
 client_pass = os.urandom(8).hex()
 
+existing_cfg = admin.get('config') if (admin and isinstance(admin.get('config'), dict)) else {}
 client_config = {
     'vless': {
         'name': admin_name,
-        'uuid': client_uuid,
+        'uuid': existing_cfg.get('vless', {}).get('uuid') or client_uuid,
         'flow': 'xtls-rprx-vision'
     },
     'vmess': {
         'name': admin_name,
-        'uuid': client_uuid
+        'uuid': existing_cfg.get('vmess', {}).get('uuid') or client_uuid
     },
     'tuic': {
         'name': admin_name,
-        'uuid': client_uuid,
-        'password': client_pass
+        'uuid': existing_cfg.get('tuic', {}).get('uuid') or client_uuid,
+        'password': existing_cfg.get('tuic', {}).get('password') or client_pass
     },
     'hysteria2': {
         'name': admin_name,
-        'password': client_pass
+        'password': existing_cfg.get('hysteria2', {}).get('password') or client_pass
     }
 }
+existing_cfg.update(client_config)
 
-# 从 sqlite3 直接更新或插入 clients 表，确保用户管理显示正常并关联所有入站
-cur.execute("SELECT id, config, inbounds FROM clients WHERE name=?", (admin_name,))
-client_row = cur.fetchone()
-if client_row:
-    cid = client_row[0]
-    existing_cfg = {}
-    if client_row[1]:
-        try:
-            raw = client_row[1]
-            existing_cfg = json.loads(raw.decode('utf-8') if isinstance(raw, bytes) else raw)
-        except Exception:
-            pass
-    if isinstance(existing_cfg, dict):
-        existing_cfg.update(client_config)
-    else:
-        existing_cfg = client_config
+existing_inbs = admin.get('inbounds') if (admin and isinstance(admin.get('inbounds'), list)) else []
+combined_inbs = list(set(existing_inbs + all_current_ib_ids))
 
-    existing_inbs = []
-    if client_row[2]:
-        try:
-            raw_inbs = client_row[2]
-            existing_inbs = json.loads(raw_inbs.decode('utf-8') if isinstance(raw_inbs, bytes) else raw_inbs)
-        except Exception:
-            pass
-    combined_inbs = list(set(existing_inbs + all_current_ib_ids))
-    cur.execute("""
-        UPDATE clients SET
-            enable=1,
-            config=?,
-            inbounds=?
-        WHERE id=?
-    """, (
-        sqlite3.Binary(json.dumps(existing_cfg).encode('utf-8')),
-        sqlite3.Binary(json.dumps(combined_inbs).encode('utf-8')),
-        cid
-    ))
-else:
-    import time
-    cur.execute("""
-        INSERT INTO clients (
-            enable, name, config, inbounds, links, volume, expiry, down, up,
-            desc, "group", remark, created_at, online_at, delay_start, auto_reset,
-            reset_days, next_reset, total_up, total_down
-        ) VALUES (
-            1, ?, ?, ?, ?, 0, 0, 0, 0,
-            "", "", "默认用户", ?, 0, 0, 0,
-            0, 0, 0, 0
-        )
-    """, (
-        admin_name,
-        sqlite3.Binary(json.dumps(client_config).encode('utf-8')),
-        sqlite3.Binary(json.dumps(all_current_ib_ids).encode('utf-8')),
-        sqlite3.Binary(b'[]'),
-        int(time.time())
-    ))
+client_payload = {
+    'id': admin.get('id', 0) if admin else 0,
+    'enable': True,
+    'name': admin_name,
+    'remark': '默认用户',
+    'config': existing_cfg,
+    'inbounds': combined_inbs,
+    'links': admin.get('links', []) if admin else [],
+    'volume': admin.get('volume', 0) if admin else 0,
+    'expiry': admin.get('expiry', 0) if admin else 0,
+    'down': admin.get('down', 0) if admin else 0,
+    'up': admin.get('up', 0) if admin else 0,
+    'desc': admin.get('desc', '') if admin else '',
+    'group': admin.get('group', '') if admin else '',
+    'delayStart': False,
+    'autoReset': False,
+    'resetDays': 0,
+    'nextReset': 0,
+    'totalUp': admin.get('totalUp', 0) if admin else 0,
+    'totalDown': admin.get('totalDown', 0) if admin else 0,
+    'createdAt': admin.get('createdAt', 0) if admin else 0,
+    'onlineAt': 0
+}
 
-con.commit()
-con.close()
+api('POST', 'save', {
+    'object': 'clients',
+    'action': 'edit' if admin else 'new',
+    'data': json.dumps(client_payload)
+})
 PYEOF
       then
         echo -e "  ${Y}[!] s-ui API 自动配置未完成，请稍后在 s-ui 面板手动补充节点/订阅。${N}"
