@@ -2279,23 +2279,10 @@ caddy_interactive_setup() {
   echo
   echo -e "  ${D}💡 本地回源端口用于 cloudflared 将流量转发至本地 Caddy，默认 8081 即可${N}"
   read -rp "  3. 请输入本地回源端口 [默认 8081]: " tunnel_port
-  tunnel_port=$(echo "$tunnel_port" | tr -d ' 
-')
-  echo
-  echo -e "  [Cloudflare SSL 证书 (Caddy DNS-01)]"
-  echo -e "  ${D}• 令牌需含「区域.DNS / 编辑」权限，用于自动签发证书并开启 TUIC / Hysteria2 节点${N}"
-  echo -e "  ${D}• 直接按回车将跳过申请，自动配置常规节点 (vmess-argo / vless-reality)${N}"
-  local cf_dns_key="" apply_cert="n"
-  read -rp "  4. 请输入 Cloudflare API 令牌 (直接回车跳过): " cf_dns_key
-  cf_dns_key=$(echo "$cf_dns_key" | tr -d ' \r\n')
-  if [[ -n "$cf_dns_key" ]]; then
-    apply_cert="y"
-    echo -e "  ${G}[✓] Cloudflare 令牌已记录，部署时将通过 DNS-01 验证自动签发证书。${N}"
-  else
-    echo -e "  ${G}[✓] 已跳过证书申请，将自动配置常规节点 (vmess-argo 与 vless-reality)。${N}"
-  fi
+  tunnel_port=$(echo "$tunnel_port" | tr -d ' \r\n')
+  tunnel_port="${tunnel_port:-8081}"
 
-  setup_caddy_proxy "$domain" "$tunnel_token" "$tunnel_port" "$apply_cert" "$cf_dns_key"
+  setup_caddy_proxy "$domain" "$tunnel_token" "$tunnel_port"
 }
 
 reload_caddy_proxy() {
