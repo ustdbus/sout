@@ -1550,6 +1550,8 @@ setup_caddy_proxy() {
   local tunnel_port="${3:-8081}"
   local apply_cert="${4:-n}"
   local cf_dns_key="${5:-}"
+  local in_sui_pass="${6:-}"
+  local in_sui_is_random="${7:-0}"
 
   local is_quick="false"
   if [[ -z "$domain" && -z "$tunnel_token" ]]; then
@@ -2070,7 +2072,17 @@ METAEOF
   echo -e "  [2] s-ui 节点与分流管理面板"
   echo -e "      访问地址:  ${B}https://${domain}/${sui_path}/${N}"
   echo -e "      管理账号:  ${Y}${sui_admin_user}${N}"
-  echo -e "      管理密码:  ${D}[由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]${N}"
+  if [[ -n "$in_sui_pass" ]]; then
+    if [[ "$in_sui_is_random" == "1" ]]; then
+      echo -e "      管理密码:  ${G}${in_sui_pass}${N}"
+      echo -e "      ${Y}⚠️ 安全提示: 该随机密码仅在安装完成时显示一次，请务必妥善保存！${N}"
+      echo -e "                 ${D}(若遗忘密码，可随时在终端输入 s-ui 进行重置修改)${N}"
+    else
+      echo -e "      管理密码:  ${G}${in_sui_pass}${N} ${D}(已按您输入的自定义密码生效)${N}"
+    fi
+  else
+    echo -e "      管理密码:  ${D}[由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]${N}"
+  fi
   echo -e "      唤起命令:  s-ui"
   echo
   echo -e "  [3] sout 订阅地址:  ${B}https://${domain}/${sout_path}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")${N}"

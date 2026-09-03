@@ -343,6 +343,80 @@ ensure_sui() {
 
 ensure_sui
 
+# ==============================================================================
+# [第三步] 配置 s-ui 管理员登录凭据 (支持默认 n 自动生成 8 位随机强密码)
+# ==============================================================================
+SUI_ADMIN_USER="admin"
+SUI_ADMIN_PASS=""
+SUI_PASS_IS_RANDOM=0
+
+configure_sui_credentials() {
+  if ! check_sui; then
+    return 0
+  fi
+
+  echo
+  echo "================================================================"
+  echo "  [s-ui 管理员登录凭据配置]"
+  echo "  • 选择 n (直接回车): 自动设置用户为 admin，并随机生成 8 位强密码"
+  echo "  • 选择 y: 手动自定义输入管理员用户名与登录密码"
+  echo "================================================================"
+
+  local prompt_choice="n"
+  if [[ -t 0 ]]; then
+    read -rp "  是否手动自定义 s-ui 管理员用户名与密码？[y/N]: " prompt_choice
+  else
+    if [[ -c /dev/tty ]]; then
+      read -rp "  是否手动自定义 s-ui 管理员用户名与密码？[y/N]: " prompt_choice < /dev/tty || prompt_choice="n"
+    fi
+  fi
+  prompt_choice="${prompt_choice:-n}"
+
+  if [[ "${prompt_choice,,}" == "y" || "${prompt_choice,,}" == "yes" ]]; then
+    local custom_user="" custom_pass=""
+    if [[ -t 0 ]]; then
+      read -rp "  请输入管理员用户名 [默认 admin]: " custom_user
+      read -rp "  请输入管理员登录密码: " custom_pass
+    else
+      if [[ -c /dev/tty ]]; then
+        read -rp "  请输入管理员用户名 [默认 admin]: " custom_user < /dev/tty || custom_user="admin"
+        read -rp "  请输入管理员登录密码: " custom_pass < /dev/tty || custom_pass=""
+      fi
+    fi
+    custom_user="${custom_user:-admin}"
+    custom_user=$(echo "$custom_user" | tr -d ' \r\n')
+    custom_pass=$(echo "$custom_pass" | tr -d ' \r\n')
+
+    while [[ -z "$custom_pass" ]]; do
+      echo -e "  \033[31m[!] 密码不能为空，请重新输入！\033[0m"
+      if [[ -t 0 ]]; then
+        read -rp "  请输入管理员登录密码: " custom_pass
+      else
+        if [[ -c /dev/tty ]]; then
+          read -rp "  请输入管理员登录密码: " custom_pass < /dev/tty || custom_pass=""
+        fi
+      fi
+      custom_pass=$(echo "$custom_pass" | tr -d ' \r\n')
+    done
+
+    /usr/local/s-ui/sui admin -username "$custom_user" -password "$custom_pass" >/dev/null 2>&1 || true
+    SUI_ADMIN_USER="$custom_user"
+    SUI_ADMIN_PASS="$custom_pass"
+    SUI_PASS_IS_RANDOM=0
+    echo "  [✓] 管理员用户名与密码已设置为自定义凭据！"
+  else
+    local rand_pass
+    rand_pass=$(tr -dc 'a-z0-9' < /dev/urandom | head -c 8)
+    /usr/local/s-ui/sui admin -username "admin" -password "$rand_pass" >/dev/null 2>&1 || true
+    SUI_ADMIN_USER="admin"
+    SUI_ADMIN_PASS="$rand_pass"
+    SUI_PASS_IS_RANDOM=1
+    echo "  [✓] 已自动将管理员设为 admin，并配置了 8 位随机强密码！"
+  fi
+}
+
+configure_sui_credentials
+
 seed_settings() {
   local target="${WORK_DIR}/settings.json"
   if [[ -f "$target" ]]; then
@@ -593,7 +667,7 @@ if [[ "$WANT_TUNNEL" == "y" ]]; then
     echo "  [+] 正在根据第一步输入的参数配置 Cloudflare隧道连接和Caddy流量代理..."
   fi
   if [[ -x /usr/local/bin/sout ]]; then
-    /usr/local/bin/sout setup_tunnel "$TUNNEL_DOMAIN" "$TUNNEL_TOKEN" "$TUNNEL_PORT" "${APPLY_CERT:-n}" "${CF_DNS_KEY:-}"
+    /usr/local/bin/sout setup_tunnel "$TUNNEL_DOMAIN" "$TUNNEL_TOKEN" "$TUNNEL_PORT" "${APPLY_CERT:-n}" "${CF_DNS_KEY:-}" "$SUI_ADMIN_PASS" "$SUI_PASS_IS_RANDOM"
   fi
 fi
 
@@ -623,16 +697,28 @@ if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$
   echo "  🎉 sout 插件安装部署完成！(Cloudflare隧道连接和Caddy流量代理)"
   echo "================================================================"
   echo "  [sout 动态家宽出口插件]"
-  echo "  管理面板:  https://${c_dom}/${c_sout_p}/"
-  echo "  访问口令:  $(cat "${WORK_DIR}/password" 2>/dev/null || echo "见 ${WORK_DIR}/password")"
-  echo "  sout 唤起命令:  sout"
+  echo "  管理面板:      https://${c_dom}/${c_sout_p}/"
+  echo "  访问口令:      $(cat "${WORK_DIR}/password" 2>/dev/null || echo "见 ${WORK_DIR}/password")"
+  echo "  sout 唤起命令: sout"
   echo
   echo "  [s-ui (Sing-Box) 节点面板]"
-  echo "  s-ui 面板:  https://${c_dom}/${c_sui_p}/"
-  echo "  s-ui 用户名:  ${c_sui_u:-admin}"
-  echo "  s-ui 密  码:  [由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]"
-    echo "  订阅链接:    https://${c_dom}/${c_sout_p}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")"
-  echo "  s-ui 唤起命令:  s-ui"
+  echo "  s-ui 面板:     https://${c_dom}/${c_sui_p}/"
+  echo "  s-ui 用户名:   ${SUI_ADMIN_USER:-${c_sui_u:-admin}}"
+  if [[ -n "$SUI_ADMIN_PASS" ]]; then
+    if [[ "$SUI_PASS_IS_RANDOM" == "1" ]]; then
+      echo "  s-ui 密  码:   ${SUI_ADMIN_PASS}"
+      echo "  ⚠️ 安全提示:   该随机密码仅在安装完成时显示一次，请务必妥善保存！"
+      echo "                 (若遗忘密码，可随时在终端输入 s-ui 进行重置修改)"
+    else
+      echo "  s-ui 密  码:   ${SUI_ADMIN_PASS}  (已按您输入的自定义密码生效)"
+    fi
+  else
+    echo "  s-ui 密  码:   [由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]"
+  fi
+  echo "  s-ui 唤起命令: s-ui"
+  echo
+  echo "  [订阅与分流]"
+  echo "  订阅链接:      https://${c_dom}/${c_sout_p}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")"
   echo "================================================================"
   echo
 else
@@ -662,16 +748,26 @@ else
   echo "  🎉 sout 插件安装部署完成！"
   echo "================================================================"
   echo "  [sout 动态家宽出口插件]"
-  echo "  管理面板:  http://${IP}:${WEB_PORT}${BP}"
-  echo "  访问口令:  $(cat "${WORK_DIR}/password" 2>/dev/null || echo "见 ${WORK_DIR}/password")"
-  echo "  sout 唤起命令:  sout"
+  echo "  管理面板:      http://${IP}:${WEB_PORT}${BP}"
+  echo "  访问口令:      $(cat "${WORK_DIR}/password" 2>/dev/null || echo "见 ${WORK_DIR}/password")"
+  echo "  sout 唤起命令: sout"
   echo
   if check_sui; then
     echo "  [s-ui (Sing-Box) 节点面板]"
-    echo "  s-ui 面板:  http://${IP}:${sui_port}${sui_path}"
-    echo "  s-ui 用户名:  ${sui_u}"
-    echo "  s-ui 密  码:  [由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]"
-    echo "  s-ui 唤起命令:  s-ui"
+    echo "  s-ui 面板:     http://${IP}:${sui_port}${sui_path}"
+    echo "  s-ui 用户名:   ${SUI_ADMIN_USER:-${sui_u}}"
+    if [[ -n "$SUI_ADMIN_PASS" ]]; then
+      if [[ "$SUI_PASS_IS_RANDOM" == "1" ]]; then
+        echo "  s-ui 密  码:   ${SUI_ADMIN_PASS}"
+        echo "  ⚠️ 安全提示:   该随机密码仅在安装完成时显示一次，请务必妥善保存！"
+        echo "                 (若遗忘密码，可随时在终端输入 s-ui 进行重置修改)"
+      else
+        echo "  s-ui 密  码:   ${SUI_ADMIN_PASS}  (已按您输入的自定义密码生效)"
+      fi
+    else
+      echo "  s-ui 密  码:   [由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]"
+    fi
+    echo "  s-ui 唤起命令: s-ui"
   fi
   echo "================================================================"
   echo
