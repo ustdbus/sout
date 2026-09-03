@@ -292,6 +292,14 @@ net.ipv4.tcp_congestion_control = bbr
   sysctl -p /etc/sysctl.d/99-sout.conf >/dev/null 2>&1 || sysctl -p >/dev/null 2>&1 || true
 }
 
+get_tcp_congestion() {
+  local cc
+  cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || cat /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null || echo "cubic")
+  cc=$(echo "$cc" | tr -d ' \r\n')
+  [[ -z "$cc" ]] && cc="cubic"
+  echo "$cc"
+}
+
 restore_sysctl() {
   if [[ -f "$SYSCTL_BACKUP" ]]; then
     while IFS='=' read -r key val || [[ -n "$key" ]]; do
@@ -1479,6 +1487,8 @@ setup_caddy_proxy() {
   local domain="${1:-}"
   local tunnel_token="${2:-}"
   local tunnel_port="${3:-8081}"
+  local apply_cert="${4:-n}"
+  local cf_dns_key="${5:-}"
 
   local is_quick="false"
   if [[ -z "$domain" && -z "$tunnel_token" ]]; then
@@ -1494,23 +1504,46 @@ setup_caddy_proxy() {
   fi
   echo -e "${B}================================================================${N}"
 
+  # 如果开启了固定隧道且要求申请证书
+  local cert_dir="/home/acme/${domain}"
+  local cert_file="${cert_dir}/fullchain.pem"
+  local key_file="${cert_dir}/privkey.pem"
+  local cert_ready="false"
+  if [[ "$apply_cert" == "y" && -n "$domain" && -n "$cf_dns_key" ]]; then
+    echo -e "  ${B}[+] 正在使用 Cloudflare DNS-01 申请 SSL 证书...${N}"
+    if do_apply_cf_ssl_cert "$domain" "$cf_dns_key"; then
+      if [[ -s "$cert_file" && -s "$key_file" ]]; then
+        cert_ready="true"
+      fi
+    fi
+  elif [[ -n "$domain" && -s "$cert_file" && -s "$key_file" ]]; then
+    cert_ready="true"
+  fi
+
   # 1. 确保 Caddy 与 cloudflared 安装
   install_caddy_bin || { echo -e "  ${R}安装 Caddy 失败${N}"; return 1; }
   install_cloudflared_bin || { echo -e "  ${R}安装 cloudflared 失败${N}"; return 1; }
 
-  # 2. 分配 4 个本地端口和 4 个安全路径
-  local sout_port sui_port sub_port node_port
+  # 2. 分配本地端口与安全路径
+  local sout_port sui_port sub_port node_port reality_port tuic_port hy2_port
   local sout_path sui_path sub_path ws_path
 
   sout_port=$(rand_local_port)
   sui_port=$(rand_local_port)
   sub_port=$(rand_local_port)
   node_port=$(rand_local_port)
+  reality_port=$(rand_local_port)
+  tuic_port=$(rand_local_port)
+  hy2_port=$(rand_local_port)
 
   sout_path=$(rand_safe_path "sout")
   sui_path=$(rand_safe_path "sui")
   sub_path=$(rand_safe_path "sub")
   ws_path=$(rand_safe_path "vlws")
+
+  local public_ip cur_cc
+  public_ip=$(curl -s4m 5 https://api.ipify.org 2>/dev/null || curl -s4m 5 https://ifconfig.me 2>/dev/null || echo "$domain")
+  cur_cc=$(get_tcp_congestion)
 
   # 3. 写入纯净本地 Caddyfile (双栈通配监听 :${tunnel_port})
   mkdir -p /etc/caddy /var/log/caddy /var/lib/caddy
@@ -1619,20 +1652,26 @@ except Exception:
     if [[ -z "$sui_token" ]]; then
       echo -e "  ${Y}[!] 未找到 s-ui API Token，跳过自动配置（请先启动 sout 生成 Token）${N}"
     else
-      echo -e "  [+] 正在通过 s-ui API 自动配置 (路径分流与 vmess-argo 节点)..."
+      echo -e "  [+] 正在通过 s-ui API 自动配置 (路径分流与动态分流节点)..."
       if ! SUI_API="http://127.0.0.1:${sui_port}/${sui_path}/apiv2" \
       SUI_TOKEN="$sui_token" \
-        SUI_DB="$sui_db" \
+      SUI_DB="$sui_db" \
       DOMAIN="$domain" \
+      PUBLIC_IP="$public_ip" \
       SUI_PORT="$sui_port" \
       SUI_PATH="/${sui_path}/" \
       SUB_PORT="$sub_port" \
       SUB_PATH="/${sub_path}/" \
       NODE_PORT="$node_port" \
+      REALITY_PORT="$reality_port" \
+      TUIC_PORT="$tuic_port" \
+      HY2_PORT="$hy2_port" \
       WS_PATH="/${ws_path}" \
       SUI_ADMIN_USER="$sui_admin_user" \
+      APPLY_CERT="$apply_cert" \
+      CONGESTION_CONTROL="$cur_cc" \
       python3 <<'PYEOF'
-import json, os, sqlite3, uuid, urllib.request, urllib.parse
+import json, os, sqlite3, uuid, urllib.request, urllib.parse, string, random, base64
 
 con = sqlite3.connect(os.environ['SUI_DB'])
 cur = con.cursor()
@@ -1679,7 +1718,11 @@ api('POST', 'save', {
     'data': json.dumps(settings_data),
 })
 
-# 2. 通过 s-ui API 创建/更新 vmess-argo 入站
+# 2. 准备辅助函数与已有入站数据
+def gen_rand_suffix():
+    chars = string.ascii_lowercase + string.digits
+    return "".join(random.choices(chars, k=4))
+
 inbounds_resp = api('GET', 'inbounds') or {}
 inbounds_obj = inbounds_resp.get('obj') or []
 if isinstance(inbounds_obj, dict):
@@ -1687,53 +1730,221 @@ if isinstance(inbounds_obj, dict):
 else:
     inbound_rows = inbounds_obj or []
 inbound_rows = [r for r in inbound_rows if isinstance(r, dict)]
-node_tag = 'vmess-argo'
-existing_inbound_id = None
-for row in inbound_rows:
-    if row.get('tag') == node_tag:
-        existing_inbound_id = row.get('id')
-        break
 
-client_uuid = str(uuid.uuid4())
-addrs_data = [{
-    'server': os.environ['DOMAIN'],
-    'server_port': 443,
-    'tls': {
-        'disable_sni': False,
-        'enabled': True,
-        'insecure': False,
-        'server_name': os.environ['DOMAIN'],
-        'utls': {
+def get_or_create_tag_and_id(prefix):
+    for row in inbound_rows:
+        t = row.get('tag', '')
+        if t == prefix or t.startswith(prefix + '-'):
+            return t, row.get('id')
+    return f"{prefix}-{gen_rand_suffix()}", None
+
+def gen_x25519_keypair():
+    try:
+        from cryptography.hazmat.primitives.asymmetric import x25519
+        k = x25519.X25519PrivateKey.generate()
+        priv = base64.urlsafe_b64encode(k.private_bytes_raw()).decode().rstrip('=')
+        pub = base64.urlsafe_b64encode(k.public_key().public_bytes_raw()).decode().rstrip('=')
+        return priv, pub
+    except Exception:
+        P = 2**255 - 19
+        A24 = 121665
+        def cswap(swap, x_2, x_3):
+            dummy = swap * ((x_2 - x_3) % P)
+            return (x_2 - dummy) % P, (x_3 + dummy) % P
+        def clamp(n):
+            n &= ~7
+            n &= ~(128 << 8 * 31)
+            n |= 64 << 8 * 31
+            return n
+        raw_priv = os.urandom(32)
+        k = clamp(int.from_bytes(raw_priv, 'little'))
+        x_1 = 9; x_2 = 1; z_2 = 0; x_3 = x_1; z_3 = 1; swap = 0
+        for t in reversed(range(255)):
+            k_t = (k >> t) & 1
+            swap ^= k_t
+            x_2, x_3 = cswap(swap, x_2, x_3)
+            z_2, z_3 = cswap(swap, z_2, z_3)
+            swap = k_t
+            A = (x_2 + z_2) % P; AA = (A * A) % P; B = (x_2 - z_2) % P; BB = (B * B) % P
+            E = (AA - BB) % P; C = (x_3 + z_3) % P; D = (x_3 - z_3) % P
+            DA = (D * A) % P; CB = (C * B) % P
+            x_3 = ((DA + CB) ** 2) % P; z_3 = (x_1 * ((DA - CB) ** 2)) % P
+            x_2 = (AA * BB) % P; z_2 = (E * ((AA + A24 * E) % P)) % P
+        x_2, x_3 = cswap(swap, x_2, x_3); z_2, z_3 = cswap(swap, z_2, z_3)
+        pub_int = (x_2 * pow(z_2, P - 2, P)) % P
+        raw_pub = pub_int.to_bytes(32, 'little')
+        priv_b64 = base64.urlsafe_b64encode(raw_priv).decode().rstrip('=')
+        pub_b64 = base64.urlsafe_b64encode(raw_pub).decode().rstrip('=')
+        return priv_b64, pub_b64
+
+domain = os.environ['DOMAIN']
+cert_dir = f"/home/acme/{domain}"
+cert_file = f"{cert_dir}/fullchain.pem"
+key_file = f"{cert_dir}/privkey.pem"
+has_cert = (os.environ.get('APPLY_CERT') == 'y') and os.path.exists(cert_file) and os.path.exists(key_file)
+
+created_inbound_tags = []
+
+if has_cert:
+    # 开启隧道且申请了证书 -> 启用 tuic 与 hysteria2 节点
+    tuic_tag, tuic_id = get_or_create_tag_and_id('tuic')
+    hy2_tag, hy2_id = get_or_create_tag_and_id('hysteria2')
+    cc = os.environ.get('CONGESTION_CONTROL', 'bbr')
+
+    tuic_port = int(os.environ['TUIC_PORT'])
+    tuic_payload = {
+        'id': tuic_id or 0,
+        'type': 'tuic',
+        'tag': tuic_tag,
+        'tls_id': 0,
+        'listen': '0.0.0.0',
+        'listen_port': tuic_port,
+        'congestion_control': cc,
+        'tls': {
             'enabled': True,
-            'fingerprint': 'chrome'
+            'server_name': domain,
+            'certificate_path': cert_file,
+            'key_path': key_file
+        },
+        'addrs': [{
+            'server': domain,
+            'server_port': tuic_port,
+            'tls': {
+                'enabled': True,
+                'server_name': domain,
+                'insecure': False
+            }
+        }]
+    }
+    api('POST', 'save', {
+        'object': 'inbounds',
+        'action': 'edit' if tuic_id else 'new',
+        'data': json.dumps(tuic_payload)
+    })
+    created_inbound_tags.append(tuic_tag)
+
+    hy2_port = int(os.environ['HY2_PORT'])
+    hy2_payload = {
+        'id': hy2_id or 0,
+        'type': 'hysteria2',
+        'tag': hy2_tag,
+        'tls_id': 0,
+        'listen': '0.0.0.0',
+        'listen_port': hy2_port,
+        'ignore_client_bandwidth': True,
+        'tls': {
+            'enabled': True,
+            'server_name': domain,
+            'certificate_path': cert_file,
+            'key_path': key_file
+        },
+        'addrs': [{
+            'server': domain,
+            'server_port': hy2_port,
+            'tls': {
+                'enabled': True,
+                'server_name': domain,
+                'insecure': False
+            }
+        }]
+    }
+    api('POST', 'save', {
+        'object': 'inbounds',
+        'action': 'edit' if hy2_id else 'new',
+        'data': json.dumps(hy2_payload)
+    })
+    created_inbound_tags.append(hy2_tag)
+
+else:
+    # 开启隧道但不申请证书 -> 启用 vmess-argo 与 vless-reality 节点
+    vmess_tag, vmess_id = get_or_create_tag_and_id('vmess-argo')
+    reality_tag, reality_id = get_or_create_tag_and_id('vless-reality')
+
+    vmess_payload = {
+        'id': vmess_id or 0,
+        'type': 'vmess',
+        'tag': vmess_tag,
+        'tls_id': 0,
+        'listen': '127.0.0.1',
+        'listen_port': int(os.environ['NODE_PORT']),
+        'addrs': [{
+            'server': domain,
+            'server_port': 443,
+            'tls': {
+                'disable_sni': False,
+                'enabled': True,
+                'insecure': False,
+                'server_name': domain,
+                'utls': {'enabled': True, 'fingerprint': 'chrome'}
+            }
+        }],
+        'transport': {
+            'early_data_header_name': 'Sec-WebSocket-Protocol',
+            'max_early_data': 2560,
+            'headers': {'Host': domain},
+            'path': os.environ['WS_PATH'],
+            'type': 'ws'
         }
     }
-}]
-inbound_payload = {
-    'id': existing_inbound_id or 0,
-    'type': 'vmess',
-    'tag': node_tag,
-    'tls_id': 0,
-    'listen': '127.0.0.1',
-    'listen_port': int(os.environ['NODE_PORT']),
-    'addrs': addrs_data,
-    'transport': {
-        'early_data_header_name': 'Sec-WebSocket-Protocol',
-        'max_early_data': 2560,
-        'headers': {
-            'Host': os.environ['DOMAIN']
-        },
-        'path': os.environ['WS_PATH'],
-        'type': 'ws'
-    }
-}
-api('POST', 'save', {
-    'object': 'inbounds',
-    'action': 'edit' if existing_inbound_id else 'new',
-    'data': json.dumps(inbound_payload),
-})
+    api('POST', 'save', {
+        'object': 'inbounds',
+        'action': 'edit' if vmess_id else 'new',
+        'data': json.dumps(vmess_payload)
+    })
+    created_inbound_tags.append(vmess_tag)
 
-# 3. 重新查询入站 id（新建后需要）
+    reality_port = int(os.environ['REALITY_PORT'])
+    priv_k, pub_k = gen_x25519_keypair()
+    sid = os.urandom(4).hex()
+    pub_host = os.environ.get('PUBLIC_IP') or domain
+
+    reality_payload = {
+        'id': reality_id or 0,
+        'type': 'vless',
+        'tag': reality_tag,
+        'tls_id': 0,
+        'listen': '0.0.0.0',
+        'listen_port': reality_port,
+        'tls': {
+            'enabled': True,
+            'server_name': 'apple.com',
+            'reality': {
+                'enabled': True,
+                'handshake': {
+                    'server': 'apple.com',
+                    'server_port': 443
+                },
+                'private_key': priv_k,
+                'short_id': [sid],
+                'max_time_difference': '1m'
+            }
+        },
+        'addrs': [{
+            'server': pub_host,
+            'server_port': reality_port,
+            'tls': {
+                'enabled': True,
+                'server_name': 'apple.com',
+                'utls': {
+                    'enabled': True,
+                    'fingerprint': 'chrome'
+                },
+                'reality': {
+                    'enabled': True,
+                    'public_key': pub_k,
+                    'short_id': sid
+                }
+            }
+        }]
+    }
+    api('POST', 'save', {
+        'object': 'inbounds',
+        'action': 'edit' if reality_id else 'new',
+        'data': json.dumps(reality_payload)
+    })
+    created_inbound_tags.append(reality_tag)
+
+# 3. 重新查询最新入站以拿到对应的入站 ID
 inbounds_resp = api('GET', 'inbounds') or {}
 inbounds_obj = inbounds_resp.get('obj') or []
 if isinstance(inbounds_obj, dict):
@@ -1741,15 +1952,15 @@ if isinstance(inbounds_obj, dict):
 else:
     inbound_rows = inbounds_obj or []
 inbound_rows = [r for r in inbound_rows if isinstance(r, dict)]
-inbound_id = None
-for row in inbound_rows:
-    if row.get('tag') == node_tag:
-        inbound_id = row.get('id')
-        break
-if not inbound_id:
-    raise SystemExit('创建 vmess-argo 入站失败')
 
-# 4. 通过 s-ui API 保存 admin 客户端，由 s-ui 自动生成订阅链接（含 ed/fp）
+bound_inbound_ids = []
+for tag in created_inbound_tags:
+    for row in inbound_rows:
+        if row.get('tag') == tag:
+            bound_inbound_ids.append(row.get('id'))
+            break
+
+# 4. 配置 admin 客户端，关联入站并生成对应协议配置
 clients_resp = api('GET', 'clients') or {}
 clients_obj = clients_resp.get('obj') or []
 if isinstance(clients_obj, dict):
@@ -1758,22 +1969,51 @@ else:
     clients_rows = clients_obj or []
 clients_rows = [r for r in clients_rows if isinstance(r, dict)]
 admin = None
+admin_name = os.environ.get('SUI_ADMIN_USER', 'admin')
 for row in clients_rows:
-    if row.get('name') == os.environ.get('SUI_ADMIN_USER', 'admin'):
+    if row.get('name') == admin_name:
         admin = row
         break
+
+client_uuid = str(uuid.uuid4())
+client_pass = os.urandom(8).hex()
+
+client_config = {}
+if admin and isinstance(admin.get('config'), dict):
+    client_config = admin.get('config')
+
+if has_cert:
+    client_config['tuic'] = {
+        'name': admin_name,
+        'uuid': client_uuid,
+        'password': client_pass
+    }
+    client_config['hysteria2'] = {
+        'name': admin_name,
+        'password': client_pass
+    }
+else:
+    client_config['vmess'] = {
+        'name': admin_name,
+        'uuid': client_uuid
+    }
+    client_config['vless'] = {
+        'name': admin_name,
+        'uuid': client_uuid,
+        'flow': 'xtls-rprx-vision'
+    }
+
+current_inb_set = set(admin.get('inbounds', []) if admin else [])
+for iid in bound_inbound_ids:
+    if iid: current_inb_set.add(iid)
+
 client_payload = {
     'id': admin.get('id', 0) if admin else 0,
     'enable': True,
-    'name': os.environ.get('SUI_ADMIN_USER', 'admin'),
+    'name': admin_name,
     'remark': '默认用户',
-    'config': {
-        'vmess': {
-            'name': os.environ.get('SUI_ADMIN_USER', 'admin'),
-            'uuid': client_uuid
-        }
-    },
-    'inbounds': [inbound_id],
+    'config': client_config,
+    'inbounds': list(current_inb_set),
     'links': [],
     'volume': 0,
     'expiry': 0,
@@ -2349,7 +2589,29 @@ def api(method, endpoint, form=None):
         return json.loads(resp.read().decode('utf-8'))
 
 try:
-    node_tag = 'vmess-argo'
+    inbounds_resp = api('GET', 'inbounds') or {}
+    inbounds_obj = inbounds_resp.get('obj') or []
+    if isinstance(inbounds_obj, dict):
+        inbound_rows = inbounds_obj.get('inbounds') or []
+    else:
+        inbound_rows = inbounds_obj or []
+    inbound_rows = [r for r in inbound_rows if isinstance(r, dict)]
+
+    node_tag = None
+    existing_id = None
+    for r in inbound_rows:
+        t = r.get('tag', '')
+        if t == 'vmess-argo' or t.startswith('vmess-argo-'):
+            node_tag = t
+            existing_id = r.get('id')
+            break
+
+    if not node_tag:
+        import string, random
+        chars = string.ascii_lowercase + string.digits
+        rand_suffix = "".join(random.choices(chars, k=4))
+        node_tag = f"vmess-argo-{rand_suffix}"
+
     client_uuid = str(uuid.uuid4())
     addrs_data = [{
         'server': os.environ['DOMAIN'],
@@ -2363,7 +2625,7 @@ try:
         }
     }]
     inbound_payload = {
-        'id': 0,
+        'id': existing_id or 0,
         'type': 'vmess',
         'tag': node_tag,
         'tls_id': 0,
@@ -2380,7 +2642,7 @@ try:
     }
     api('POST', 'save', {
         'object': 'inbounds',
-        'action': 'new',
+        'action': 'edit' if existing_id else 'new',
         'data': json.dumps(inbound_payload),
     })
 except Exception:
@@ -2502,6 +2764,156 @@ with open(p, 'w') as f:
   else
     echo -e "  ${R}[×] Caddy 重启失败，请检查 Caddyfile 或端口占用${N}"
   fi
+}
+
+do_apply_cf_ssl_cert() {
+  local domain="$1"
+  local cf_token="$2"
+  local force="${3:-false}"
+
+  domain=$(echo "$domain" | tr -d ' \r\n' | sed -e 's|^https\?://||' -e 's|/.*||')
+  cf_token=$(echo "$cf_token" | tr -d ' \r\n')
+  [[ -z "$domain" || -z "$cf_token" ]] && return 1
+
+  local cert_dir="/home/acme/${domain}"
+  local cert_file="${cert_dir}/fullchain.pem"
+  local key_file="${cert_dir}/privkey.pem"
+  if [[ "$force" != "true" && -s "$cert_file" && -s "$key_file" ]]; then
+    echo -e "  ${G}[✓] 本地已存在域名 [${domain}] 的完整证书，直接复用。${N}"
+    return 0
+  fi
+
+  echo -e "  ${B}[1/4] 正在检查并准备 Caddy 服务 (集成 Cloudflare DNS 模块)...${N}"
+  ensure_caddy_with_cloudflare || { echo -e "  ${R}准备 Caddy 失败${N}"; return 1; }
+
+  echo -e "  ${B}[2/4] 正在创建证书存储目录: ${cert_dir}...${N}"
+  mkdir -p "$cert_dir"
+  chmod 700 /home/acme "$cert_dir"
+
+  echo -e "  ${B}[3/4] 正在配置 Caddy 并通过 Cloudflare DNS-01 验证发起申请...${N}"
+  local cf_domains_meta="${WORK_DIR}/cf_ssl_domains.json"
+  python3 -c '
+import json, os, time, sys
+p = sys.argv[1]
+dom = sys.argv[2]
+tok = sys.argv[3]
+cdir = sys.argv[4]
+d = {}
+if os.path.exists(p):
+    try:
+        with open(p) as f:
+            d = json.load(f)
+    except Exception:
+        pass
+d[dom] = {
+    "token": tok,
+    "applied_at": int(time.time()),
+    "cert_dir": cdir
+}
+with open(p, "w") as f:
+    json.dump(d, f, indent=2)
+try:
+    os.chmod(p, 0o600)
+except Exception:
+    pass
+' "$cf_domains_meta" "$domain" "$cf_token" "$cert_dir" 2>/dev/null || true
+
+  reload_caddy_proxy
+
+  echo -e "  ${B}[4/4] 正在等待 Cloudflare DNS 解析生效并签发证书 (通常需 15-40 秒)...${N}"
+  local ok=false
+  for i in $(seq 1 35); do
+    echo -ne "  正在等待签发中... (${i}/35s)\r"
+    local found_crt found_key
+    found_crt=$(find /var/lib/caddy /root/.local/share/caddy /root/.config/caddy /etc/caddy -name "${domain}.crt" -size +100c 2>/dev/null | head -1)
+    found_key=$(find /var/lib/caddy /root/.local/share/caddy /root/.config/caddy /etc/caddy -name "${domain}.key" -size +100c 2>/dev/null | head -1)
+    if [[ -n "$found_crt" && -n "$found_key" ]]; then
+      cp -f "$found_crt" "${cert_dir}/fullchain.pem"
+      cp -f "$found_key" "${cert_dir}/privkey.pem"
+      cp -f "$found_crt" "${cert_dir}/cert.crt"
+      cp -f "$found_key" "${cert_dir}/private.key"
+      chmod 600 "${cert_dir}"/*
+      ok=true
+      break
+    fi
+    sleep 2
+  done
+  echo
+
+  if [[ "$ok" == "true" ]]; then
+    echo -e "  ${G}🎉 恭喜！Cloudflare SSL 证书申请成功！${N}"
+    echo -e "${B}========================================${N}"
+    echo -e "  托管域名:    ${B}${domain}${N}"
+    echo -e "  公钥路径:    ${G}${cert_dir}/fullchain.pem${N}"
+    echo -e "  私钥路径:    ${G}${cert_dir}/privkey.pem${N}"
+    echo -e "  备用公钥:    ${G}${cert_dir}/cert.crt${N}"
+    echo -e "  备用私钥:    ${G}${cert_dir}/private.key${N}"
+    echo -e "  自动续期:    ${G}已默认开启 (Caddy 后台静默自动续期)${N}"
+    echo -e "${B}========================================${N}"
+    return 0
+  else
+    echo -e "  ${Y}[!] 签发超时或正在后台排队验证，请查看 Caddy 运行日志：${N}"
+    journalctl -u caddy -n 25 --no-pager 2>/dev/null || true
+    echo
+    echo -e "  ${Y}若 Cloudflare DNS API 权限正确，Caddy 会在后台继续完成签发并自动存入 ${cert_dir}/${N}"
+    return 1
+  fi
+}
+
+apply_cf_ssl_cert() {
+  echo
+  echo -e "${B}========================================${N}"
+  echo -e "${B}  申请 Cloudflare SSL 证书 (Caddy DNS-01)${N}"
+  echo -e "${B}========================================${N}"
+  echo -e "  ${D}• 使用 Cloudflare DNS-01 验证，无需开放 80/443 端口即可申请${N}"
+  echo -e "  ${D}• 证书将自动存放在 /home/acme/<域名>/ 目录下，默认开启自动续期${N}"
+  echo
+
+  local domain cf_token
+  read -rp "  [1/2] 请输入要申请证书的域名 (如 example.com): " domain
+  domain=$(echo "$domain" | tr -d ' \r\n' | sed -e 's|^https\?://||' -e 's|/.*||')
+  if [[ -z "$domain" ]]; then
+    echo -e "  ${R}域名不能为空，已取消申请。${N}"
+    return
+  fi
+
+  # 检查本地是否已存在完整证书
+  local cert_dir="/home/acme/${domain}"
+  local cert_file="${cert_dir}/fullchain.pem"
+  local key_file="${cert_dir}/privkey.pem"
+  local force_apply="false"
+  if [[ -s "$cert_file" && -s "$key_file" ]]; then
+    echo
+    echo -e "  ${Y}⚠️  检测到本地已存在域名 [${domain}] 的完整证书与私钥：${N}"
+    echo -e "      公钥: ${B}${cert_file}${N}"
+    echo -e "      私钥: ${B}${key_file}${N}"
+    if command -v openssl >/dev/null 2>&1; then
+      local not_after
+      not_after=$(openssl x509 -in "$cert_file" -noout -enddate 2>/dev/null | sed 's/notAfter=//')
+      [[ -n "$not_after" ]] && echo -e "      有效期至: ${G}${not_after}${N}"
+    fi
+    echo
+    read -rp "  是否要强制申请并覆盖本地所保存的证书？[y/N] (默认 N): " overwrite
+    overwrite=$(echo "$overwrite" | tr -d ' \r\n')
+    if [[ "$overwrite" != "y" && "$overwrite" != "Y" ]]; then
+      echo -e "  ${Y}已保留本地现有证书，取消重新申请。${N}"
+      return
+    fi
+    force_apply="true"
+    echo -e "  ${Y}用户确认强制覆盖，将重新向 Cloudflare 发起申请...${N}"
+  fi
+
+  echo
+  echo -e "  [2/2] 请输入 Cloudflare API 令牌 (API Token):"
+  echo -e "  ${D}提示: 该令牌需包含权限「区域.DNS / 编辑」 (Zone.DNS:Edit)${N}"
+  read -rp "  API Token: " cf_token
+  cf_token=$(echo "$cf_token" | tr -d ' \r\n')
+  if [[ -z "$cf_token" ]]; then
+    echo -e "  ${R}API Token 不能为空，已取消申请。${N}"
+    return
+  fi
+
+  do_apply_cf_ssl_cert "$domain" "$cf_token" "$force_apply"
 }
 
 ensure_caddy_with_cloudflare() {

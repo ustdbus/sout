@@ -177,7 +177,8 @@ api('POST', 'save', {
 inbounds_resp = api('GET', 'inbounds')
 inbound_id = None
 for row in inbounds_resp.get('obj', {}).get('inbounds') or []:
-    if row.get('tag') == 'vmess-argo':
+    t = row.get('tag', '')
+    if t == 'vmess-argo' or t.startswith('vmess-argo-'):
         inbound_id = row.get('id')
         break
 if inbound_id:
@@ -787,7 +788,29 @@ def api(method, endpoint, form=None):
         return json.loads(resp.read().decode('utf-8'))
 
 try:
-    node_tag = 'vmess-argo'
+    inbounds_resp = api('GET', 'inbounds') or {}
+    inbounds_obj = inbounds_resp.get('obj') or []
+    if isinstance(inbounds_obj, dict):
+        inbound_rows = inbounds_obj.get('inbounds') or []
+    else:
+        inbound_rows = inbounds_obj or []
+    inbound_rows = [r for r in inbound_rows if isinstance(r, dict)]
+
+    node_tag = None
+    existing_id = None
+    for r in inbound_rows:
+        t = r.get('tag', '')
+        if t == 'vmess-argo' or t.startswith('vmess-argo-'):
+            node_tag = t
+            existing_id = r.get('id')
+            break
+
+    if not node_tag:
+        import string, random
+        chars = string.ascii_lowercase + string.digits
+        rand_suffix = "".join(random.choices(chars, k=4))
+        node_tag = f"vmess-argo-{rand_suffix}"
+
     client_uuid = str(uuid.uuid4())
     addrs_data = [{
         'server': os.environ['DOMAIN'],
@@ -801,7 +824,7 @@ try:
         }
     }]
     inbound_payload = {
-        'id': 0,
+        'id': existing_id or 0,
         'type': 'vmess',
         'tag': node_tag,
         'tls_id': 0,
@@ -818,7 +841,7 @@ try:
     }
     api('POST', 'save', {
         'object': 'inbounds',
-        'action': 'new',
+        'action': 'edit' if existing_id else 'new',
         'data': json.dumps(inbound_payload),
     })
 except Exception:

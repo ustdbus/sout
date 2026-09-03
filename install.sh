@@ -114,6 +114,14 @@ net.ipv4.tcp_congestion_control = bbr
   sysctl -p /etc/sysctl.d/99-sout.conf >/dev/null 2>&1 || sysctl -p >/dev/null 2>&1 || true
 }
 
+get_tcp_congestion() {
+  local cc
+  cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || cat /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null || echo "cubic")
+  cc=$(echo "$cc" | tr -d ' \r\n')
+  [[ -z "$cc" ]] && cc="cubic"
+  echo "$cc"
+}
+
 restore_sysctl() {
   if [[ -f "$SYSCTL_BACKUP" ]]; then
     while IFS='=' read -r key val || [[ -n "$key" ]]; do
@@ -177,6 +185,8 @@ WANT_TUNNEL="n"
 TUNNEL_DOMAIN=""
 TUNNEL_TOKEN=""
 TUNNEL_PORT="8081"
+APPLY_CERT="n"
+CF_DNS_KEY=""
 
 ask_tunnel_setup() {
   echo
@@ -187,6 +197,7 @@ ask_tunnel_setup() {
   echo "       1) 已在 Cloudflare 中添加的访问域名"
   echo "       2) Cloudflare 隧道 Token"
   echo "       3) 在 Cloudflare 中为该隧道配置的端口/回源端口"
+  echo "       4) 如需申请证书并使用 tuic/hy2 节点，请提前准备好该隧道域名相关的 Cloudflare 编辑区域 DNS 的 API Key"
   echo "================================================================"
   local prompt_choice=""
   if [[ -t 0 ]]; then
@@ -212,20 +223,50 @@ ask_tunnel_setup() {
         read -rp "  3. 请输入本地回源端口 [默认 8081]: " TUNNEL_PORT < /dev/tty
       fi
     fi
-    TUNNEL_DOMAIN=$(echo "$TUNNEL_DOMAIN" | tr -d ' 
-')
-    TUNNEL_TOKEN=$(echo "$TUNNEL_TOKEN" | tr -d ' 
-')
-    TUNNEL_PORT=$(echo "$TUNNEL_PORT" | tr -d ' 
-')
+    TUNNEL_DOMAIN=$(echo "$TUNNEL_DOMAIN" | tr -d ' \r\n')
+    TUNNEL_TOKEN=$(echo "$TUNNEL_TOKEN" | tr -d ' \r\n')
+    TUNNEL_PORT=$(echo "$TUNNEL_PORT" | tr -d ' \r\n')
     TUNNEL_PORT="${TUNNEL_PORT:-8081}"
 
     if [[ -z "$TUNNEL_DOMAIN" || -z "$TUNNEL_TOKEN" ]]; then
       TUNNEL_DOMAIN=""
       TUNNEL_TOKEN=""
+      APPLY_CERT="n"
+      CF_DNS_KEY=""
       echo "  [✓] 已选择开启 Cloudflare 官方免费临时隧道 (免域名/免Token)，将在核心组件就绪后自动分配！"
     else
-      echo "  [✓] 隧道参数已保存，将在核心组件就绪后自动启动并绑定！"
+      echo "  [✓] 隧道参数已保存！"
+      echo
+      echo "  [Cloudflare SSL 证书与高阶节点设置 (TUIC / Hysteria2)]"
+      local cert_choice=""
+      if [[ -t 0 ]]; then
+        read -rp "  是否申请 Cloudflare SSL 证书并开启 TUIC / Hysteria2 节点？[y/N]: " cert_choice
+      else
+        if [[ -c /dev/tty ]]; then
+          read -rp "  是否申请 Cloudflare SSL 证书并开启 TUIC / Hysteria2 节点？[y/N]: " cert_choice < /dev/tty || cert_choice="n"
+        fi
+      fi
+      if [[ "${cert_choice,,}" == "y" || "${cert_choice,,}" == "yes" ]]; then
+        APPLY_CERT="y"
+        if [[ -t 0 ]]; then
+          read -rp "  请输入 Cloudflare API 令牌 (包含「区域.DNS/编辑」权限): " CF_DNS_KEY
+        else
+          if [[ -c /dev/tty ]]; then
+            read -rp "  请输入 Cloudflare API 令牌 (包含「区域.DNS/编辑」权限): " CF_DNS_KEY < /dev/tty || CF_DNS_KEY=""
+          fi
+        fi
+        CF_DNS_KEY=$(echo "$CF_DNS_KEY" | tr -d ' \r\n')
+        if [[ -n "$CF_DNS_KEY" ]]; then
+          echo "  [✓] Cloudflare DNS API Key 已记录，将在部署后通过 Caddy 自动签发证书并开启 TUIC / Hysteria2 节点！"
+        else
+          echo "  [!] API Key 为空，将不申请证书（将为您创建 vmess-argo 与 vless-reality 节点）。"
+          APPLY_CERT="n"
+        fi
+      else
+        APPLY_CERT="n"
+        CF_DNS_KEY=""
+        echo "  [✓] 选择不申请证书，将在部署后为您创建 vmess-argo 与 vless-reality 节点。"
+      fi
     fi
   fi
 }
@@ -529,6 +570,9 @@ fi
 
 echo "[4/6] 准备网络运行环境并优化内核套接字/UDP缓冲区..."
 apply_sysctl_optimization
+local detected_cc
+detected_cc=$(get_tcp_congestion)
+echo "      当前系统生效的 TCP 拥塞控制算法: ${detected_cc}"
 
 echo "[5/6] 部署服务与终端管理命令..."
 if [[ -f f.sh ]]; then
@@ -562,11 +606,9 @@ if [[ "$WANT_TUNNEL" == "y" ]]; then
     echo "  [+] 正在根据第一步输入的参数配置 Cloudflare隧道连接和Caddy流量代理..."
   fi
   if [[ -x /usr/local/bin/sout ]]; then
-    /usr/local/bin/sout setup_tunnel "$TUNNEL_DOMAIN" "$TUNNEL_TOKEN" "$TUNNEL_PORT"
+    /usr/local/bin/sout setup_tunnel "$TUNNEL_DOMAIN" "$TUNNEL_TOKEN" "$TUNNEL_PORT" "${APPLY_CERT:-n}" "${CF_DNS_KEY:-}"
   fi
-if [[ "$WANT_TUNNEL" == "y" ]]; then
   exit 0
-fi
 fi
 
 IP=$(curl -s4m 5 https://api.ipify.org || curl -s4m 5 https://ifconfig.me || echo "127.0.0.1")
