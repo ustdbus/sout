@@ -448,6 +448,51 @@ get_sui_user() {
   echo "$u"
 }
 
+get_or_create_sui_token() {
+  local sui_db="${1:-/usr/local/s-ui/db/s-ui.db}"
+  [[ ! -f "$sui_db" ]] && return 1
+
+  local tok=""
+  tok=$(cat "${WORK_DIR}/sui-token" 2>/dev/null || true)
+
+  # 1. 若本地持久化文件中有 token，核查数据库中是否为未过期的有效令牌
+  if [[ -n "$tok" ]]; then
+    local in_db
+    in_db=$(sqlite3 "$sui_db" "SELECT 1 FROM tokens WHERE token='$tok' AND (desc='sout' OR desc='fanout') AND (expiry=0 OR expiry > strftime('%s','now')) LIMIT 1;" 2>/dev/null || true)
+    if [[ "$in_db" == "1" ]]; then
+      # 存在有效令牌，顺便清理多余重复同名令牌，保持数据库纯净
+      sqlite3 "$sui_db" "DELETE FROM tokens WHERE (desc='sout' OR desc='fanout') AND token != '$tok';" 2>/dev/null || true
+      echo "$tok"
+      return 0
+    fi
+  fi
+
+  # 2. 本地文件无有效 token，则从数据库中提取最新的有效 sout 令牌复用（按 id DESC 倒序，优先最新的）
+  tok=$(sqlite3 "$sui_db" "SELECT token FROM tokens WHERE (desc='sout' OR desc='fanout') AND (expiry=0 OR expiry > strftime('%s','now')) ORDER BY id DESC LIMIT 1;" 2>/dev/null || true)
+  if [[ -n "$tok" ]]; then
+    # 存在有效令牌，顺便清理其他多余重复历史令牌
+    sqlite3 "$sui_db" "DELETE FROM tokens WHERE (desc='sout' OR desc='fanout') AND token != '$tok';" 2>/dev/null || true
+    mkdir -p "$WORK_DIR"
+    echo "$tok" > "${WORK_DIR}/sui-token"
+    chmod 600 "${WORK_DIR}/sui-token" 2>/dev/null || true
+    echo "$tok"
+    return 0
+  fi
+
+  # 3. 现存所有令牌均失效或不存在，先清理所有旧的残留记录，再插入唯一的新令牌
+  sqlite3 "$sui_db" "DELETE FROM tokens WHERE desc='sout' OR desc='fanout';" 2>/dev/null || true
+  tok=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+  local admin_id
+  admin_id=$(sqlite3 "$sui_db" "SELECT id FROM users LIMIT 1;" 2>/dev/null || echo "1")
+  [[ -z "$admin_id" ]] && admin_id="1"
+  sqlite3 "$sui_db" "INSERT INTO tokens (desc, token, expiry, user_id) VALUES ('sout', '$tok', 0, $admin_id);" 2>/dev/null || true
+  systemctl restart s-ui 2>/dev/null || true
+  mkdir -p "$WORK_DIR"
+  echo "$tok" > "${WORK_DIR}/sui-token"
+  chmod 600 "${WORK_DIR}/sui-token" 2>/dev/null || true
+  echo "$tok"
+}
+
 show_info() {
   local st la port bp pw pip purl full_url ssl_en ssl_dom scheme c_en c_dom c_sout_p c_sui_p c_sub_p c_mode
   st=$(svc_status)
@@ -1594,18 +1639,7 @@ except Exception:
 
   if [[ -f "$sui_db" ]]; then
     local sui_token
-    sui_token=$(cat "${WORK_DIR}/sui-token" 2>/dev/null || true)
-    if [[ -z "$sui_token" ]]; then
-      sui_token=$(sqlite3 "$sui_db" "SELECT token FROM tokens WHERE (desc='sout' OR desc='fanout') AND (expiry=0 OR expiry > strftime('%s','now')) LIMIT 1;" 2>/dev/null || true)
-      if [[ -z "$sui_token" ]]; then
-        sui_token=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-        sqlite3 "$sui_db" "INSERT INTO tokens (desc, token, expiry, user_id) VALUES ('sout', '$sui_token', 0, 1);" 2>/dev/null || true
-        systemctl restart s-ui 2>/dev/null || true
-      fi
-      mkdir -p "$WORK_DIR"
-      echo "$sui_token" > "${WORK_DIR}/sui-token"
-      chmod 600 "${WORK_DIR}/sui-token" 2>/dev/null || true
-    fi
+    sui_token=$(get_or_create_sui_token "$sui_db")
 
     if [[ -z "$sui_token" ]]; then
       echo -e "  ${Y}[!] 未找到 s-ui API Token，跳过自动配置（请先启动 sout 生成 Token）${N}"
@@ -2485,18 +2519,7 @@ else:
     else
       echo -e "  [+] 未找到监听在 127.0.0.1 的隧道节点，正在自动依据模板创建..."
       local sui_token
-      sui_token=$(cat "${WORK_DIR}/sui-token" 2>/dev/null || true)
-      if [[ -z "$sui_token" ]]; then
-        sui_token=$(sqlite3 "/usr/local/s-ui/db/s-ui.db" "SELECT token FROM tokens WHERE (desc='sout' OR desc='fanout') AND (expiry=0 OR expiry > strftime('%s','now')) LIMIT 1;" 2>/dev/null || true)
-        if [[ -z "$sui_token" ]]; then
-          sui_token=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-          sqlite3 "/usr/local/s-ui/db/s-ui.db" "INSERT INTO tokens (desc, token, expiry, user_id) VALUES ('sout', '$sui_token', 0, 1);" 2>/dev/null || true
-          systemctl restart s-ui 2>/dev/null || true
-        fi
-        mkdir -p "$WORK_DIR"
-        echo "$sui_token" > "${WORK_DIR}/sui-token"
-        chmod 600 "${WORK_DIR}/sui-token" 2>/dev/null || true
-      fi
+      sui_token=$(get_or_create_sui_token "/usr/local/s-ui/db/s-ui.db")
       local sui_admin_user
       sui_admin_user=$(get_sui_user)
       if [[ -z "$ws_p" ]]; then
@@ -3103,10 +3126,7 @@ create_tuic_hy2_nodes() {
   fi
 
   local sui_token
-  sui_token=$(cat "${WORK_DIR}/sui-token" 2>/dev/null || true)
-  if [[ -z "$sui_token" ]]; then
-    sui_token=$(sqlite3 "$sui_db" "SELECT token FROM tokens WHERE (desc='sout' OR desc='fanout') AND (expiry=0 OR expiry > strftime('%s','now')) LIMIT 1;" 2>/dev/null || true)
-  fi
+  sui_token=$(get_or_create_sui_token "$sui_db")
   if [[ -z "$sui_token" ]]; then
     echo -e "  ${R}[!] 未能获取到 s-ui API Token，请先在终端运行一次 sout 生成凭据。${N}"
     return 1
@@ -3868,6 +3888,7 @@ case "${1:-}" in
     shift
     create_tuic_hy2_nodes "$@"
     ;;
+  token) get_or_create_sui_token ;;
   update)    check_and_update ;;
   upgrade)   check_and_update ;;
   uninstall) do_uninstall ;;

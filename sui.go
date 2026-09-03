@@ -204,6 +204,7 @@ func DetectSUI(workDir string) (*SUI, error) {
 			s := newSUI(saved)
 			if s.tokenValid() {
 				cachedSUIToken = saved
+				s.cleanDuplicateTokens(saved)
 				s.cleanLegacyClonedInbounds()
 				s.syncSUIDatabaseLinks(hostPublicIP())
 				return s, nil
@@ -211,20 +212,36 @@ func DetectSUI(workDir string) (*SUI, error) {
 		}
 	}
 
-	existingToken := sqliteExec("SELECT token FROM tokens WHERE (desc='sout' OR desc='fanout') AND (expiry=0 OR expiry > " + strconv.FormatInt(time.Now().Unix(), 10) + ") LIMIT 1;")
-	if existingToken != "" {
-		s := newSUI(existingToken)
-		if s.tokenValid() {
-			cachedSUIToken = existingToken
-			if workDir != "" {
-				saveTokenFile(workDir, suiTokenFile, existingToken)
+	// 检查数据库中现有所有未过期的 sout 令牌（优先测试最新的）
+	tokenRowsJSON, err := runSQLiteJSON(dbPath, "SELECT id, token FROM tokens WHERE (desc='sout' OR desc='fanout') AND (expiry=0 OR expiry > "+strconv.FormatInt(time.Now().Unix(), 10)+") ORDER BY id DESC;")
+	if err == nil && len(tokenRowsJSON) > 0 {
+		var existingList []struct {
+			ID    int    `json:"id"`
+			Token string `json:"token"`
+		}
+		if json.Unmarshal(tokenRowsJSON, &existingList) == nil {
+			for _, item := range existingList {
+				if item.Token == "" {
+					continue
+				}
+				s := newSUI(item.Token)
+				if s.tokenValid() {
+					cachedSUIToken = item.Token
+					if workDir != "" {
+						saveTokenFile(workDir, suiTokenFile, item.Token)
+					}
+					s.cleanDuplicateTokens(item.Token)
+					s.cleanLegacyClonedInbounds()
+					_ = s.cleanStaleRoutesAndClients(nil)
+					s.syncSUIDatabaseLinks(hostPublicIP())
+					return s, nil
+				}
 			}
-			s.cleanLegacyClonedInbounds()
-			_ = s.cleanStaleRoutesAndClients(nil)
-			s.syncSUIDatabaseLinks(hostPublicIP())
-			return s, nil
 		}
 	}
+
+	// 现存所有令牌均失效或不存在，先清理所有旧的 sout 令牌，彻底防止堆积
+	_, _ = runSQLite(dbPath, "DELETE FROM tokens WHERE desc='sout' OR desc='fanout';")
 
 	newToken := generateRandomToken(32)
 	adminIDStr := sqliteExec("SELECT id FROM users LIMIT 1;")
@@ -246,6 +263,14 @@ func DetectSUI(workDir string) (*SUI, error) {
 	s.syncSUIDatabaseLinks(hostPublicIP())
 
 	return s, nil
+}
+
+func (s *SUI) cleanDuplicateTokens(keepToken string) {
+	if s == nil || s.dbPath == "" || keepToken == "" {
+		return
+	}
+	query := fmt.Sprintf("DELETE FROM tokens WHERE (desc='sout' OR desc='fanout') AND token != %q;", keepToken)
+	_, _ = runSQLite(s.dbPath, query)
 }
 
 func readSavedTokenFile(workDir, filename string) string {
