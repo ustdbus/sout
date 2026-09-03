@@ -3398,68 +3398,127 @@ def api(method, endpoint, form=None):
     with urllib.request.urlopen(req, timeout=15) as resp:
         return json.loads(resp.read().decode('utf-8'))
 
-# 1. 检查现有 TLS 并递增生成 mytlsX
+# 1. 检查现有 TLS 并复用或更新匹配的 TLS 模板（彻底防止重复生成 mytls1, mytls2, mytls3 残留）
 tls_resp = api('GET', 'tls') or {}
-tls_list = tls_resp.get('obj', {}).get('tls', [])
-max_num = 0
+tls_obj = tls_resp.get('obj') or {}
+tls_list = tls_obj.get('tls', []) if isinstance(tls_obj, dict) else (tls_obj or [])
+
+target_tls = None
 for t in tls_list:
-    name = t.get('name', '')
-    m = re.match(r'^mytls(\d+)$', name)
-    if m:
-        max_num = max(max_num, int(m.group(1)))
-new_tls_name = f"mytls{max_num + 1}"
-
-new_tls_payload = {
-    'id': 0,
-    'name': new_tls_name,
-    'server': {
-        'enabled': True,
-        'certificate_path': cert_file,
-        'key_path': key_file,
-        'server_name': cert_domain
-    },
-    'client': {
-        'insecure': is_insecure,
-        'utls': {
-            'enabled': True,
-            'fingerprint': 'chrome'
-        }
-    }
-}
-save_tls_res = api('POST', 'save', {'object': 'tls', 'action': 'new', 'data': json.dumps(new_tls_payload)})
-if not save_tls_res.get('success'):
-    print(f"\033[31m[!] 注册 TLS 对象失败: {save_tls_res.get('msg')}\033[0m")
-    sys.exit(1)
-
-# 查出新 TLS 对象的 id
-tls_resp2 = api('GET', 'tls') or {}
-new_tls_id = None
-for t in tls_resp2.get('obj', {}).get('tls', []):
-    if t.get('name') == new_tls_name:
-        new_tls_id = t.get('id')
+    srv = t.get('server', {})
+    if srv.get('server_name') == cert_domain or srv.get('certificate_path') == cert_file:
+        target_tls = t
         break
 
-if not new_tls_id:
-    print(f"\033[31m[!] 未能检索到新创建的 TLS ID ({new_tls_name})\033[0m")
-    sys.exit(1)
+if target_tls:
+    new_tls_id = target_tls.get('id')
+    new_tls_name = target_tls.get('name', 'mytls1')
+    tls_payload = {
+        'id': new_tls_id,
+        'name': new_tls_name,
+        'server': {
+            'enabled': True,
+            'certificate_path': cert_file,
+            'key_path': key_file,
+            'server_name': cert_domain
+        },
+        'client': {
+            'insecure': is_insecure,
+            'utls': {
+                'enabled': True,
+                'fingerprint': 'chrome'
+            }
+        }
+    }
+    api('POST', 'save', {'object': 'tls', 'action': 'edit', 'data': json.dumps(tls_payload)})
+    print(f"\033[32m[✓] 复用现有 TLS 配置: {new_tls_name} (ID: {new_tls_id}, 允许不安全连接: {is_insecure})\033[0m")
+else:
+    max_num = 0
+    for t in tls_list:
+        name = t.get('name', '')
+        m = re.match(r'^mytls(\d+)$', name)
+        if m:
+            max_num = max(max_num, int(m.group(1)))
+    new_tls_name = f"mytls{max_num + 1}"
+    new_tls_payload = {
+        'id': 0,
+        'name': new_tls_name,
+        'server': {
+            'enabled': True,
+            'certificate_path': cert_file,
+            'key_path': key_file,
+            'server_name': cert_domain
+        },
+        'client': {
+            'insecure': is_insecure,
+            'utls': {
+                'enabled': True,
+                'fingerprint': 'chrome'
+            }
+        }
+    }
+    save_tls_res = api('POST', 'save', {'object': 'tls', 'action': 'new', 'data': json.dumps(new_tls_payload)})
+    if not save_tls_res.get('success'):
+        print(f"\033[31m[!] 注册 TLS 对象失败: {save_tls_res.get('msg')}\033[0m")
+        sys.exit(1)
 
-print(f"\033[32m[✓] 成功注册 TLS 配置: {new_tls_name} (ID: {new_tls_id}, 允许不安全连接: {is_insecure})\033[0m")
+    tls_resp2 = api('GET', 'tls') or {}
+    tls_obj2 = tls_resp2.get('obj') or {}
+    tls_list2 = tls_obj2.get('tls', []) if isinstance(tls_obj2, dict) else (tls_obj2 or [])
+    new_tls_id = None
+    for t in tls_list2:
+        if t.get('name') == new_tls_name:
+            new_tls_id = t.get('id')
+            break
+
+    if not new_tls_id:
+        print(f"\033[31m[!] 未能检索到新创建的 TLS ID ({new_tls_name})\033[0m")
+        sys.exit(1)
+
+    print(f"\033[32m[✓] 成功注册 TLS 配置: {new_tls_name} (ID: {new_tls_id}, 允许不安全连接: {is_insecure})\033[0m")
+
+# 顺便清理未被任何入站关联的同域名历史冗余 TLS 模板，保持模板列表纯净
+try:
+    inb_check = api('GET', 'inbounds') or {}
+    inb_rows_c = (inb_check.get('obj') or {}).get('inbounds', []) if isinstance(inb_check.get('obj'), dict) else (inb_check.get('obj') or [])
+    used_tids = set(ib.get('tls_id') for ib in inb_rows_c if isinstance(ib, dict) and ib.get('tls_id'))
+    for t in tls_list:
+        tid = t.get('id')
+        tname = t.get('name', '')
+        if tname.startswith('mytls') and tid != new_tls_id and tid not in used_tids:
+            api('POST', 'save', {'object': 'tls', 'action': 'del', 'data': str(tid)})
+except Exception:
+    pass
 
 # 2. 查询当前入站节点并根据 action_mode 执行变更或补齐
 inb_resp = api('GET', 'inbounds') or {}
-inbound_rows = inb_resp.get('obj', {}).get('inbounds', [])
+inb_obj_first = inb_resp.get('obj') or {}
+inbound_rows = inb_obj_first.get('inbounds', []) if isinstance(inb_obj_first, dict) else (inb_obj_first or [])
+inbound_rows = [ib for ib in inbound_rows if isinstance(ib, dict)]
 existing_tuic = next((ib for ib in inbound_rows if ib.get('type') == 'tuic'), None)
 existing_hy2 = next((ib for ib in inbound_rows if ib.get('type') == 'hysteria2'), None)
 
 def gen_suffix():
     return "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
 
-# 处理 TUIC 节点
+# 处理 TUIC 节点 (确保拥塞控制与多域名完整写入)
+tuic_addrs = [{'server': pub_ip, 'server_port': int(os.environ['TUIC_PORT'])}]
 if existing_tuic:
+    tuic_port = existing_tuic.get('listen_port') or int(os.environ['TUIC_PORT'])
+    tuic_addrs = [{'server': pub_ip, 'server_port': tuic_port}]
     if action_mode in ('change_existing_only', 'change_and_fill'):
-        existing_tuic['tls_id'] = new_tls_id
-        api('POST', 'save', {'object': 'inbounds', 'action': 'edit', 'data': json.dumps(existing_tuic)})
-        print(f"\033[32m[✓] TUIC 节点 [{existing_tuic.get('tag')}] 已成功切换至证书 {new_tls_name} (ID: {new_tls_id})\033[0m")
+        tuic_payload = {
+            'id': existing_tuic['id'],
+            'type': 'tuic',
+            'tag': existing_tuic.get('tag') or f"tuic-{gen_suffix()}",
+            'tls_id': new_tls_id,
+            'listen': '::',
+            'listen_port': tuic_port,
+            'congestion_control': cc,
+            'addrs': tuic_addrs
+        }
+        api('POST', 'save', {'object': 'inbounds', 'action': 'edit', 'data': json.dumps(tuic_payload)})
+        print(f"\033[32m[✓] TUIC 节点 [{existing_tuic.get('tag')}] 已成功更新 (TLS_ID: {new_tls_id}, 拥塞控制: {cc}, 多域名: {pub_ip}:{tuic_port})\033[0m")
 else:
     if action_mode in ('create_both', 'change_and_fill'):
         tuic_port = int(os.environ['TUIC_PORT'])
@@ -3472,17 +3531,29 @@ else:
             'listen': '::',
             'listen_port': tuic_port,
             'congestion_control': cc,
-            'addrs': [{'server': pub_ip, 'server_port': tuic_port}]
+            'addrs': tuic_addrs
         }
         api('POST', 'save', {'object': 'inbounds', 'action': 'new', 'data': json.dumps(tuic_payload)})
-        print(f"\033[32m[✓] 已成功创建并上线 TUIC 节点: tag={tuic_tag}, 端口={tuic_port}, 监听=:: (双栈)\033[0m")
+        print(f"\033[32m[✓] 已成功创建并上线 TUIC 节点: tag={tuic_tag}, 端口={tuic_port}, 拥塞控制={cc}, 多域名={pub_ip}:{tuic_port}\033[0m")
 
-# 处理 Hysteria2 节点
+# 处理 Hysteria2 节点 (确保忽略客户端带宽与多域名完整写入)
+hy2_addrs = [{'server': pub_ip, 'server_port': int(os.environ['HY2_PORT'])}]
 if existing_hy2:
+    hy2_port = existing_hy2.get('listen_port') or int(os.environ['HY2_PORT'])
+    hy2_addrs = [{'server': pub_ip, 'server_port': hy2_port}]
     if action_mode in ('change_existing_only', 'change_and_fill'):
-        existing_hy2['tls_id'] = new_tls_id
-        api('POST', 'save', {'object': 'inbounds', 'action': 'edit', 'data': json.dumps(existing_hy2)})
-        print(f"\033[32m[✓] Hysteria2 节点 [{existing_hy2.get('tag')}] 已成功切换至证书 {new_tls_name} (ID: {new_tls_id})\033[0m")
+        hy2_payload = {
+            'id': existing_hy2['id'],
+            'type': 'hysteria2',
+            'tag': existing_hy2.get('tag') or f"hysteria2-{gen_suffix()}",
+            'tls_id': new_tls_id,
+            'listen': '::',
+            'listen_port': hy2_port,
+            'ignore_client_bandwidth': True,
+            'addrs': hy2_addrs
+        }
+        api('POST', 'save', {'object': 'inbounds', 'action': 'edit', 'data': json.dumps(hy2_payload)})
+        print(f"\033[32m[✓] Hysteria2 节点 [{existing_hy2.get('tag')}] 已成功更新 (TLS_ID: {new_tls_id}, 忽略客户端带宽: 开启, 多域名: {pub_ip}:{hy2_port})\033[0m")
 else:
     if action_mode in ('create_both', 'change_and_fill'):
         hy2_port = int(os.environ['HY2_PORT'])
@@ -3495,10 +3566,10 @@ else:
             'listen': '::',
             'listen_port': hy2_port,
             'ignore_client_bandwidth': True,
-            'addrs': [{'server': pub_ip, 'server_port': hy2_port}]
+            'addrs': hy2_addrs
         }
         api('POST', 'save', {'object': 'inbounds', 'action': 'new', 'data': json.dumps(hy2_payload)})
-        print(f"\033[32m[✓] 已成功创建并上线 Hysteria2 节点: tag={hy2_tag}, 端口={hy2_port}, 监听=:: (双栈)\033[0m")
+        print(f"\033[32m[✓] 已成功创建并上线 Hysteria2 节点: tag={hy2_tag}, 端口={hy2_port}, 忽略客户端带宽=开启, 多域名={pub_ip}:{hy2_port}\033[0m")
 
 # 3. 重新获取所有最新的 inbound ID
 inb_resp2 = api('GET', 'inbounds') or {}
@@ -3793,7 +3864,10 @@ case "${1:-}" in
   cert|ssl_cf|acme|cf_ssl) cf_ssl_menu ;;
   view_cert) view_cf_ssl_certs ;;
   apply_cert) apply_cf_ssl_cert ;;
-  tuic|hy2|create_node|create_nodes) create_tuic_hy2_nodes ;;
+  tuic|hy2|create_node|create_nodes)
+    shift
+    create_tuic_hy2_nodes "$@"
+    ;;
   update)    check_and_update ;;
   upgrade)   check_and_update ;;
   uninstall) do_uninstall ;;
