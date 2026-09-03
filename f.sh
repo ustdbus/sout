@@ -2032,14 +2032,6 @@ else:
         int(time.time())
     ))
 
-# 5. 自动巡检纠偏所有直连入站节点为 :: 双栈 (IPv4/IPv6)
-cur.execute("SELECT id, options FROM inbounds")
-for r in cur.fetchall():
-    opt = json.loads(r[1].decode('utf-8') if isinstance(r[1], bytes) else r[1]) if r[1] else {}
-    if opt.get('listen') == '0.0.0.0':
-        opt['listen'] = '::'
-        cur.execute("UPDATE inbounds SET options=? WHERE id=?", (sqlite3.Binary(json.dumps(opt).encode('utf-8')), r[0]))
-
 con.commit()
 con.close()
 PYEOF
