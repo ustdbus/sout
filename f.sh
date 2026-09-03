@@ -1528,27 +1528,8 @@ setup_caddy_proxy() {
   fi
   install_cloudflared_bin || { echo -e "  ${R}安装 cloudflared 失败${N}"; return 1; }
 
-  # 2. 如果开启了固定隧道且要求申请证书
-  local cert_dir="/home/acme/${domain}"
-  local cert_file="${cert_dir}/fullchain.pem"
-  local key_file="${cert_dir}/privkey.pem"
-  local cert_ready="false"
-  if [[ "$apply_cert" == "y" && -n "$domain" && -n "$cf_dns_key" ]]; then
-    echo -e "  ${B}[+] 正在使用 Cloudflare DNS-01 申请 SSL 证书...${N}"
-    if do_apply_cf_ssl_cert "$domain" "$cf_dns_key"; then
-      if [[ -s "$cert_file" && -s "$key_file" ]]; then
-        cert_ready="true"
-      fi
-    else
-      echo -e "  ${Y}[!] 证书申请未成功或 API Key 无效，自动跳过证书申请，降级启用常规节点 (vmess-argo 与 vless-reality)${N}"
-    fi
-  elif [[ -n "$domain" && -s "$cert_file" && -s "$key_file" ]]; then
-    echo -e "  ${G}[✓] 本地已存在域名 [${domain}] 的完整证书，直接复用。${N}"
-    cert_ready="true"
-  fi
-
   # 2. 分配本地端口与安全路径
-  local sout_port sui_port sub_port node_port reality_port tuic_port hy2_port
+  local sout_port sui_port sub_port node_port reality_port
   local sout_path sui_path sub_path ws_path
 
   sout_port=$(rand_local_port)
@@ -1556,8 +1537,6 @@ setup_caddy_proxy() {
   sub_port=$(rand_local_port)
   node_port=$(rand_local_port)
   reality_port=$(rand_local_port)
-  tuic_port=$(rand_local_port)
-  hy2_port=$(rand_local_port)
 
   sout_path=$(rand_safe_path "sout")
   sui_path=$(rand_safe_path "sui")
@@ -1757,215 +1736,119 @@ def gen_x25519_keypair():
         return priv_b64, pub_b64
 
 domain = os.environ['DOMAIN']
-cert_dir = f"/home/acme/{domain}"
-cert_file = f"{cert_dir}/fullchain.pem"
-key_file = f"{cert_dir}/privkey.pem"
-has_cert = (os.environ.get('APPLY_CERT') == 'y') and os.path.exists(cert_file) and os.path.exists(key_file)
-
 created_inbound_tags = []
 
-if has_cert:
-    # 开启隧道且申请了证书 -> 启用 tuic 与 hysteria2 节点
-    tuic_tag, tuic_id = get_or_create_tag_and_id('tuic')
-    hy2_tag, hy2_id = get_or_create_tag_and_id('hysteria2')
-    cc = os.environ.get('CONGESTION_CONTROL', 'bbr')
+# 固定启用 vmess-argo 与 vless-reality 基础节点
+vmess_tag, vmess_id = get_or_create_tag_and_id('vmess-argo')
+reality_tag, reality_id = get_or_create_tag_and_id('vless-reality')
 
-    # 先检查/创建匹配域名的 tls 对象
-    all_tls_resp = api('GET', 'tls') or {}
-    all_tls_obj = all_tls_resp.get('obj') or {}
-    all_tls = all_tls_obj.get('tls', []) if isinstance(all_tls_obj, dict) else (all_tls_obj or [])
-    cert_tid = None
-    for t in all_tls:
-        srv = t.get('server', {})
-        if srv.get('server_name') == domain or t.get('name') == f"tls-{domain}":
-            cert_tid = t.get('id')
-            break
+vmess_payload = {
+    'id': vmess_id or 0,
+    'type': 'vmess',
+    'tag': vmess_tag,
+    'tls_id': 0,
+    'listen': '127.0.0.1',
+    'listen_port': int(os.environ['NODE_PORT']),
+    'addrs': [{
+        'server': domain,
+        'server_port': 443,
+        'tls': {
+            'disable_sni': False,
+            'enabled': True,
+            'insecure': False,
+            'server_name': domain,
+            'utls': {'enabled': True, 'fingerprint': 'chrome'}
+        }
+    }],
+    'transport': {
+        'early_data_header_name': 'Sec-WebSocket-Protocol',
+        'max_early_data': 2560,
+        'headers': {'Host': domain},
+        'path': os.environ['WS_PATH'],
+        'type': 'ws'
+    }
+}
+api('POST', 'save', {
+    'object': 'inbounds',
+    'action': 'edit' if vmess_id else 'new',
+    'data': json.dumps(vmess_payload)
+})
+created_inbound_tags.append(vmess_tag)
 
-    if not cert_tid:
-        tls_payload = {
-            'id': 0,
-            'name': f"tls-{domain}",
-            'server': {
+# 先检查/创建 reality tls 对象
+all_tls_resp = api('GET', 'tls') or {}
+all_tls_obj = all_tls_resp.get('obj') or {}
+all_tls = all_tls_obj.get('tls', []) if isinstance(all_tls_obj, dict) else (all_tls_obj or [])
+reality_tid = None
+for t in all_tls:
+    if t.get('name') == 'reality' or 'reality' in t.get('server', {}):
+        reality_tid = t.get('id')
+        break
+
+priv_k, pub_k = gen_x25519_keypair()
+sid = os.urandom(4).hex()
+if not reality_tid:
+    reality_tls_payload = {
+        'id': 0,
+        'name': 'reality',
+        'server': {
+            'enabled': True,
+            'server_name': 'apple.com',
+            'reality': {
                 'enabled': True,
-                'certificate_path': cert_file,
-                'key_path': key_file,
-                'server_name': domain
+                'handshake': {
+                    'server_port': 443,
+                    'server': 'apple.com'
+                },
+                'short_id': [sid],
+                'private_key': priv_k
+            }
+        },
+        'client': {
+            'reality': {
+                'public_key': pub_k,
+                'short_id': sid
             },
-            'client': {
-                'utls': {
-                    'enabled': True,
-                    'fingerprint': 'chrome'
-                }
-            }
-        }
-        api('POST', 'save', {
-            'object': 'tls',
-            'action': 'new',
-            'data': json.dumps(tls_payload)
-        })
-        all_tls_resp = api('GET', 'tls') or {}
-        all_tls_obj = all_tls_resp.get('obj') or {}
-        all_tls = all_tls_obj.get('tls', []) if isinstance(all_tls_obj, dict) else (all_tls_obj or [])
-        for t in all_tls:
-            srv = t.get('server', {})
-            if srv.get('server_name') == domain or t.get('name') == f"tls-{domain}":
-                cert_tid = t.get('id')
-                break
-
-    tuic_port = int(os.environ['TUIC_PORT'])
-    tuic_payload = {
-        'id': tuic_id or 0,
-        'type': 'tuic',
-        'tag': tuic_tag,
-        'tls_id': cert_tid or 0,
-        'listen': '::',
-        'listen_port': tuic_port,
-        'congestion_control': cc,
-        'addrs': [{
-            'server': domain,
-            'server_port': tuic_port
-        }]
-    }
-    api('POST', 'save', {
-        'object': 'inbounds',
-        'action': 'edit' if tuic_id else 'new',
-        'data': json.dumps(tuic_payload)
-    })
-    created_inbound_tags.append(tuic_tag)
-
-    hy2_port = int(os.environ['HY2_PORT'])
-    hy2_payload = {
-        'id': hy2_id or 0,
-        'type': 'hysteria2',
-        'tag': hy2_tag,
-        'tls_id': cert_tid or 0,
-        'listen': '::',
-        'listen_port': hy2_port,
-        'ignore_client_bandwidth': True,
-        'addrs': [{
-            'server': domain,
-            'server_port': hy2_port
-        }]
-    }
-    api('POST', 'save', {
-        'object': 'inbounds',
-        'action': 'edit' if hy2_id else 'new',
-        'data': json.dumps(hy2_payload)
-    })
-    created_inbound_tags.append(hy2_tag)
-
-else:
-    # 开启隧道但不申请证书 -> 启用 vmess-argo 与 vless-reality 节点
-    vmess_tag, vmess_id = get_or_create_tag_and_id('vmess-argo')
-    reality_tag, reality_id = get_or_create_tag_and_id('vless-reality')
-
-    vmess_payload = {
-        'id': vmess_id or 0,
-        'type': 'vmess',
-        'tag': vmess_tag,
-        'tls_id': 0,
-        'listen': '127.0.0.1',
-        'listen_port': int(os.environ['NODE_PORT']),
-        'addrs': [{
-            'server': domain,
-            'server_port': 443,
-            'tls': {
-                'disable_sni': False,
+            'utls': {
                 'enabled': True,
-                'insecure': False,
-                'server_name': domain,
-                'utls': {'enabled': True, 'fingerprint': 'chrome'}
+                'fingerprint': 'chrome'
             }
-        }],
-        'transport': {
-            'early_data_header_name': 'Sec-WebSocket-Protocol',
-            'max_early_data': 2560,
-            'headers': {'Host': domain},
-            'path': os.environ['WS_PATH'],
-            'type': 'ws'
         }
     }
     api('POST', 'save', {
-        'object': 'inbounds',
-        'action': 'edit' if vmess_id else 'new',
-        'data': json.dumps(vmess_payload)
+        'object': 'tls',
+        'action': 'new',
+        'data': json.dumps(reality_tls_payload)
     })
-    created_inbound_tags.append(vmess_tag)
-
-    # 先检查/创建 reality tls 对象
     all_tls_resp = api('GET', 'tls') or {}
     all_tls_obj = all_tls_resp.get('obj') or {}
     all_tls = all_tls_obj.get('tls', []) if isinstance(all_tls_obj, dict) else (all_tls_obj or [])
-    reality_tid = None
     for t in all_tls:
         if t.get('name') == 'reality' or 'reality' in t.get('server', {}):
             reality_tid = t.get('id')
             break
 
-    priv_k, pub_k = gen_x25519_keypair()
-    sid = os.urandom(4).hex()
-    if not reality_tid:
-        reality_tls_payload = {
-            'id': 0,
-            'name': 'reality',
-            'server': {
-                'enabled': True,
-                'server_name': 'apple.com',
-                'reality': {
-                    'enabled': True,
-                    'handshake': {
-                        'server_port': 443,
-                        'server': 'apple.com'
-                    },
-                    'short_id': [sid],
-                    'private_key': priv_k
-                }
-            },
-            'client': {
-                'reality': {
-                    'public_key': pub_k,
-                    'short_id': sid
-                },
-                'utls': {
-                    'enabled': True,
-                    'fingerprint': 'chrome'
-                }
-            }
-        }
-        api('POST', 'save', {
-            'object': 'tls',
-            'action': 'new',
-            'data': json.dumps(reality_tls_payload)
-        })
-        all_tls_resp = api('GET', 'tls') or {}
-        all_tls_obj = all_tls_resp.get('obj') or {}
-        all_tls = all_tls_obj.get('tls', []) if isinstance(all_tls_obj, dict) else (all_tls_obj or [])
-        for t in all_tls:
-            if t.get('name') == 'reality' or 'reality' in t.get('server', {}):
-                reality_tid = t.get('id')
-                break
+reality_port = int(os.environ['REALITY_PORT'])
+pub_host = os.environ.get('PUBLIC_IP') or domain
 
-    reality_port = int(os.environ['REALITY_PORT'])
-    pub_host = os.environ.get('PUBLIC_IP') or domain
-
-    reality_payload = {
-        'id': reality_id or 0,
-        'type': 'vless',
-        'tag': reality_tag,
-        'tls_id': reality_tid or 0,
-        'listen': '::',
-        'listen_port': reality_port,
-        'addrs': [{
-            'server': pub_host,
-            'server_port': reality_port
-        }]
-    }
-    api('POST', 'save', {
-        'object': 'inbounds',
-        'action': 'edit' if reality_id else 'new',
-        'data': json.dumps(reality_payload)
-    })
-    created_inbound_tags.append(reality_tag)
+reality_payload = {
+    'id': reality_id or 0,
+    'type': 'vless',
+    'tag': reality_tag,
+    'tls_id': reality_tid or 0,
+    'listen': '::',
+    'listen_port': reality_port,
+    'addrs': [{
+        'server': pub_host,
+        'server_port': reality_port
+    }]
+}
+api('POST', 'save', {
+    'object': 'inbounds',
+    'action': 'edit' if reality_id else 'new',
+    'data': json.dumps(reality_payload)
+})
+created_inbound_tags.append(reality_tag)
 
 # 3. 重新查询最新所有入站 ID
 # 3. 重新查询最新所有入站 ID (100% 原生 API)
@@ -2112,6 +1995,26 @@ METAEOF
 
   # 7. 统一调用终端菜单中的 Caddy 探测并分流，确保 Caddyfile 规则与隧道回源完全一致
   reload_caddy_proxy >/dev/null 2>&1 || true
+
+  # 8. 基础服务与节点已全部就绪后，若用户要求申请证书或本地已有证书，发起申请并增设 TUIC 与 Hysteria2
+  local cert_file="/home/acme/${domain}/fullchain.pem"
+  local key_file="/home/acme/${domain}/privkey.pem"
+  if [[ "$apply_cert" == "y" && -n "$domain" && -n "$cf_dns_key" ]]; then
+    echo
+    echo -e "  ${B}[+] 基础服务与节点已就绪，正在申请 Cloudflare SSL 证书并配置 TUIC / Hysteria2...${N}"
+    if do_apply_cf_ssl_cert "$domain" "$cf_dns_key"; then
+      if [[ -s "$cert_file" && -s "$key_file" ]]; then
+        echo -e "  [+] 证书就绪，正在自动创建并挂载 TUIC 与 Hysteria2 高速节点..."
+        create_tuic_hy2_nodes "$domain" "$cert_file" "$key_file" "false"
+      fi
+    else
+      echo -e "  ${Y}[!] 证书申请未成功或 API Key 无效，基础服务不受影响，您可稍后在终端菜单重新申请并补齐节点。${N}"
+    fi
+  elif [[ -n "$domain" && -s "$cert_file" && -s "$key_file" ]]; then
+    echo
+    echo -e "  ${G}[✓] 本地已存在域名 [${domain}] 的完整证书，正在自动挂载 TUIC 与 Hysteria2 节点...${N}"
+    create_tuic_hy2_nodes "$domain" "$cert_file" "$key_file" "false"
+  fi
 
   echo
   echo -e "${G}================================================================${N}"
@@ -3193,136 +3096,151 @@ create_tuic_hy2_nodes() {
   [[ "$cur_path" != */ ]] && cur_path="${cur_path}/"
   local sui_api="http://127.0.0.1:${cur_port}${cur_path}apiv2"
 
-  echo -e "  请选择用于 TUIC / Hysteria2 的 TLS 证书来源："
-  echo -e "   1) 使用本地证书 (推荐 - 自动扫描 /home/acme/ 目录)"
-  echo -e "   2) 使用自定义路径证书 (手动指定域名与公私钥路径)"
-  echo -e "   3) 使用自签证书 (自动生成 10 年期自签证书，启用客户端允许不安全连接)"
-  echo -e "   0) 返回上级菜单"
-  echo -e "${D}----------------------------------------${N}"
-  read -rp "  请选择 [0-3] (默认 1): " cert_opt
-  cert_opt=$(echo "$cert_opt" | tr -d ' \r\n')
-  [[ -z "$cert_opt" ]] && cert_opt="1"
-  [[ "$cert_opt" == "0" ]] && return 0
+  local in_domain="${1:-}"
+  local in_cert_file="${2:-}"
+  local in_key_file="${3:-}"
+  local in_insecure="${4:-false}"
 
   local cert_file="" key_file="" cert_domain="" is_insecure="false"
 
-  if [[ "$cert_opt" == "1" ]]; then
-    local acme_dir="/home/acme"
-    if [[ ! -d "$acme_dir" ]]; then
-      echo -e "  ${R}[!] 本地证书目录 ${acme_dir} 不存在，暂无可用证书。${N}"
-      echo -e "  ${Y}提示: 请先在主菜单中申请 Cloudflare 证书，或选择模式 3 生成自签证书。${N}"
-      return 1
-    fi
+  if [[ -n "$in_domain" && -s "$in_cert_file" && -s "$in_key_file" ]]; then
+    cert_domain="$in_domain"
+    cert_file="$in_cert_file"
+    key_file="$in_key_file"
+    is_insecure="$in_insecure"
+    echo -e "  ${G}[✓] 自动应用指定证书: ${B}${cert_domain}${N}"
+  else
+    echo -e "  请选择用于 TUIC / Hysteria2 的 TLS 证书来源："
+    echo -e "   1) 使用本地证书 (推荐 - 自动扫描 /home/acme/ 目录)"
+    echo -e "   2) 使用自定义路径证书 (手动指定域名与公私钥路径)"
+    echo -e "   3) 使用自签证书 (自动生成 10 年期自签证书，启用客户端允许不安全连接)"
+    echo -e "   0) 返回上级菜单"
+    echo -e "${D}----------------------------------------${N}"
+    read -rp "  请选择 [0-3] (默认 1): " cert_opt
+    cert_opt=$(echo "$cert_opt" | tr -d ' \r\n')
+    [[ -z "$cert_opt" ]] && cert_opt="1"
+    [[ "$cert_opt" == "0" ]] && return 0
+  fi
 
-    local valid_domains=()
-    local d
-    for d in "$acme_dir"/*; do
-      if [[ -d "$d" ]]; then
-        local dom_name
-        dom_name=$(basename "$d")
-        local pub_cand="" priv_cand=""
-        if [[ -s "${d}/fullchain.pem" ]]; then pub_cand="${d}/fullchain.pem"
-        elif [[ -s "${d}/cert.crt" ]]; then pub_cand="${d}/cert.crt"
-        elif [[ -s "${d}/${dom_name}.cer" ]]; then pub_cand="${d}/${dom_name}.cer"
-        fi
-
-        if [[ -s "${d}/privkey.pem" ]]; then priv_cand="${d}/privkey.pem"
-        elif [[ -s "${d}/private.key" ]]; then priv_cand="${d}/private.key"
-        elif [[ -s "${d}/${dom_name}.key" ]]; then priv_cand="${d}/${dom_name}.key"
-        fi
-
-        if [[ -n "$pub_cand" && -n "$priv_cand" ]]; then
-          valid_domains+=("${dom_name}|${pub_cand}|${priv_cand}")
-        fi
-      fi
-    done
-
-    local count=${#valid_domains[@]}
-    if [[ "$count" -eq 0 ]]; then
-      echo -e "  ${R}[!] 在 ${acme_dir} 下未发现有效证书 (需同时包含有效公钥与私钥)。${N}"
-      echo -e "  ${Y}提示: 请先在主菜单中申请证书，或选择模式 3 生成自签证书。${N}"
-      return 1
-    elif [[ "$count" -eq 1 ]]; then
-      IFS='|' read -r cert_domain cert_file key_file <<< "${valid_domains[0]}"
-      echo -e "  ${G}[✓] 自动应用本地唯一有效证书: ${B}${cert_domain}${N}"
-    else
-      echo
-      echo -e "  ${G}检测到本地存在多个有效证书，请选择要应用的域名：${N}"
-      local idx=1
-      for item in "${valid_domains[@]}"; do
-        IFS='|' read -r d_name _ _ <<< "$item"
-        echo -e "   ${idx}) ${B}${d_name}${N}"
-        idx=$((idx + 1))
-      done
-      echo -e "   0) 取消"
-      read -rp "  请选择 [1-${count}]: " sel
-      sel=$(echo "$sel" | tr -d ' \r\n')
-      if [[ "$sel" =~ ^[1-9][0-9]*$ ]] && [[ "$sel" -le "$count" ]]; then
-        IFS='|' read -r cert_domain cert_file key_file <<< "${valid_domains[$((sel - 1))]}"
-        echo -e "  ${G}[✓] 已选择域名: ${B}${cert_domain}${N}"
-      else
-        echo -e "  ${Y}输入无效，已取消操作。${N}"
+  if [[ -z "$cert_domain" || ! -s "$cert_file" || ! -s "$key_file" ]]; then
+    if [[ "$cert_opt" == "1" ]]; then
+      local acme_dir="/home/acme"
+      if [[ ! -d "$acme_dir" ]]; then
+        echo -e "  ${R}[!] 本地证书目录 ${acme_dir} 不存在，暂无可用证书。${N}"
+        echo -e "  ${Y}提示: 请先在主菜单中申请 Cloudflare 证书，或选择模式 3 生成自签证书。${N}"
         return 1
       fi
-    fi
 
-  elif [[ "$cert_opt" == "2" ]]; then
-    read -rp "  请输入证书对应域名 (如 example.com): " cert_domain
-    cert_domain=$(echo "$cert_domain" | tr -d ' \r\n' | sed -e 's|^https\?://||' -e 's|/.*||')
-    if [[ -z "$cert_domain" ]]; then
-      echo -e "  ${R}[!] 域名不能为空！${N}"
-      return 1
-    fi
-    read -rp "  请输入公钥证书文件绝对路径 (如 /etc/ssl/fullchain.pem): " cert_file
-    cert_file=$(echo "$cert_file" | tr -d ' \r\n')
-    if [[ ! -s "$cert_file" ]]; then
-      echo -e "  ${R}[!] 公钥文件不存在或为空: ${cert_file}${N}"
-      return 1
-    fi
-    read -rp "  请输入私钥文件绝对路径 (如 /etc/ssl/privkey.pem): " key_file
-    key_file=$(echo "$key_file" | tr -d ' \r\n')
-    if [[ ! -s "$key_file" ]]; then
-      echo -e "  ${R}[!] 私钥文件不存在或为空: ${key_file}${N}"
-      return 1
-    fi
+      local valid_domains=()
+      local d
+      for d in "$acme_dir"/*; do
+        if [[ -d "$d" ]]; then
+          local dom_name
+          dom_name=$(basename "$d")
+          local pub_cand="" priv_cand=""
+          if [[ -s "${d}/fullchain.pem" ]]; then pub_cand="${d}/fullchain.pem"
+          elif [[ -s "${d}/cert.crt" ]]; then pub_cand="${d}/cert.crt"
+          elif [[ -s "${d}/${dom_name}.cer" ]]; then pub_cand="${d}/${dom_name}.cer"
+          fi
 
-  elif [[ "$cert_opt" == "3" ]]; then
-    read -rp "  请输入自签证书伪装域名 [直接回车默认 apple.com]: " cert_domain
-    cert_domain=$(echo "$cert_domain" | tr -d ' \r\n' | sed -e 's|^https\?://||' -e 's|/.*||')
-    [[ -z "$cert_domain" ]] && cert_domain="apple.com"
+          if [[ -s "${d}/privkey.pem" ]]; then priv_cand="${d}/privkey.pem"
+          elif [[ -s "${d}/private.key" ]]; then priv_cand="${d}/private.key"
+          elif [[ -s "${d}/${dom_name}.key" ]]; then priv_cand="${d}/${dom_name}.key"
+          fi
 
-    local ssc_dir="/home/ssc/${cert_domain}"
-    mkdir -p "$ssc_dir"
-    cert_file="${ssc_dir}/fullchain.pem"
-    key_file="${ssc_dir}/privkey.pem"
+          if [[ -n "$pub_cand" && -n "$priv_cand" ]]; then
+            valid_domains+=("${dom_name}|${pub_cand}|${priv_cand}")
+          fi
+        fi
+      done
 
-    echo -e "  [+] 正在生成 ${cert_domain} 的 10 年期自签证书..."
-    if ! command -v openssl >/dev/null 2>&1; then
-      echo -e "  [+] 正在自动安装 openssl 证书工具..."
-      apk add --no-cache openssl 2>/dev/null || apt-get update -y && apt-get install -y openssl 2>/dev/null || yum install -y openssl 2>/dev/null || true
-    fi
+      local count=${#valid_domains[@]}
+      if [[ "$count" -eq 0 ]]; then
+        echo -e "  ${R}[!] 在 ${acme_dir} 下未发现有效证书 (需同时包含有效公钥与私钥)。${N}"
+        echo -e "  ${Y}提示: 请先在主菜单中申请证书，或选择模式 3 生成自签证书。${N}"
+        return 1
+      elif [[ "$count" -eq 1 ]]; then
+        IFS='|' read -r cert_domain cert_file key_file <<< "${valid_domains[0]}"
+        echo -e "  ${G}[✓] 自动应用本地唯一有效证书: ${B}${cert_domain}${N}"
+      else
+        echo
+        echo -e "  ${G}检测到本地存在多个有效证书，请选择要应用的域名：${N}"
+        local idx=1
+        for item in "${valid_domains[@]}"; do
+          IFS='|' read -r d_name _ _ <<< "$item"
+          echo -e "   ${idx}) ${B}${d_name}${N}"
+          idx=$((idx + 1))
+        done
+        echo -e "   0) 取消"
+        read -rp "  请选择 [1-${count}]: " sel
+        sel=$(echo "$sel" | tr -d ' \r\n')
+        if [[ "$sel" =~ ^[1-9][0-9]*$ ]] && [[ "$sel" -le "$count" ]]; then
+          IFS='|' read -r cert_domain cert_file key_file <<< "${valid_domains[$((sel - 1))]}"
+          echo -e "  ${G}[✓] 已选择域名: ${B}${cert_domain}${N}"
+        else
+          echo -e "  ${Y}输入无效，已取消操作。${N}"
+          return 1
+        fi
+      fi
 
-    if command -v openssl >/dev/null 2>&1; then
-      openssl req -x509 -nodes -days 3650 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-        -keyout "$key_file" -out "$cert_file" -subj "/CN=${cert_domain}" >/dev/null 2>&1 || \
-      openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-        -keyout "$key_file" -out "$cert_file" -subj "/CN=${cert_domain}" >/dev/null 2>&1
+    elif [[ "$cert_opt" == "2" ]]; then
+      read -rp "  请输入证书对应域名 (如 example.com): " cert_domain
+      cert_domain=$(echo "$cert_domain" | tr -d ' \r\n' | sed -e 's|^https\?://||' -e 's|/.*||')
+      if [[ -z "$cert_domain" ]]; then
+        echo -e "  ${R}[!] 域名不能为空！${N}"
+        return 1
+      fi
+      read -rp "  请输入公钥证书文件绝对路径 (如 /etc/ssl/fullchain.pem): " cert_file
+      cert_file=$(echo "$cert_file" | tr -d ' \r\n')
+      if [[ ! -s "$cert_file" ]]; then
+        echo -e "  ${R}[!] 公钥文件不存在或为空: ${cert_file}${N}"
+        return 1
+      fi
+      read -rp "  请输入私钥文件绝对路径 (如 /etc/ssl/privkey.pem): " key_file
+      key_file=$(echo "$key_file" | tr -d ' \r\n')
+      if [[ ! -s "$key_file" ]]; then
+        echo -e "  ${R}[!] 私钥文件不存在或为空: ${key_file}${N}"
+        return 1
+      fi
+
+    elif [[ "$cert_opt" == "3" ]]; then
+      read -rp "  请输入自签证书伪装域名 [直接回车默认 apple.com]: " cert_domain
+      cert_domain=$(echo "$cert_domain" | tr -d ' \r\n' | sed -e 's|^https\?://||' -e 's|/.*||')
+      [[ -z "$cert_domain" ]] && cert_domain="apple.com"
+
+      local ssc_dir="/home/ssc/${cert_domain}"
+      mkdir -p "$ssc_dir"
+      cert_file="${ssc_dir}/fullchain.pem"
+      key_file="${ssc_dir}/privkey.pem"
+
+      echo -e "  [+] 正在生成 ${cert_domain} 的 10 年期自签证书..."
+      if ! command -v openssl >/dev/null 2>&1; then
+        echo -e "  [+] 正在自动安装 openssl 证书工具..."
+        apk add --no-cache openssl 2>/dev/null || apt-get update -y && apt-get install -y openssl 2>/dev/null || yum install -y openssl 2>/dev/null || true
+      fi
+
+      if command -v openssl >/dev/null 2>&1; then
+        openssl req -x509 -nodes -days 3650 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+          -keyout "$key_file" -out "$cert_file" -subj "/CN=${cert_domain}" >/dev/null 2>&1 || \
+        openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+          -keyout "$key_file" -out "$cert_file" -subj "/CN=${cert_domain}" >/dev/null 2>&1
+      else
+        echo -e "  ${R}[!] 系统未找到 openssl，无法生成自签证书。${N}"
+        return 1
+      fi
+
+      if [[ ! -s "$cert_file" || ! -s "$key_file" ]]; then
+        echo -e "  ${R}[!] 自签证书生成失败！${N}"
+        return 1
+      fi
+
+      is_insecure="true"
+      echo -e "  ${G}[✓] 自签证书已生成在: ${ssc_dir}${N}"
+      echo -e "  ${Y}💡 注意: 已启用「允许不安全连接 (Insecure)」，客户端连接时将跳过证书信任链校验。${N}"
     else
-      echo -e "  ${R}[!] 系统未找到 openssl，无法生成自签证书。${N}"
+      echo -e "  ${Y}无效选项，已取消。${N}"
       return 1
     fi
-
-    if [[ ! -s "$cert_file" || ! -s "$key_file" ]]; then
-      echo -e "  ${R}[!] 自签证书生成失败！${N}"
-      return 1
-    fi
-
-    is_insecure="true"
-    echo -e "  ${G}[✓] 自签证书已生成在: ${ssc_dir}${N}"
-    echo -e "  ${Y}💡 注意: 已启用「允许不安全连接 (Insecure)」，客户端连接时将跳过证书信任链校验。${N}"
-  else
-    echo -e "  ${Y}无效选项，已取消。${N}"
-    return 1
   fi
 
   # 查询当前是否已存在 TUIC / Hysteria2 节点
@@ -3360,13 +3278,17 @@ except Exception:
         echo -e "    • ${n_type} 节点: Tag=${n_tag} 端口=${n_port} 当前TLS_ID=${n_tid}"
       done
       echo
-      read -rp "  是否仅仅变更现有节点的证书(TLS)？[y/N]: " do_chg
-      do_chg=$(echo "$do_chg" | tr -d ' \r\n' | tr '[:upper:]' '[:lower:]')
-      if [[ "$do_chg" != "y" && "$do_chg" != "yes" ]]; then
-        echo -e "  ${D}已取消操作，未对现有节点进行修改。${N}"
-        return 0
+      if [[ -n "$in_domain" ]]; then
+        action_mode="change_existing_only"
+      else
+        read -rp "  是否仅仅变更现有节点的证书(TLS)？[y/N]: " do_chg
+        do_chg=$(echo "$do_chg" | tr -d ' \r\n' | tr '[:upper:]' '[:lower:]')
+        if [[ "$do_chg" != "y" && "$do_chg" != "yes" ]]; then
+          echo -e "  ${D}已取消操作，未对现有节点进行修改。${N}"
+          return 0
+        fi
+        action_mode="change_existing_only"
       fi
-      action_mode="change_existing_only"
 
     elif [[ "$count_exist" -eq 1 ]]; then
       local exist_type exist_tag exist_port exist_tid missing_type
@@ -3382,22 +3304,26 @@ except Exception:
       echo -e "    • 已有节点: ${G}${exist_type}${N} (Tag=${exist_tag} 端口=${exist_port} 当前TLS_ID=${exist_tid})"
       echo -e "    • 缺失节点: ${R}${missing_type}${N}"
       echo
-      echo -e "  请选择处理方式："
-      echo -e "   1) 变更现有 [${exist_type}] 证书，并自动补齐创建缺失的 [${missing_type}] 节点 (推荐)"
-      echo -e "   2) 仅变更现有 [${exist_type}] 节点的证书，不补齐缺失节点"
-      echo -e "   0) 取消退出"
-      echo -e "${D}----------------------------------------${N}"
-      read -rp "  请选择 [0-2] (默认 1): " single_choice
-      single_choice=$(echo "$single_choice" | tr -d ' \r\n')
-      [[ -z "$single_choice" ]] && single_choice="1"
-
-      if [[ "$single_choice" == "1" ]]; then
+      if [[ -n "$in_domain" ]]; then
         action_mode="change_and_fill"
-      elif [[ "$single_choice" == "2" ]]; then
-        action_mode="change_existing_only"
       else
-        echo -e "  ${D}已取消操作，未对现有节点进行修改。${N}"
-        return 0
+        echo -e "  请选择处理方式："
+        echo -e "   1) 变更现有 [${exist_type}] 证书，并自动补齐创建缺失的 [${missing_type}] 节点 (推荐)"
+        echo -e "   2) 仅变更现有 [${exist_type}] 节点的证书，不补齐缺失节点"
+        echo -e "   0) 取消退出"
+        echo -e "${D}----------------------------------------${N}"
+        read -rp "  请选择 [0-2] (默认 1): " single_choice
+        single_choice=$(echo "$single_choice" | tr -d ' \r\n')
+        [[ -z "$single_choice" ]] && single_choice="1"
+
+        if [[ "$single_choice" == "1" ]]; then
+          action_mode="change_and_fill"
+        elif [[ "$single_choice" == "2" ]]; then
+          action_mode="change_existing_only"
+        else
+          echo -e "  ${D}已取消操作，未对现有节点进行修改。${N}"
+          return 0
+        fi
       fi
     fi
   fi
@@ -3553,11 +3479,22 @@ else:
 
 # 3. 重新获取所有最新的 inbound ID
 inb_resp2 = api('GET', 'inbounds') or {}
-all_ib_ids = [ib['id'] for ib in inb_resp2.get('obj', {}).get('inbounds', []) if ib.get('id')]
+inb_obj2 = inb_resp2.get('obj') or []
+if isinstance(inb_obj2, dict):
+    inb_rows2 = inb_obj2.get('inbounds') or []
+else:
+    inb_rows2 = inb_obj2 or []
+inb_rows2 = [r for r in inb_rows2 if isinstance(r, dict)]
+all_ib_ids = [ib['id'] for ib in inb_rows2 if ib.get('id') is not None]
 
 # 4. 四级优先级精准定位主用户（彻底防止改名后识别不到或新建重名用户）
 cli_resp = api('GET', 'clients') or {}
-clients = cli_resp.get('obj', {}).get('clients', [])
+cli_obj = cli_resp.get('obj') or []
+if isinstance(cli_obj, dict):
+    clients = cli_obj.get('clients') or []
+else:
+    clients = cli_obj or []
+clients = [c for c in clients if isinstance(c, dict)]
 
 target_client = None
 # 级别 1: 查找内部数据库 id == 1 的核心账号（用户改名后 ID 仍固定为 1）
@@ -3582,7 +3519,8 @@ else:
     is_new_user = True
 
 # 合并入站列表（并集，无损保留已绑定的所有节点）
-existing_ib_ids = set(target_client.get('inbounds', [])) if target_client else set()
+raw_user_inbs = target_client.get('inbounds') if target_client else []
+existing_ib_ids = set(raw_user_inbs or [])
 merged_inbounds = sorted(list(existing_ib_ids | set(all_ib_ids)))
 
 import uuid
