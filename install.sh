@@ -298,14 +298,29 @@ ensure_sui() {
       echo "  [+] 正在自动检测当前服务器系统架构并安装官方 s-ui 面板..."
       echo "      (官方仓库: https://github.com/alireza0/s-ui)"
       echo
+      local sui_log="/tmp/sui_install.log"
+      rm -f "$sui_log" 2>/dev/null || true
       if [[ -c /dev/tty ]]; then
-        bash <(curl -Ls https://raw.githubusercontent.com/alireza0/s-ui/master/install.sh) < /dev/tty || true
+        bash <(curl -Ls https://raw.githubusercontent.com/alireza0/s-ui/master/install.sh) < /dev/tty 2>&1 | tee "$sui_log" || true
       else
-        bash <(curl -Ls https://raw.githubusercontent.com/alireza0/s-ui/master/install.sh) || true
+        bash <(curl -Ls https://raw.githubusercontent.com/alireza0/s-ui/master/install.sh) 2>&1 | tee "$sui_log" || true
       fi
       
       if check_sui; then
         SUI_INSTALLED_BY_US=1
+        # 解析官方日志中是否打印了随机生成的账号和密码
+        if [[ -f "$sui_log" ]]; then
+          local parsed_u parsed_p
+          parsed_u=$(sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g" "$sui_log" | grep -E '^username:' | tail -1 | cut -d: -f2 | tr -d ' \r\n')
+          parsed_p=$(sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g" "$sui_log" | grep -E '^password:' | tail -1 | cut -d: -f2 | tr -d ' \r\n')
+          rm -f "$sui_log" 2>/dev/null || true
+          if [[ -n "$parsed_u" && -n "$parsed_p" ]]; then
+            SUI_ADMIN_USER="$parsed_u"
+            SUI_ADMIN_PASS="$parsed_p"
+            SUI_PASS_IS_RANDOM=1
+          fi
+        fi
+
         echo
         echo "================================================================"
         echo "  [✓] s-ui 面板安装完成并就绪！继续进行 sout 插件安装..."
@@ -341,81 +356,18 @@ ensure_sui() {
   esac
 }
 
-ensure_sui
-
-# ==============================================================================
-# [第三步] 配置 s-ui 管理员登录凭据 (支持默认 n 自动生成 8 位随机强密码)
-# ==============================================================================
-SUI_ADMIN_USER="admin"
+# 全局变量记录 s-ui 登录凭据与随机生成状态
+SUI_ADMIN_USER=""
 SUI_ADMIN_PASS=""
 SUI_PASS_IS_RANDOM=0
 
-configure_sui_credentials() {
-  if ! check_sui; then
-    return 0
-  fi
+ensure_sui
 
-  echo
-  echo "================================================================"
-  echo "  [s-ui 管理员登录凭据配置]"
-  echo "  • 选择 n (直接回车): 自动设置用户为 admin，并随机生成 8 位强密码"
-  echo "  • 选择 y: 手动自定义输入管理员用户名与登录密码"
-  echo "================================================================"
-
-  local prompt_choice="n"
-  if [[ -t 0 ]]; then
-    read -rp "  是否手动自定义 s-ui 管理员用户名与密码？[y/N]: " prompt_choice
-  else
-    if [[ -c /dev/tty ]]; then
-      read -rp "  是否手动自定义 s-ui 管理员用户名与密码？[y/N]: " prompt_choice < /dev/tty || prompt_choice="n"
-    fi
-  fi
-  prompt_choice="${prompt_choice:-n}"
-
-  if [[ "${prompt_choice,,}" == "y" || "${prompt_choice,,}" == "yes" ]]; then
-    local custom_user="" custom_pass=""
-    if [[ -t 0 ]]; then
-      read -rp "  请输入管理员用户名 [默认 admin]: " custom_user
-      read -rp "  请输入管理员登录密码: " custom_pass
-    else
-      if [[ -c /dev/tty ]]; then
-        read -rp "  请输入管理员用户名 [默认 admin]: " custom_user < /dev/tty || custom_user="admin"
-        read -rp "  请输入管理员登录密码: " custom_pass < /dev/tty || custom_pass=""
-      fi
-    fi
-    custom_user="${custom_user:-admin}"
-    custom_user=$(echo "$custom_user" | tr -d ' \r\n')
-    custom_pass=$(echo "$custom_pass" | tr -d ' \r\n')
-
-    while [[ -z "$custom_pass" ]]; do
-      echo -e "  \033[31m[!] 密码不能为空，请重新输入！\033[0m"
-      if [[ -t 0 ]]; then
-        read -rp "  请输入管理员登录密码: " custom_pass
-      else
-        if [[ -c /dev/tty ]]; then
-          read -rp "  请输入管理员登录密码: " custom_pass < /dev/tty || custom_pass=""
-        fi
-      fi
-      custom_pass=$(echo "$custom_pass" | tr -d ' \r\n')
-    done
-
-    /usr/local/s-ui/sui admin -username "$custom_user" -password "$custom_pass" >/dev/null 2>&1 || true
-    SUI_ADMIN_USER="$custom_user"
-    SUI_ADMIN_PASS="$custom_pass"
-    SUI_PASS_IS_RANDOM=0
-    echo "  [✓] 管理员用户名与密码已设置为自定义凭据！"
-  else
-    local rand_pass
-    rand_pass=$(tr -dc 'a-z0-9' < /dev/urandom | head -c 8)
-    /usr/local/s-ui/sui admin -username "admin" -password "$rand_pass" >/dev/null 2>&1 || true
-    SUI_ADMIN_USER="admin"
-    SUI_ADMIN_PASS="$rand_pass"
-    SUI_PASS_IS_RANDOM=1
-    echo "  [✓] 已自动将管理员设为 admin，并配置了 8 位随机强密码！"
-  fi
-}
-
-configure_sui_credentials
+# 若未抓取到随机用户名（如已预装或用户在官方脚本中自定义设置），从数据库读取用户名
+if [[ -z "$SUI_ADMIN_USER" && -f "/usr/local/s-ui/db/s-ui.db" ]] && command -v sqlite3 >/dev/null 2>&1; then
+  SUI_ADMIN_USER=$(sqlite3 "/usr/local/s-ui/db/s-ui.db" "SELECT username FROM users LIMIT 1;" 2>/dev/null || echo "admin")
+fi
+[[ -z "$SUI_ADMIN_USER" ]] && SUI_ADMIN_USER="admin"
 
 seed_settings() {
   local target="${WORK_DIR}/settings.json"
