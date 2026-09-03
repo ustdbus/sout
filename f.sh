@@ -1380,6 +1380,68 @@ get_caddy_arch() {
   esac
 }
 
+setup_caddy_service_unit() {
+  mkdir -p /etc/caddy /var/log/caddy /var/lib/caddy /home/acme
+  chmod 755 /etc/caddy /var/log/caddy
+  chmod 700 /home/acme 2>/dev/null || true
+
+  if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+    mkdir -p /etc/systemd/system
+    cat > /etc/systemd/system/caddy.service <<'EOF'
+[Unit]
+Description=Caddy Web Server
+Documentation=https://caddyserver.com/docs/
+After=network.target network-online.target
+Requires=network-online.target
+
+[Service]
+Type=notify
+User=root
+Group=root
+ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
+ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force
+TimeoutStopSec=5s
+LimitNOFILE=1048576
+PrivateTmp=true
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable caddy >/dev/null 2>&1 || true
+  else
+    # 兼容 OpenRC (Alpine Linux)
+    mkdir -p /etc/init.d
+    cat > /etc/init.d/caddy <<'EOF'
+#!/sbin/openrc-run
+name="caddy"
+description="Caddy Web Server"
+command="/usr/local/bin/caddy"
+command_args="run --config /etc/caddy/Caddyfile"
+command_background="yes"
+pidfile="/run/caddy.pid"
+output_log="/var/log/caddy/caddy.log"
+error_log="/var/log/caddy/caddy.err"
+
+extra_started_commands="reload"
+
+depend() {
+  need net
+  after firewall
+}
+
+reload() {
+  ebegin "Reloading Caddy"
+  /usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force >/dev/null 2>&1
+  eend $?
+}
+EOF
+    chmod +x /etc/init.d/caddy
+    rc-update add caddy default >/dev/null 2>&1 || true
+  fi
+}
+
 install_caddy_bin() {
   local arch
   arch=$(get_caddy_arch)
@@ -1402,33 +1464,7 @@ install_caddy_bin() {
     rm -rf "$tmp"
   fi
 
-  mkdir -p /etc/caddy /var/log/caddy /var/lib/caddy
-  chmod 755 /etc/caddy /var/log/caddy
-  mkdir -p /etc/systemd/system
-
-  cat > /etc/systemd/system/caddy.service <<'EOF'
-[Unit]
-Description=Caddy Web Server
-Documentation=https://caddyserver.com/docs/
-After=network.target network-online.target
-Requires=network-online.target
-
-[Service]
-Type=notify
-User=root
-Group=root
-ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
-ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force
-TimeoutStopSec=5s
-LimitNOFILE=1048576
-PrivateTmp=true
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-
-[Install]
-WantedBy=multi-user.target
-EOF
-  systemctl daemon-reload
-  systemctl enable caddy >/dev/null 2>&1 || true
+  setup_caddy_service_unit
   echo -e "  ${G}[✓] Caddy 服务已就绪${N}"
   return 0
 }
@@ -1455,9 +1491,10 @@ setup_cloudflared_service() {
   local token="$1"
   local tun_p="${2:-8081}"
 
-  mkdir -p /etc/systemd/system
-  if [[ -n "$token" ]]; then
-    cat > /etc/systemd/system/cloudflared.service <<EOF
+  if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+    mkdir -p /etc/systemd/system
+    if [[ -n "$token" ]]; then
+      cat > /etc/systemd/system/cloudflared.service <<EOF
 [Unit]
 Description=Cloudflare Named Tunnel Agent
 After=network.target network-online.target
@@ -1473,8 +1510,8 @@ LimitNOFILE=65536
 [Install]
 WantedBy=multi-user.target
 EOF
-  else
-    cat > /etc/systemd/system/cloudflared.service <<EOF
+    else
+      cat > /etc/systemd/system/cloudflared.service <<EOF
 [Unit]
 Description=Cloudflare Quick Tunnel Agent
 After=network.target network-online.target
@@ -1490,21 +1527,58 @@ LimitNOFILE=65536
 [Install]
 WantedBy=multi-user.target
 EOF
+    fi
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable cloudflared >/dev/null 2>&1 || true
+    systemctl restart cloudflared 2>/dev/null || true
+  else
+    # 兼容 OpenRC (Alpine Linux)
+    mkdir -p /etc/init.d
+    local cf_args
+    if [[ -n "$token" ]]; then
+      cf_args="tunnel --protocol quic --no-autoupdate run --token ${token}"
+    else
+      cf_args="tunnel --url http://127.0.0.1:${tun_p} --no-autoupdate"
+    fi
+    cat > /etc/init.d/cloudflared <<EOF
+#!/sbin/openrc-run
+name="cloudflared"
+description="Cloudflare Tunnel Agent"
+command="/usr/local/bin/cloudflared"
+command_args="${cf_args}"
+command_background="yes"
+pidfile="/run/cloudflared.pid"
+output_log="/var/log/cloudflared.log"
+error_log="/var/log/cloudflared.err"
+
+depend() {
+  need net
+  after firewall
+}
+EOF
+    chmod +x /etc/init.d/cloudflared
+    rc-update add cloudflared default >/dev/null 2>&1 || true
+    rc-service cloudflared restart 2>/dev/null || rc-service cloudflared start 2>/dev/null || true
   fi
 
   # 清空旧日志，避免 get_quick_tunnel_domain 读到上一次临时隧道的旧域名
   : > /var/log/cloudflared.log 2>/dev/null || true
-  systemctl daemon-reload 2>/dev/null || true
-  systemctl enable cloudflared >/dev/null 2>&1 || rc-update add cloudflared default >/dev/null 2>&1 || true
-  systemctl restart cloudflared 2>/dev/null || rc-service cloudflared restart 2>/dev/null || service cloudflared restart 2>/dev/null || true
+  : > /var/log/cloudflared.err 2>/dev/null || true
 }
 
 get_quick_tunnel_domain() {
   local max_wait=20
   local d=""
   for ((i=1; i<=max_wait; i++)); do
-    d=$(journalctl -u cloudflared -n 50 --no-pager 2>/dev/null | grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' | tail -1 | sed 's|https://||' | tr -d ' 
-')
+    if command -v journalctl >/dev/null 2>&1; then
+      d=$(journalctl -u cloudflared -n 50 --no-pager 2>/dev/null | grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' | tail -1 | sed 's|https://||' | tr -d ' \r\n')
+    fi
+    if [[ -z "$d" && -f /var/log/cloudflared.err ]]; then
+      d=$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' /var/log/cloudflared.err 2>/dev/null | tail -1 | sed 's|https://||' | tr -d ' \r\n')
+    fi
+    if [[ -z "$d" && -f /var/log/cloudflared.log ]]; then
+      d=$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' /var/log/cloudflared.log 2>/dev/null | tail -1 | sed 's|https://||' | tr -d ' \r\n')
+    fi
     [[ -n "$d" ]] && break
     sleep 1
   done
@@ -2094,10 +2168,10 @@ disable_caddy_proxy() {
   [[ ${yes,,} == y ]] || { echo "  已取消"; return; }
 
   echo "  [+] 正在停止 Caddy 与 cloudflared 服务..."
-  systemctl stop caddy 2>/dev/null || true
-  systemctl disable caddy 2>/dev/null || true
-  systemctl stop cloudflared 2>/dev/null || true
-  systemctl disable cloudflared 2>/dev/null || true
+  systemctl stop caddy 2>/dev/null || rc-service caddy stop 2>/dev/null || true
+  systemctl disable caddy 2>/dev/null || rc-update del caddy default 2>/dev/null || true
+  systemctl stop cloudflared 2>/dev/null || rc-service cloudflared stop 2>/dev/null || true
+  systemctl disable cloudflared 2>/dev/null || rc-update del cloudflared default 2>/dev/null || true
 
   if [[ -f "$CADDY_META" ]]; then
     rm -f "$CADDY_META"
@@ -2697,14 +2771,23 @@ with open(p, 'w') as f:
 " 2>/dev/null || true
 
   # 6. 重启 Caddy 服务 (兼容 systemd 与 OpenRC/Alpine)
+  setup_caddy_service_unit
   local caddy_restart_ok=false
   if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
     systemctl restart caddy 2>/dev/null && caddy_restart_ok=true
     systemctl enable caddy 2>/dev/null || true
   elif command -v rc-service >/dev/null 2>&1; then
-    rc-service caddy restart 2>/dev/null && caddy_restart_ok=true
+    (rc-service caddy restart 2>/dev/null || rc-service caddy start 2>/dev/null) && caddy_restart_ok=true
   elif command -v service >/dev/null 2>&1; then
-    service caddy restart 2>/dev/null && caddy_restart_ok=true
+    (service caddy restart 2>/dev/null || service caddy start 2>/dev/null) && caddy_restart_ok=true
+  fi
+
+  # 备用进程存活检测：若进程已正常常驻运行，确认启动成功
+  if [[ "$caddy_restart_ok" != "true" ]]; then
+    sleep 1
+    if pgrep -x caddy >/dev/null 2>&1 || ps aux 2>/dev/null | grep -v grep | grep -q "caddy run"; then
+      caddy_restart_ok=true
+    fi
   fi
 
   if [[ "$caddy_restart_ok" == "true" ]]; then
@@ -2762,11 +2845,33 @@ do_apply_cf_ssl_cert() {
   echo -e "  ${B}[3/4] 正在配置 Caddy 并通过 Cloudflare DNS-01 验证发起申请...${N}"
   local cf_domains_meta="${WORK_DIR}/cf_ssl_domains.json"
   python3 -c '
-import json, os, time, sys
+import json, os, time, sys, urllib.request
 p = sys.argv[1]
 dom = sys.argv[2]
 tok = sys.argv[3]
 cdir = sys.argv[4]
+
+# 自动清理 Cloudflare 上可能存在的 _acme-challenge 旧记录，防止出现 400 "An identical record already exists"
+try:
+    headers = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+    parts = dom.split(".")
+    if len(parts) >= 2:
+        root_zone = ".".join(parts[-2:])
+        req = urllib.request.Request(f"https://api.cloudflare.com/client/v4/zones?name={root_zone}", headers=headers)
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            zdata = json.loads(resp.read().decode())
+            if zdata.get("result"):
+                zid = zdata["result"][0]["id"]
+                req2 = urllib.request.Request(f"https://api.cloudflare.com/client/v4/zones/{zid}/dns_records?name=_acme-challenge.{dom}", headers=headers)
+                with urllib.request.urlopen(req2, timeout=8) as resp2:
+                    rdata = json.loads(resp2.read().decode())
+                    for rec in rdata.get("result", []):
+                        rid = rec["id"]
+                        req_del = urllib.request.Request(f"https://api.cloudflare.com/client/v4/zones/{zid}/dns_records/{rid}", headers=headers, method="DELETE")
+                        urllib.request.urlopen(req_del, timeout=8)
+except Exception:
+    pass
+
 d = {}
 if os.path.exists(p):
     try:
@@ -2805,13 +2910,14 @@ ${domain}:8443 {
     respond "SSL Ready" 200
 }
 EOF
+    setup_caddy_service_unit
     if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
       systemctl restart caddy 2>/dev/null || true
       systemctl enable caddy 2>/dev/null || true
     elif command -v rc-service >/dev/null 2>&1; then
-      rc-service caddy restart 2>/dev/null || true
+      rc-service caddy restart 2>/dev/null || rc-service caddy start 2>/dev/null || true
     elif command -v service >/dev/null 2>&1; then
-      service caddy restart 2>/dev/null || true
+      service caddy restart 2>/dev/null || service caddy start 2>/dev/null || true
     fi
   fi
 
@@ -2936,38 +3042,7 @@ ensure_caddy_with_cloudflare() {
   install -m 755 "$tmp/caddy" /usr/local/bin/caddy
   rm -rf "$tmp"
 
-  mkdir -p /etc/caddy /var/log/caddy /var/lib/caddy /home/acme
-  chmod 755 /etc/caddy /var/log/caddy
-  chmod 700 /home/acme
-  mkdir -p /etc/systemd/system
-
-  if [[ ! -f /etc/systemd/system/caddy.service ]]; then
-    cat > /etc/systemd/system/caddy.service <<'EOF'
-[Unit]
-Description=Caddy Web Server
-Documentation=https://caddyserver.com/docs/
-After=network.target network-online.target
-Requires=network-online.target
-
-[Service]
-Type=notify
-User=root
-Group=root
-ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
-ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force
-TimeoutStopSec=5s
-LimitNOFILE=1048576
-LimitNPROC=512
-PrivateTmp=true
-ProtectSystem=full
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    systemctl daemon-reload 2>/dev/null || true
-  fi
-
+  setup_caddy_service_unit
   return 0
 }
 
@@ -3787,10 +3862,25 @@ caddy_menu() {
           fi
           pause ;;
         2) caddy_interactive_setup; pause ;;
-        3) echo; journalctl -u cloudflared -n 40 --no-pager; pause ;;
+        3)
+          echo
+          if command -v journalctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+            journalctl -u cloudflared -n 40 --no-pager
+          elif [[ -f /var/log/cloudflared.err || -f /var/log/cloudflared.log ]]; then
+            tail -n 40 /var/log/cloudflared.err /var/log/cloudflared.log 2>/dev/null
+          else
+            echo "未找到 cloudflared 运行日志"
+          fi
+          pause ;;
         4)
           echo -e "  正在重启 Cloudflare 隧道服务..."
-          systemctl restart cloudflared 2>/dev/null && echo -e "  ${G}[✓] Cloudflare 隧道服务已成功重启${N}" || echo -e "  ${R}[×] 隧道服务重启失败${N}"
+          local cf_re_ok=false
+          if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+            systemctl restart cloudflared 2>/dev/null && cf_re_ok=true
+          elif command -v rc-service >/dev/null 2>&1; then
+            (rc-service cloudflared restart 2>/dev/null || rc-service cloudflared start 2>/dev/null) && cf_re_ok=true
+          fi
+          [[ "$cf_re_ok" == "true" ]] && echo -e "  ${G}[✓] Cloudflare 隧道服务已成功重启${N}" || echo -e "  ${R}[×] 隧道服务重启失败${N}"
           pause ;;
         5)
           reload_caddy_proxy
