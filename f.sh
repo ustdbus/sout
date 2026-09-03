@@ -1984,11 +1984,13 @@ else:
 clients_rows = [r for r in clients_rows if isinstance(r, dict)]
 
 admin_name = os.environ.get('SUI_ADMIN_USER', 'admin')
-admin = None
-for c in clients_rows:
-    if c.get('name') == admin_name:
-        admin = c
-        break
+admin = next((c for c in clients_rows if c.get('id') == 1), None)
+if not admin:
+    admin = next((c for c in clients_rows if c.get('name') == admin_name), None)
+if not admin and len(clients_rows) > 0:
+    admin = clients_rows[0]
+if admin:
+    admin_name = admin.get('name', admin_name)
 
 client_uuid = str(uuid.uuid4())
 client_pass = os.urandom(8).hex()
@@ -3387,23 +3389,59 @@ except Exception:
     pass
 " 2>/dev/null || true)
 
-  local only_change_tls="false"
+  local action_mode="create_both"
   if [[ -n "$existing_nodes" ]]; then
-    echo
-    echo -e "  ${Y}⚠️  检测到已存在 TUIC / Hysteria2 节点：${N}"
     IFS=';' read -ra node_list <<< "$existing_nodes"
-    for n_item in "${node_list[@]}"; do
-      IFS='|' read -r n_type n_tag n_port n_tid <<< "$n_item"
-      echo -e "    • ${n_type} 节点: Tag=${n_tag} 端口=${n_port} 当前TLS_ID=${n_tid}"
-    done
-    echo
-    read -rp "  是否仅仅变更现有节点的证书(TLS)？[y/N]: " do_chg
-    do_chg=$(echo "$do_chg" | tr -d ' \r\n' | tr '[:upper:]' '[:lower:]')
-    if [[ "$do_chg" != "y" && "$do_chg" != "yes" ]]; then
-      echo -e "  ${D}已取消操作，未对现有节点进行修改。${N}"
-      return 0
+    local count_exist=${#node_list[@]}
+
+    if [[ "$count_exist" -ge 2 ]]; then
+      echo
+      echo -e "  ${Y}⚠️  检测到已存在完整的 TUIC 与 Hysteria2 节点：${N}"
+      for n_item in "${node_list[@]}"; do
+        IFS='|' read -r n_type n_tag n_port n_tid <<< "$n_item"
+        echo -e "    • ${n_type} 节点: Tag=${n_tag} 端口=${n_port} 当前TLS_ID=${n_tid}"
+      done
+      echo
+      read -rp "  是否仅仅变更现有节点的证书(TLS)？[y/N]: " do_chg
+      do_chg=$(echo "$do_chg" | tr -d ' \r\n' | tr '[:upper:]' '[:lower:]')
+      if [[ "$do_chg" != "y" && "$do_chg" != "yes" ]]; then
+        echo -e "  ${D}已取消操作，未对现有节点进行修改。${N}"
+        return 0
+      fi
+      action_mode="change_existing_only"
+
+    elif [[ "$count_exist" -eq 1 ]]; then
+      local exist_type exist_tag exist_port exist_tid missing_type
+      IFS='|' read -r exist_type exist_tag exist_port exist_tid <<< "${node_list[0]}"
+      if [[ "$exist_type" == "TUIC" ]]; then
+        missing_type="Hysteria2"
+      else
+        missing_type="TUIC"
+      fi
+
+      echo
+      echo -e "  ${Y}⚠️  检测到当前仅存在单节点：${N}"
+      echo -e "    • 已有节点: ${G}${exist_type}${N} (Tag=${exist_tag} 端口=${exist_port} 当前TLS_ID=${exist_tid})"
+      echo -e "    • 缺失节点: ${R}${missing_type}${N}"
+      echo
+      echo -e "  请选择处理方式："
+      echo -e "   1) 变更现有 [${exist_type}] 证书，并自动补齐创建缺失的 [${missing_type}] 节点 (推荐)"
+      echo -e "   2) 仅变更现有 [${exist_type}] 节点的证书，不补齐缺失节点"
+      echo -e "   0) 取消退出"
+      echo -e "${D}----------------------------------------${N}"
+      read -rp "  请选择 [0-2] (默认 1): " single_choice
+      single_choice=$(echo "$single_choice" | tr -d ' \r\n')
+      [[ -z "$single_choice" ]] && single_choice="1"
+
+      if [[ "$single_choice" == "1" ]]; then
+        action_mode="change_and_fill"
+      elif [[ "$single_choice" == "2" ]]; then
+        action_mode="change_existing_only"
+      else
+        echo -e "  ${D}已取消操作，未对现有节点进行修改。${N}"
+        return 0
+      fi
     fi
-    only_change_tls="true"
   fi
 
   local cur_cc
@@ -3424,7 +3462,7 @@ except Exception:
   CERT_FILE="$cert_file" \
   KEY_FILE="$key_file" \
   IS_INSECURE="$is_insecure" \
-  ONLY_CHANGE_TLS="$only_change_tls" \
+  ACTION_MODE="$action_mode" \
   SUI_ADMIN_USER="$admin_user" \
   PUBLIC_IP="$public_ip" \
   CONGESTION_CONTROL="$cur_cc" \
@@ -3439,7 +3477,7 @@ cert_domain = os.environ['CERT_DOMAIN']
 cert_file = os.environ['CERT_FILE']
 key_file = os.environ['KEY_FILE']
 is_insecure = (os.environ.get('IS_INSECURE', 'false').lower() == 'true')
-only_change_tls = (os.environ.get('ONLY_CHANGE_TLS', 'false').lower() == 'true')
+action_mode = os.environ.get('ACTION_MODE', 'create_both')
 admin_name = os.environ.get('SUI_ADMIN_USER', 'admin')
 pub_ip = os.environ.get('PUBLIC_IP', cert_domain)
 cc = os.environ.get('CONGESTION_CONTROL', 'bbr')
@@ -3500,98 +3538,160 @@ if not new_tls_id:
 
 print(f"\033[32m[✓] 成功注册 TLS 配置: {new_tls_name} (ID: {new_tls_id}, 允许不安全连接: {is_insecure})\033[0m")
 
-# 2. 查询当前入站节点
+# 2. 查询当前入站节点并根据 action_mode 执行变更或补齐
 inb_resp = api('GET', 'inbounds') or {}
 inbound_rows = inb_resp.get('obj', {}).get('inbounds', [])
 existing_tuic = next((ib for ib in inbound_rows if ib.get('type') == 'tuic'), None)
 existing_hy2 = next((ib for ib in inbound_rows if ib.get('type') == 'hysteria2'), None)
 
-if only_change_tls:
-    # 仅仅变更现有节点的 tls_id
-    if existing_tuic:
-        existing_tuic['tls_id'] = new_tls_id
-        api('POST', 'save', {'object': 'inbounds', 'action': 'edit', 'data': json.dumps(existing_tuic)})
-        print(f"\033[32m[✓] TUIC 节点 [{existing_tuic.get('tag')}] 已成功切换至证书 {new_tls_name} (ID: {new_tls_id})\033[0m")
-    if existing_hy2:
-        existing_hy2['tls_id'] = new_tls_id
-        api('POST', 'save', {'object': 'inbounds', 'action': 'edit', 'data': json.dumps(existing_hy2)})
-        print(f"\033[32m[✓] Hysteria2 节点 [{existing_hy2.get('tag')}] 已成功切换至证书 {new_tls_name} (ID: {new_tls_id})\033[0m")
-    sys.exit(0)
-
-# 3. 若不存在则创建全新节点
 def gen_suffix():
     return "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
 
-tuic_port = int(os.environ['TUIC_PORT'])
-tuic_tag = f"tuic-{gen_suffix()}"
-tuic_payload = {
-    'id': 0,
-    'type': 'tuic',
-    'tag': tuic_tag,
-    'tls_id': new_tls_id,
-    'listen': '::',
-    'listen_port': tuic_port,
-    'congestion_control': cc,
-    'addrs': [{'server': pub_ip, 'server_port': tuic_port}]
-}
-api('POST', 'save', {'object': 'inbounds', 'action': 'new', 'data': json.dumps(tuic_payload)})
-print(f"\033[32m[✓] 已成功创建 TUIC 节点: tag={tuic_tag}, 端口={tuic_port}, 监听=:: (双栈)\033[0m")
+# 处理 TUIC 节点
+if existing_tuic:
+    if action_mode in ('change_existing_only', 'change_and_fill'):
+        existing_tuic['tls_id'] = new_tls_id
+        api('POST', 'save', {'object': 'inbounds', 'action': 'edit', 'data': json.dumps(existing_tuic)})
+        print(f"\033[32m[✓] TUIC 节点 [{existing_tuic.get('tag')}] 已成功切换至证书 {new_tls_name} (ID: {new_tls_id})\033[0m")
+else:
+    if action_mode in ('create_both', 'change_and_fill'):
+        tuic_port = int(os.environ['TUIC_PORT'])
+        tuic_tag = f"tuic-{gen_suffix()}"
+        tuic_payload = {
+            'id': 0,
+            'type': 'tuic',
+            'tag': tuic_tag,
+            'tls_id': new_tls_id,
+            'listen': '::',
+            'listen_port': tuic_port,
+            'congestion_control': cc,
+            'addrs': [{'server': pub_ip, 'server_port': tuic_port}]
+        }
+        api('POST', 'save', {'object': 'inbounds', 'action': 'new', 'data': json.dumps(tuic_payload)})
+        print(f"\033[32m[✓] 已成功创建并上线 TUIC 节点: tag={tuic_tag}, 端口={tuic_port}, 监听=:: (双栈)\033[0m")
 
-hy2_port = int(os.environ['HY2_PORT'])
-hy2_tag = f"hysteria2-{gen_suffix()}"
-hy2_payload = {
-    'id': 0,
-    'type': 'hysteria2',
-    'tag': hy2_tag,
-    'tls_id': new_tls_id,
-    'listen': '::',
-    'listen_port': hy2_port,
-    'ignore_client_bandwidth': True,
-    'addrs': [{'server': pub_ip, 'server_port': hy2_port}]
-}
-api('POST', 'save', {'object': 'inbounds', 'action': 'new', 'data': json.dumps(hy2_payload)})
-print(f"\033[32m[✓] 已成功创建 Hysteria2 节点: tag={hy2_tag}, 端口={hy2_port}, 监听=:: (双栈)\033[0m")
+# 处理 Hysteria2 节点
+if existing_hy2:
+    if action_mode in ('change_existing_only', 'change_and_fill'):
+        existing_hy2['tls_id'] = new_tls_id
+        api('POST', 'save', {'object': 'inbounds', 'action': 'edit', 'data': json.dumps(existing_hy2)})
+        print(f"\033[32m[✓] Hysteria2 节点 [{existing_hy2.get('tag')}] 已成功切换至证书 {new_tls_name} (ID: {new_tls_id})\033[0m")
+else:
+    if action_mode in ('create_both', 'change_and_fill'):
+        hy2_port = int(os.environ['HY2_PORT'])
+        hy2_tag = f"hysteria2-{gen_suffix()}"
+        hy2_payload = {
+            'id': 0,
+            'type': 'hysteria2',
+            'tag': hy2_tag,
+            'tls_id': new_tls_id,
+            'listen': '::',
+            'listen_port': hy2_port,
+            'ignore_client_bandwidth': True,
+            'addrs': [{'server': pub_ip, 'server_port': hy2_port}]
+        }
+        api('POST', 'save', {'object': 'inbounds', 'action': 'new', 'data': json.dumps(hy2_payload)})
+        print(f"\033[32m[✓] 已成功创建并上线 Hysteria2 节点: tag={hy2_tag}, 端口={hy2_port}, 监听=:: (双栈)\033[0m")
 
-# 4. 重新获取所有 inbound ID 并与 admin 用户关联
+# 3. 重新获取所有最新的 inbound ID
 inb_resp2 = api('GET', 'inbounds') or {}
 all_ib_ids = [ib['id'] for ib in inb_resp2.get('obj', {}).get('inbounds', []) if ib.get('id')]
 
+# 4. 四级优先级精准定位主用户（彻底防止改名后识别不到或新建重名用户）
 cli_resp = api('GET', 'clients') or {}
 clients = cli_resp.get('obj', {}).get('clients', [])
-admin = next((c for c in clients if c.get('name') == admin_name), None)
 
+target_client = None
+# 级别 1: 查找内部数据库 id == 1 的核心账号（用户改名后 ID 仍固定为 1）
+target_client = next((c for c in clients if c.get('id') == 1), None)
+
+# 级别 2: 查找名称匹配 admin_name (默认 admin) 的用户
+if not target_client:
+    target_client = next((c for c in clients if c.get('name') == admin_name), None)
+
+# 级别 3: 若均无，选用当前客户端列表中的首位活跃用户
+if not target_client and len(clients) > 0:
+    target_client = clients[0]
+
+# 确定最终用户名与客户端 ID
+if target_client:
+    user_name = target_client.get('name', admin_name)
+    user_id = target_client.get('id', 1)
+    is_new_user = False
+else:
+    user_name = admin_name
+    user_id = 0
+    is_new_user = True
+
+# 合并入站列表（并集，无损保留已绑定的所有节点）
+existing_ib_ids = set(target_client.get('inbounds', [])) if target_client else set()
+merged_inbounds = sorted(list(existing_ib_ids | set(all_ib_ids)))
+
+import uuid
+
+# 补齐或更新全协议凭据
 client_pass = os.urandom(8).hex()
-client_cfg = admin.get('config', {}) if (admin and isinstance(admin.get('config'), dict)) else {}
+client_uuid = str(uuid.uuid4())
+client_cfg = target_client.get('config', {}) if (target_client and isinstance(target_client.get('config'), dict)) else {}
+
+if 'vless' not in client_cfg:
+    client_cfg['vless'] = {'name': user_name, 'uuid': client_uuid, 'flow': 'xtls-rprx-vision'}
+else:
+    if isinstance(client_cfg['vless'], dict):
+        client_cfg['vless']['name'] = user_name
+        if len(str(client_cfg['vless'].get('uuid', ''))) != 36:
+            client_cfg['vless']['uuid'] = client_uuid
+
+if 'vmess' not in client_cfg:
+    client_cfg['vmess'] = {'name': user_name, 'uuid': client_uuid}
+else:
+    if isinstance(client_cfg['vmess'], dict):
+        client_cfg['vmess']['name'] = user_name
+        if len(str(client_cfg['vmess'].get('uuid', ''))) != 36:
+            client_cfg['vmess']['uuid'] = client_uuid
+
 if 'tuic' not in client_cfg:
-    client_cfg['tuic'] = {'name': admin_name, 'uuid': str(random.choice(range(1000000))), 'password': client_pass}
+    client_cfg['tuic'] = {'name': user_name, 'uuid': str(uuid.uuid4()), 'password': client_pass}
+else:
+    if isinstance(client_cfg['tuic'], dict):
+        client_cfg['tuic']['name'] = user_name
+        if len(str(client_cfg['tuic'].get('uuid', ''))) != 36:
+            client_cfg['tuic']['uuid'] = str(uuid.uuid4())
+
 if 'hysteria2' not in client_cfg:
-    client_cfg['hysteria2'] = {'name': admin_name, 'password': client_pass}
+    client_cfg['hysteria2'] = {'name': user_name, 'password': client_pass}
+else:
+    if isinstance(client_cfg['hysteria2'], dict):
+        client_cfg['hysteria2']['name'] = user_name
 
 client_payload = {
-    'id': admin.get('id', 0) if admin else 0,
+    'id': user_id,
     'enable': True,
-    'name': admin_name,
-    'remark': '默认用户',
+    'name': user_name,
+    'remark': target_client.get('remark', '默认用户') if target_client else '默认用户',
     'config': client_cfg,
-    'inbounds': all_ib_ids,
-    'links': admin.get('links', []) if admin else [],
-    'volume': admin.get('volume', 0) if admin else 0,
-    'expiry': admin.get('expiry', 0) if admin else 0,
-    'down': admin.get('down', 0) if admin else 0,
-    'up': admin.get('up', 0) if admin else 0,
-    'desc': admin.get('desc', '') if admin else '',
-    'group': admin.get('group', '') if admin else '',
-    'delayStart': False,
-    'autoReset': False,
-    'resetDays': 0,
-    'nextReset': 0,
-    'totalUp': admin.get('totalUp', 0) if admin else 0,
-    'totalDown': admin.get('totalDown', 0) if admin else 0,
-    'createdAt': admin.get('createdAt', 0) if admin else 0,
-    'onlineAt': 0
+    'inbounds': merged_inbounds,
+    'links': target_client.get('links', []) if target_client else [],
+    'volume': target_client.get('volume', 0) if target_client else 0,
+    'expiry': target_client.get('expiry', 0) if target_client else 0,
+    'down': target_client.get('down', 0) if target_client else 0,
+    'up': target_client.get('up', 0) if target_client else 0,
+    'desc': target_client.get('desc', '') if target_client else '',
+    'group': target_client.get('group', '') if target_client else '',
+    'delayStart': target_client.get('delayStart', False) if target_client else False,
+    'autoReset': target_client.get('autoReset', False) if target_client else False,
+    'resetDays': target_client.get('resetDays', 0) if target_client else 0,
+    'nextReset': target_client.get('nextReset', 0) if target_client else 0,
+    'totalUp': target_client.get('totalUp', 0) if target_client else 0,
+    'totalDown': target_client.get('totalDown', 0) if target_client else 0,
+    'createdAt': target_client.get('createdAt', 0) if target_client else 0,
+    'onlineAt': target_client.get('onlineAt', 0) if target_client else 0
 }
-api('POST', 'save', {'object': 'clients', 'action': 'edit' if admin else 'new', 'data': json.dumps(client_payload)})
-print(f"\033[32m[✓] 用户 [{admin_name}] 已成功绑定全部入站节点。\033[0m")
+save_cli_res = api('POST', 'save', {'object': 'clients', 'action': 'new' if is_new_user else 'edit', 'data': json.dumps(client_payload)})
+if not save_cli_res.get('success'):
+    print(f"\033[31m[!] 关联用户失败: {save_cli_res.get('msg')}\033[0m")
+else:
+    print(f"\033[32m[✓] 主用户 [{user_name}] (ID: {user_id or 1}) 已成功关联绑定全部入站节点。\033[0m")
 PYEOF
 }
 
