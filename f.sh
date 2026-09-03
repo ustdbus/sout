@@ -1515,8 +1515,11 @@ setup_caddy_proxy() {
       if [[ -s "$cert_file" && -s "$key_file" ]]; then
         cert_ready="true"
       fi
+    else
+      echo -e "  ${Y}[!] 证书申请未成功或 API Key 无效，自动跳过证书申请，降级启用常规节点 (vmess-argo 与 vless-reality)${N}"
     fi
   elif [[ -n "$domain" && -s "$cert_file" && -s "$key_file" ]]; then
+    echo -e "  ${G}[✓] 本地已存在域名 [${domain}] 的完整证书，直接复用。${N}"
     cert_ready="true"
   fi
 
@@ -2363,9 +2366,18 @@ caddy_interactive_setup() {
   read -rp "  3. 请输入本地回源端口 [默认 8081]: " tunnel_port
   tunnel_port=$(echo "$tunnel_port" | tr -d ' 
 ')
-  tunnel_port="${tunnel_port:-8081}"
+  echo
+  echo -e "  [Cloudflare SSL 证书与高阶节点设置 (TUIC / Hysteria2)]"
+  echo -e "  ${D}💡 提示: 若需申请证书并启用 TUIC / Hysteria2 节点，请提供 Cloudflare API 令牌 (编辑区域 DNS 权限)${N}"
+  echo -e "  ${D}👉 直接按回车将跳过证书申请，自动启用常规节点 (vmess-argo 与 vless-reality)${N}"
+  local cf_dns_key="" apply_cert="n"
+  read -rp "  4. 请输入 Cloudflare API 令牌 (直接回车跳过): " cf_dns_key
+  cf_dns_key=$(echo "$cf_dns_key" | tr -d ' \r\n')
+  if [[ -n "$cf_dns_key" ]]; then
+    apply_cert="y"
+  fi
 
-  setup_caddy_proxy "$domain" "$tunnel_token" "$tunnel_port"
+  setup_caddy_proxy "$domain" "$tunnel_token" "$tunnel_port" "$apply_cert" "$cf_dns_key"
 }
 
 reload_caddy_proxy() {

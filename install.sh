@@ -238,34 +238,22 @@ ask_tunnel_setup() {
       echo "  [✓] 隧道参数已保存！"
       echo
       echo "  [Cloudflare SSL 证书与高阶节点设置 (TUIC / Hysteria2)]"
-      local cert_choice=""
+      echo "  💡 提示: 若需申请证书并启用 TUIC / Hysteria2 节点，请提供 Cloudflare API 令牌 (编辑区域 DNS 权限)"
+      echo "  👉 直接按回车将跳过证书申请，自动启用常规节点 (vmess-argo 与 vless-reality)"
       if [[ -t 0 ]]; then
-        read -rp "  是否申请 Cloudflare SSL 证书并开启 TUIC / Hysteria2 节点？[y/N]: " cert_choice
+        read -rp "  请输入 Cloudflare API 令牌 (直接回车跳过): " CF_DNS_KEY
       else
         if [[ -c /dev/tty ]]; then
-          read -rp "  是否申请 Cloudflare SSL 证书并开启 TUIC / Hysteria2 节点？[y/N]: " cert_choice < /dev/tty || cert_choice="n"
+          read -rp "  请输入 Cloudflare API 令牌 (直接回车跳过): " CF_DNS_KEY < /dev/tty || CF_DNS_KEY=""
         fi
       fi
-      if [[ "${cert_choice,,}" == "y" || "${cert_choice,,}" == "yes" ]]; then
+      CF_DNS_KEY=$(echo "$CF_DNS_KEY" | tr -d ' \r\n')
+      if [[ -n "$CF_DNS_KEY" ]]; then
         APPLY_CERT="y"
-        if [[ -t 0 ]]; then
-          read -rp "  请输入 Cloudflare API 令牌 (包含「区域.DNS/编辑」权限): " CF_DNS_KEY
-        else
-          if [[ -c /dev/tty ]]; then
-            read -rp "  请输入 Cloudflare API 令牌 (包含「区域.DNS/编辑」权限): " CF_DNS_KEY < /dev/tty || CF_DNS_KEY=""
-          fi
-        fi
-        CF_DNS_KEY=$(echo "$CF_DNS_KEY" | tr -d ' \r\n')
-        if [[ -n "$CF_DNS_KEY" ]]; then
-          echo "  [✓] Cloudflare DNS API Key 已记录，将在部署后通过 Caddy 自动签发证书并开启 TUIC / Hysteria2 节点！"
-        else
-          echo "  [!] API Key 为空，将不申请证书（将为您创建 vmess-argo 与 vless-reality 节点）。"
-          APPLY_CERT="n"
-        fi
+        echo "  [✓] Cloudflare DNS API 令牌已记录，将在部署后自动尝试申请证书并配置 TUIC / Hysteria2 (若申请失败将自动降级为常规节点)！"
       else
         APPLY_CERT="n"
-        CF_DNS_KEY=""
-        echo "  [✓] 选择不申请证书，将在部署后为您创建 vmess-argo 与 vless-reality 节点。"
+        echo "  [✓] 已跳过证书申请，将在部署后为您创建 vmess-argo 与 vless-reality 节点。"
       fi
     fi
   fi
