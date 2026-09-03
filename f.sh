@@ -1433,9 +1433,9 @@ EOF
 
   # 清空旧日志，避免 get_quick_tunnel_domain 读到上一次临时隧道的旧域名
   : > /var/log/cloudflared.log 2>/dev/null || true
-  systemctl daemon-reload
-  systemctl enable cloudflared >/dev/null 2>&1 || true
-  systemctl restart cloudflared
+  systemctl daemon-reload 2>/dev/null || true
+  systemctl enable cloudflared >/dev/null 2>&1 || rc-update add cloudflared default >/dev/null 2>&1 || true
+  systemctl restart cloudflared 2>/dev/null || rc-service cloudflared restart 2>/dev/null || service cloudflared restart 2>/dev/null || true
 }
 
 get_quick_tunnel_domain() {
@@ -1601,7 +1601,7 @@ ${tls_block}
 EOF
 
   echo -e "  [+] 正在启动本地 Caddy 分流服务与 Cloudflare 隧道..."
-  systemctl restart caddy
+  systemctl restart caddy 2>/dev/null || rc-service caddy restart 2>/dev/null || service caddy restart 2>/dev/null || true
   setup_cloudflared_service "$tunnel_token" "$tunnel_port"
 
   if [[ "$is_quick" == "true" ]]; then
@@ -2801,9 +2801,18 @@ with open(p, 'w') as f:
     json.dump(d, f, indent=2)
 " 2>/dev/null || true
 
-  # 6. 重启 Caddy 服务
-  if systemctl restart caddy 2>/dev/null; then
+  # 6. 重启 Caddy 服务 (兼容 systemd 与 OpenRC/Alpine)
+  local caddy_restart_ok=false
+  if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+    systemctl restart caddy 2>/dev/null && caddy_restart_ok=true
     systemctl enable caddy 2>/dev/null || true
+  elif command -v rc-service >/dev/null 2>&1; then
+    rc-service caddy restart 2>/dev/null && caddy_restart_ok=true
+  elif command -v service >/dev/null 2>&1; then
+    service caddy restart 2>/dev/null && caddy_restart_ok=true
+  fi
+
+  if [[ "$caddy_restart_ok" == "true" ]]; then
     echo -e "  ${G}[✓] Caddy 反代服务已重新加载最新分流配置并成功启动！${N}"
     echo
     echo -e "${B}========================================${N}"
