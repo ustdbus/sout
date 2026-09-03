@@ -2597,6 +2597,7 @@ PYEOF
   cat > /etc/caddy/Caddyfile <<EOF
 {
     admin off
+    auto_https disable_redirects
 }
 
 http://127.0.0.1:${tunnel_port}, http://:${tunnel_port} {
@@ -2634,7 +2635,7 @@ http://127.0.0.1:${tunnel_port}, http://:${tunnel_port} {
 }
 EOF
 
-  # 附加所有已申请的 Cloudflare SSL 域名 (由 Caddy 全自动管理续期)
+  # 附加所有已申请的 Cloudflare SSL 域名 (由 Caddy 在独立 8443 端口自动续期，绝不抢占 80/443 与隧道反代产生冲突)
   if [[ -f "${WORK_DIR}/cf_ssl_domains.json" ]]; then
     python3 -c '
 import json, os
@@ -2646,7 +2647,7 @@ try:
         for dom, info in d.items():
             tok = info.get("token", "")
             if dom and tok:
-                block = f"\n{dom} {{\n    tls {{\n        dns cloudflare \"{tok}\"\n    }}\n    respond \"SSL Ready\" 200\n}}\n"
+                block = f"\n{dom}:8443 {{\n    tls {{\n        dns cloudflare \"{tok}\"\n    }}\n    respond \"SSL Ready\" 200\n}}\n"
                 cf.write(block)
 except Exception:
     pass
@@ -2688,6 +2689,27 @@ with open(p, 'w') as f:
 
   if [[ "$caddy_restart_ok" == "true" ]]; then
     echo -e "  ${G}[✓] Caddy 反代服务已重新加载最新分流配置并成功启动！${N}"
+    echo
+    echo -e "${B}========================================${N}"
+    echo -e "${B}  最新 Caddy 流量反代与分流详情${N}"
+    echo -e "${B}========================================${N}"
+    echo -e "  Caddy 正在监听:    ${Y}127.0.0.1:${tunnel_port}${N}"
+    echo
+    echo -e "  ${G}• Caddy 将 /${sout_p}/ 路径流量转发至:   127.0.0.1:${sout_port} (sout 管理面板)${N}"
+    echo -e "    外网访问: https://${domain}/${sout_p}/"
+    echo
+    echo -e "  ${G}• Caddy 将 /${sui_p}/ 路径流量转发至:    127.0.0.1:${sui_port} (s-ui 面板)${N}"
+    echo -e "    外网访问: https://${domain}/${sui_p}/"
+    echo
+    echo -e "  ${G}• Caddy 将 /${sout_p}/sub 路径流量转发至: 127.0.0.1:${sout_port} (订阅接口)${N}"
+    echo -e "    订阅链接: https://${domain}/${sout_p}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")"
+    if [[ -n "$ws_p" ]]; then
+      echo
+      echo -e "  ${G}• Caddy 将 /${ws_p}/ 路径流量转发至:     127.0.0.1:${node_port} (节点流量)${N}"
+    fi
+    echo
+    echo -e "  ${G}• Caddy 将 / 根路径流量响应:            200 OK (伪装服务就绪)${N}"
+    echo -e "${B}========================================${N}"
   else
     echo -e "  ${R}[×] Caddy 重启失败，请检查 Caddyfile 或端口占用${N}"
   fi
@@ -2753,9 +2775,10 @@ except Exception:
     cat > /etc/caddy/Caddyfile <<EOF
 {
     admin off
+    auto_https disable_redirects
 }
 
-${domain} {
+${domain}:8443 {
     tls {
         dns cloudflare "${cf_token}"
     }
