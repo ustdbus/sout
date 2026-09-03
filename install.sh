@@ -614,6 +614,11 @@ if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$
   c_sui_u=$(grep -oE '"sui_user"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   c_sui_w=$(grep -oE '"sui_pass"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   c_sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+  if [[ -x /usr/local/bin/sout ]]; then
+    systemctl restart cloudflared 2>/dev/null || rc-service cloudflared restart 2>/dev/null || service cloudflared restart 2>/dev/null || true
+    systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || service s-ui restart 2>/dev/null || true
+    /usr/local/bin/sout reload_caddy >/dev/null 2>&1 || true
+  fi
   echo
   echo "================================================================"
   echo "  🎉 sout 插件安装部署完成！(Cloudflare隧道连接和Caddy流量代理)"

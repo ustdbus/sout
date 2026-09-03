@@ -19,7 +19,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v2.8.5"
+var version = "v2.8.6"
 
 func main() {
 	var (

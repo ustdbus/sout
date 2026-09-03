@@ -1281,8 +1281,24 @@ sys.exit(0 if latest > cur else 1)
 
   echo "$tag_name" > "${WORK_DIR}/version" 2>/dev/null || true
 
+  echo
+  echo -e "  ${B}[+] 正在重启服务并加载最新版本配置...${N}"
+  # 1. 重启 sout 服务
   svc_restart
-  echo -e "  ${G}恭喜！sout 已成功更新至 ${tag_name}，服务已自动重启生效。${N}"
+
+  # 2. 重启 s-ui 面板服务
+  systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || service s-ui restart 2>/dev/null || true
+
+  # 3. 若开启了 Cloudflare 隧道和 Caddy 代理，联动重启隧道并执行 Caddy 重新探测分流
+  if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$CADDY_META" 2>/dev/null; then
+    echo -e "  ${B}[+] 检测到已开启 Cloudflare 隧道反代，正在自动重启隧道服务...${N}"
+    systemctl restart cloudflared 2>/dev/null || rc-service cloudflared restart 2>/dev/null || service cloudflared restart 2>/dev/null || true
+    echo -e "  ${B}[+] 正在自动执行 Caddy 重新探测并分流...${N}"
+    reload_caddy_proxy
+  fi
+
+  echo
+  echo -e "  ${G}🎉 恭喜！sout 已成功更新至 ${tag_name}，所有关联服务已自动重启生效。${N}"
 }
 
 #!/usr/bin/env bash
