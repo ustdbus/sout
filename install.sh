@@ -570,7 +570,6 @@ fi
 
 echo "[4/6] 准备网络运行环境并优化内核套接字/UDP缓冲区..."
 apply_sysctl_optimization
-local detected_cc
 detected_cc=$(get_tcp_congestion)
 echo "      当前系统生效的 TCP 拥塞控制算法: ${detected_cc}"
 

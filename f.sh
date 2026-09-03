@@ -1791,29 +1791,60 @@ if has_cert:
     hy2_tag, hy2_id = get_or_create_tag_and_id('hysteria2')
     cc = os.environ.get('CONGESTION_CONTROL', 'bbr')
 
+    # 先检查/创建匹配域名的 tls 对象
+    all_tls_resp = api('GET', 'tls') or {}
+    all_tls_obj = all_tls_resp.get('obj') or {}
+    all_tls = all_tls_obj.get('tls', []) if isinstance(all_tls_obj, dict) else (all_tls_obj or [])
+    cert_tid = None
+    for t in all_tls:
+        srv = t.get('server', {})
+        if srv.get('server_name') == domain or t.get('name') == f"tls-{domain}":
+            cert_tid = t.get('id')
+            break
+
+    if not cert_tid:
+        tls_payload = {
+            'id': 0,
+            'name': f"tls-{domain}",
+            'server': {
+                'enabled': True,
+                'certificate_path': cert_file,
+                'key_path': key_file,
+                'server_name': domain
+            },
+            'client': {
+                'utls': {
+                    'enabled': True,
+                    'fingerprint': 'chrome'
+                }
+            }
+        }
+        api('POST', 'save', {
+            'object': 'tls',
+            'action': 'new',
+            'data': json.dumps(tls_payload)
+        })
+        all_tls_resp = api('GET', 'tls') or {}
+        all_tls_obj = all_tls_resp.get('obj') or {}
+        all_tls = all_tls_obj.get('tls', []) if isinstance(all_tls_obj, dict) else (all_tls_obj or [])
+        for t in all_tls:
+            srv = t.get('server', {})
+            if srv.get('server_name') == domain or t.get('name') == f"tls-{domain}":
+                cert_tid = t.get('id')
+                break
+
     tuic_port = int(os.environ['TUIC_PORT'])
     tuic_payload = {
         'id': tuic_id or 0,
         'type': 'tuic',
         'tag': tuic_tag,
-        'tls_id': 0,
+        'tls_id': cert_tid or 0,
         'listen': '0.0.0.0',
         'listen_port': tuic_port,
         'congestion_control': cc,
-        'tls': {
-            'enabled': True,
-            'server_name': domain,
-            'certificate_path': cert_file,
-            'key_path': key_file
-        },
         'addrs': [{
             'server': domain,
-            'server_port': tuic_port,
-            'tls': {
-                'enabled': True,
-                'server_name': domain,
-                'insecure': False
-            }
+            'server_port': tuic_port
         }]
     }
     api('POST', 'save', {
@@ -1828,24 +1859,13 @@ if has_cert:
         'id': hy2_id or 0,
         'type': 'hysteria2',
         'tag': hy2_tag,
-        'tls_id': 0,
+        'tls_id': cert_tid or 0,
         'listen': '0.0.0.0',
         'listen_port': hy2_port,
         'ignore_client_bandwidth': True,
-        'tls': {
-            'enabled': True,
-            'server_name': domain,
-            'certificate_path': cert_file,
-            'key_path': key_file
-        },
         'addrs': [{
             'server': domain,
-            'server_port': hy2_port,
-            'tls': {
-                'enabled': True,
-                'server_name': domain,
-                'insecure': False
-            }
+            'server_port': hy2_port
         }]
     }
     api('POST', 'save', {
@@ -1893,48 +1913,72 @@ else:
     })
     created_inbound_tags.append(vmess_tag)
 
-    reality_port = int(os.environ['REALITY_PORT'])
+    # 先检查/创建 reality tls 对象
+    all_tls_resp = api('GET', 'tls') or {}
+    all_tls_obj = all_tls_resp.get('obj') or {}
+    all_tls = all_tls_obj.get('tls', []) if isinstance(all_tls_obj, dict) else (all_tls_obj or [])
+    reality_tid = None
+    for t in all_tls:
+        if t.get('name') == 'reality' or 'reality' in t.get('server', {}):
+            reality_tid = t.get('id')
+            break
+
     priv_k, pub_k = gen_x25519_keypair()
     sid = os.urandom(4).hex()
+    if not reality_tid:
+        reality_tls_payload = {
+            'id': 0,
+            'name': 'reality',
+            'server': {
+                'enabled': True,
+                'server_name': 'apple.com',
+                'reality': {
+                    'enabled': True,
+                    'handshake': {
+                        'server_port': 443,
+                        'server': 'apple.com'
+                    },
+                    'short_id': [sid],
+                    'private_key': priv_k
+                }
+            },
+            'client': {
+                'reality': {
+                    'public_key': pub_k,
+                    'short_id': sid
+                },
+                'utls': {
+                    'enabled': True,
+                    'fingerprint': 'chrome'
+                }
+            }
+        }
+        api('POST', 'save', {
+            'object': 'tls',
+            'action': 'new',
+            'data': json.dumps(reality_tls_payload)
+        })
+        all_tls_resp = api('GET', 'tls') or {}
+        all_tls_obj = all_tls_resp.get('obj') or {}
+        all_tls = all_tls_obj.get('tls', []) if isinstance(all_tls_obj, dict) else (all_tls_obj or [])
+        for t in all_tls:
+            if t.get('name') == 'reality' or 'reality' in t.get('server', {}):
+                reality_tid = t.get('id')
+                break
+
+    reality_port = int(os.environ['REALITY_PORT'])
     pub_host = os.environ.get('PUBLIC_IP') or domain
 
     reality_payload = {
         'id': reality_id or 0,
         'type': 'vless',
         'tag': reality_tag,
-        'tls_id': 0,
+        'tls_id': reality_tid or 0,
         'listen': '0.0.0.0',
         'listen_port': reality_port,
-        'tls': {
-            'enabled': True,
-            'server_name': 'apple.com',
-            'reality': {
-                'enabled': True,
-                'handshake': {
-                    'server': 'apple.com',
-                    'server_port': 443
-                },
-                'private_key': priv_k,
-                'short_id': [sid],
-                'max_time_difference': '1m'
-            }
-        },
         'addrs': [{
             'server': pub_host,
-            'server_port': reality_port,
-            'tls': {
-                'enabled': True,
-                'server_name': 'apple.com',
-                'utls': {
-                    'enabled': True,
-                    'fingerprint': 'chrome'
-                },
-                'reality': {
-                    'enabled': True,
-                    'public_key': pub_k,
-                    'short_id': sid
-                }
-            }
+            'server_port': reality_port
         }]
     }
     api('POST', 'save', {
