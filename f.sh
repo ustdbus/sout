@@ -2288,14 +2288,17 @@ caddy_interactive_setup() {
   tunnel_port=$(echo "$tunnel_port" | tr -d ' 
 ')
   echo
-  echo -e "  [Cloudflare SSL 证书与高阶节点设置 (TUIC / Hysteria2)]"
-  echo -e "  ${D}💡 提示: 若需申请证书并启用 TUIC / Hysteria2 节点，请提供 Cloudflare API 令牌 (编辑区域 DNS 权限)${N}"
-  echo -e "  ${D}👉 直接按回车将跳过证书申请，自动启用常规节点 (vmess-argo 与 vless-reality)${N}"
+  echo -e "  [Cloudflare SSL 证书 (Caddy DNS-01)]"
+  echo -e "  ${D}• 令牌需含「区域.DNS / 编辑」权限，用于自动签发证书并开启 TUIC / Hysteria2 节点${N}"
+  echo -e "  ${D}• 直接按回车将跳过申请，自动配置常规节点 (vmess-argo / vless-reality)${N}"
   local cf_dns_key="" apply_cert="n"
   read -rp "  4. 请输入 Cloudflare API 令牌 (直接回车跳过): " cf_dns_key
   cf_dns_key=$(echo "$cf_dns_key" | tr -d ' \r\n')
   if [[ -n "$cf_dns_key" ]]; then
     apply_cert="y"
+    echo -e "  ${G}[✓] Cloudflare 令牌已记录，部署时将通过 DNS-01 验证自动签发证书。${N}"
+  else
+    echo -e "  ${G}[✓] 已跳过证书申请，将自动配置常规节点 (vmess-argo 与 vless-reality)。${N}"
   fi
 
   setup_caddy_proxy "$domain" "$tunnel_token" "$tunnel_port" "$apply_cert" "$cf_dns_key"

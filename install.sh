@@ -191,13 +191,13 @@ CF_DNS_KEY=""
 ask_tunnel_setup() {
   echo
   echo "================================================================"
-  echo "  💡 提示：NAT 机推荐开启 Cloudflare 隧道进行代理，正常 VPS 可不启用，需在 Cloudflare 中配置回源。"
-  echo "  👉 提示：若不填写域名与 Token（直接按回车），将自动为您开启 Cloudflare 官方免费临时隧道（免域名 / 免Token / 即开即用）"
-  echo "  📌 提示：如要使用固定隧道，请提前准备好："
-  echo "       1) 已在 Cloudflare 中添加的访问域名"
+  echo "  💡 提示：NAT 机推荐开启 Cloudflare 隧道代理，正常 VPS 可不启用。"
+  echo "  👉 提示：直接回车将自动开启 Cloudflare 官方免费临时隧道 (即开即用)。"
+  echo "  📌 提示：如使用固定隧道，请提前准备好："
+  echo "       1) 已在 Cloudflare 托管的访问域名"
   echo "       2) Cloudflare 隧道 Token"
-  echo "       3) 在 Cloudflare 中为该隧道配置的端口/回源端口"
-  echo "       4) 如需申请证书并使用 tuic/hy2 节点，请提前准备好该隧道域名相关的 Cloudflare 编辑区域 DNS 的 API Key"
+  echo "       3) 本地回源端口 [默认 8081]"
+  echo "       4) (可选) Cloudflare API 令牌 [需含 区域.DNS:编辑 权限，用于签发证书]"
   echo "================================================================"
   local prompt_choice=""
   if [[ -t 0 ]]; then
@@ -237,23 +237,23 @@ ask_tunnel_setup() {
     else
       echo "  [✓] 隧道参数已保存！"
       echo
-      echo "  [Cloudflare SSL 证书与高阶节点设置 (TUIC / Hysteria2)]"
-      echo "  💡 提示: 若需申请证书并启用 TUIC / Hysteria2 节点，请提供 Cloudflare API 令牌 (编辑区域 DNS 权限)"
-      echo "  👉 直接按回车将跳过证书申请，自动启用常规节点 (vmess-argo 与 vless-reality)"
+      echo "  [Cloudflare SSL 证书 (Caddy DNS-01)]"
+      echo "  • 令牌需含「区域.DNS / 编辑」权限，用于自动签发证书并开启 TUIC / Hysteria2 节点"
+      echo "  • 直接按回车将跳过申请，自动配置常规节点 (vmess-argo / vless-reality)"
       if [[ -t 0 ]]; then
-        read -rp "  请输入 Cloudflare API 令牌 (直接回车跳过): " CF_DNS_KEY
+        read -rp "  4. 请输入 Cloudflare API 令牌 (直接回车跳过): " CF_DNS_KEY
       else
         if [[ -c /dev/tty ]]; then
-          read -rp "  请输入 Cloudflare API 令牌 (直接回车跳过): " CF_DNS_KEY < /dev/tty || CF_DNS_KEY=""
+          read -rp "  4. 请输入 Cloudflare API 令牌 (直接回车跳过): " CF_DNS_KEY < /dev/tty || CF_DNS_KEY=""
         fi
       fi
       CF_DNS_KEY=$(echo "$CF_DNS_KEY" | tr -d ' \r\n')
       if [[ -n "$CF_DNS_KEY" ]]; then
         APPLY_CERT="y"
-        echo "  [✓] Cloudflare DNS API 令牌已记录，将在部署后自动尝试申请证书并配置 TUIC / Hysteria2 (若申请失败将自动降级为常规节点)！"
+        echo "  [✓] Cloudflare 令牌已记录，部署时将通过 DNS-01 验证自动签发证书。"
       else
         APPLY_CERT="n"
-        echo "  [✓] 已跳过证书申请，将在部署后为您创建 vmess-argo 与 vless-reality 节点。"
+        echo "  [✓] 已跳过证书申请，将自动配置常规节点 (vmess-argo 与 vless-reality)。"
       fi
     fi
   fi
