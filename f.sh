@@ -3204,6 +3204,397 @@ cf_ssl_menu() {
   done
 }
 
+create_tuic_hy2_nodes() {
+  echo
+  echo -e "${B}========================================${N}"
+  echo -e "${B}     创建 TUIC / Hysteria2 节点${N}"
+  echo -e "${B}========================================${N}"
+
+  local sui_db="/usr/local/s-ui/db/s-ui.db"
+  if [[ ! -f "$sui_db" ]]; then
+    echo -e "  ${R}[!] 未检测到 s-ui 面板，请先安装并配置 s-ui。${N}"
+    return 1
+  fi
+
+  local sui_token
+  sui_token=$(cat "${WORK_DIR}/sui-token" 2>/dev/null || true)
+  if [[ -z "$sui_token" ]]; then
+    sui_token=$(sqlite3 "$sui_db" "SELECT token FROM tokens WHERE (desc='sout' OR desc='fanout') AND (expiry=0 OR expiry > strftime('%s','now')) LIMIT 1;" 2>/dev/null || true)
+  fi
+  if [[ -z "$sui_token" ]]; then
+    echo -e "  ${R}[!] 未能获取到 s-ui API Token，请先在终端运行一次 sout 生成凭据。${N}"
+    return 1
+  fi
+
+  local cur_port cur_path
+  cur_port=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPort'" 2>/dev/null || echo "8443")
+  cur_path=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPath'" 2>/dev/null || echo "/app/")
+  cur_path="/${cur_path#/}"
+  [[ "$cur_path" != */ ]] && cur_path="${cur_path}/"
+  local sui_api="http://127.0.0.1:${cur_port}${cur_path}apiv2"
+
+  echo -e "  请选择用于 TUIC / Hysteria2 的 TLS 证书来源："
+  echo -e "   1) 使用本地证书 (推荐 - 自动扫描 /home/acme/ 目录)"
+  echo -e "   2) 使用自定义路径证书 (手动指定域名与公私钥路径)"
+  echo -e "   3) 使用自签证书 (自动生成 10 年期自签证书，启用客户端允许不安全连接)"
+  echo -e "   0) 返回上级菜单"
+  echo -e "${D}----------------------------------------${N}"
+  read -rp "  请选择 [0-3] (默认 1): " cert_opt
+  cert_opt=$(echo "$cert_opt" | tr -d ' \r\n')
+  [[ -z "$cert_opt" ]] && cert_opt="1"
+  [[ "$cert_opt" == "0" ]] && return 0
+
+  local cert_file="" key_file="" cert_domain="" is_insecure="false"
+
+  if [[ "$cert_opt" == "1" ]]; then
+    local acme_dir="/home/acme"
+    if [[ ! -d "$acme_dir" ]]; then
+      echo -e "  ${R}[!] 本地证书目录 ${acme_dir} 不存在，暂无可用证书。${N}"
+      echo -e "  ${Y}提示: 请先在主菜单中申请 Cloudflare 证书，或选择模式 3 生成自签证书。${N}"
+      return 1
+    fi
+
+    local valid_domains=()
+    local d
+    for d in "$acme_dir"/*; do
+      if [[ -d "$d" ]]; then
+        local dom_name
+        dom_name=$(basename "$d")
+        local pub_cand="" priv_cand=""
+        if [[ -s "${d}/fullchain.pem" ]]; then pub_cand="${d}/fullchain.pem"
+        elif [[ -s "${d}/cert.crt" ]]; then pub_cand="${d}/cert.crt"
+        elif [[ -s "${d}/${dom_name}.cer" ]]; then pub_cand="${d}/${dom_name}.cer"
+        fi
+
+        if [[ -s "${d}/privkey.pem" ]]; then priv_cand="${d}/privkey.pem"
+        elif [[ -s "${d}/private.key" ]]; then priv_cand="${d}/private.key"
+        elif [[ -s "${d}/${dom_name}.key" ]]; then priv_cand="${d}/${dom_name}.key"
+        fi
+
+        if [[ -n "$pub_cand" && -n "$priv_cand" ]]; then
+          valid_domains+=("${dom_name}|${pub_cand}|${priv_cand}")
+        fi
+      fi
+    done
+
+    local count=${#valid_domains[@]}
+    if [[ "$count" -eq 0 ]]; then
+      echo -e "  ${R}[!] 在 ${acme_dir} 下未发现有效证书 (需同时包含有效公钥与私钥)。${N}"
+      echo -e "  ${Y}提示: 请先在主菜单中申请证书，或选择模式 3 生成自签证书。${N}"
+      return 1
+    elif [[ "$count" -eq 1 ]]; then
+      IFS='|' read -r cert_domain cert_file key_file <<< "${valid_domains[0]}"
+      echo -e "  ${G}[✓] 自动应用本地唯一有效证书: ${B}${cert_domain}${N}"
+    else
+      echo
+      echo -e "  ${G}检测到本地存在多个有效证书，请选择要应用的域名：${N}"
+      local idx=1
+      for item in "${valid_domains[@]}"; do
+        IFS='|' read -r d_name _ _ <<< "$item"
+        echo -e "   ${idx}) ${B}${d_name}${N}"
+        idx=$((idx + 1))
+      done
+      echo -e "   0) 取消"
+      read -rp "  请选择 [1-${count}]: " sel
+      sel=$(echo "$sel" | tr -d ' \r\n')
+      if [[ "$sel" =~ ^[1-9][0-9]*$ ]] && [[ "$sel" -le "$count" ]]; then
+        IFS='|' read -r cert_domain cert_file key_file <<< "${valid_domains[$((sel - 1))]}"
+        echo -e "  ${G}[✓] 已选择域名: ${B}${cert_domain}${N}"
+      else
+        echo -e "  ${Y}输入无效，已取消操作。${N}"
+        return 1
+      fi
+    fi
+
+  elif [[ "$cert_opt" == "2" ]]; then
+    read -rp "  请输入证书对应域名 (如 example.com): " cert_domain
+    cert_domain=$(echo "$cert_domain" | tr -d ' \r\n' | sed -e 's|^https\?://||' -e 's|/.*||')
+    if [[ -z "$cert_domain" ]]; then
+      echo -e "  ${R}[!] 域名不能为空！${N}"
+      return 1
+    fi
+    read -rp "  请输入公钥证书文件绝对路径 (如 /etc/ssl/fullchain.pem): " cert_file
+    cert_file=$(echo "$cert_file" | tr -d ' \r\n')
+    if [[ ! -s "$cert_file" ]]; then
+      echo -e "  ${R}[!] 公钥文件不存在或为空: ${cert_file}${N}"
+      return 1
+    fi
+    read -rp "  请输入私钥文件绝对路径 (如 /etc/ssl/privkey.pem): " key_file
+    key_file=$(echo "$key_file" | tr -d ' \r\n')
+    if [[ ! -s "$key_file" ]]; then
+      echo -e "  ${R}[!] 私钥文件不存在或为空: ${key_file}${N}"
+      return 1
+    fi
+
+  elif [[ "$cert_opt" == "3" ]]; then
+    read -rp "  请输入自签证书伪装域名 [直接回车默认 apple.com]: " cert_domain
+    cert_domain=$(echo "$cert_domain" | tr -d ' \r\n' | sed -e 's|^https\?://||' -e 's|/.*||')
+    [[ -z "$cert_domain" ]] && cert_domain="apple.com"
+
+    local ssc_dir="/home/ssc/${cert_domain}"
+    mkdir -p "$ssc_dir"
+    cert_file="${ssc_dir}/fullchain.pem"
+    key_file="${ssc_dir}/privkey.pem"
+
+    echo -e "  [+] 正在生成 ${cert_domain} 的 10 年期自签证书..."
+    if ! command -v openssl >/dev/null 2>&1; then
+      echo -e "  [+] 正在自动安装 openssl 证书工具..."
+      apk add --no-cache openssl 2>/dev/null || apt-get update -y && apt-get install -y openssl 2>/dev/null || yum install -y openssl 2>/dev/null || true
+    fi
+
+    if command -v openssl >/dev/null 2>&1; then
+      openssl req -x509 -nodes -days 3650 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+        -keyout "$key_file" -out "$cert_file" -subj "/CN=${cert_domain}" >/dev/null 2>&1 || \
+      openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+        -keyout "$key_file" -out "$cert_file" -subj "/CN=${cert_domain}" >/dev/null 2>&1
+    else
+      echo -e "  ${R}[!] 系统未找到 openssl，无法生成自签证书。${N}"
+      return 1
+    fi
+
+    if [[ ! -s "$cert_file" || ! -s "$key_file" ]]; then
+      echo -e "  ${R}[!] 自签证书生成失败！${N}"
+      return 1
+    fi
+
+    is_insecure="true"
+    echo -e "  ${G}[✓] 自签证书已生成在: ${ssc_dir}${N}"
+    echo -e "  ${Y}💡 注意: 已启用「允许不安全连接 (Insecure)」，客户端连接时将跳过证书信任链校验。${N}"
+  else
+    echo -e "  ${Y}无效选项，已取消。${N}"
+    return 1
+  fi
+
+  # 查询当前是否已存在 TUIC / Hysteria2 节点
+  local existing_nodes
+  existing_nodes=$(python3 -c "
+import urllib.request, urllib.parse, json
+BASE = '${sui_api}'
+TOKEN = '${sui_token}'
+headers = {'Token': TOKEN}
+req = urllib.request.Request(BASE.rstrip('/') + '/inbounds', headers=headers)
+try:
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        d = json.loads(resp.read().decode('utf-8'))
+        inbs = d.get('obj', {}).get('inbounds', [])
+        tuic_n = next((x for x in inbs if x.get('type') == 'tuic'), None)
+        hy2_n = next((x for x in inbs if x.get('type') == 'hysteria2'), None)
+        out = []
+        if tuic_n: out.append(f\"TUIC|{tuic_n.get('tag')}|{tuic_n.get('listen_port')}|{tuic_n.get('tls_id')}\")
+        if hy2_n: out.append(f\"Hysteria2|{hy2_n.get('tag')}|{hy2_n.get('listen_port')}|{hy2_n.get('tls_id')}\")
+        print(';'.join(out))
+except Exception:
+    pass
+" 2>/dev/null || true)
+
+  local only_change_tls="false"
+  if [[ -n "$existing_nodes" ]]; then
+    echo
+    echo -e "  ${Y}⚠️  检测到已存在 TUIC / Hysteria2 节点：${N}"
+    IFS=';' read -ra node_list <<< "$existing_nodes"
+    for n_item in "${node_list[@]}"; do
+      IFS='|' read -r n_type n_tag n_port n_tid <<< "$n_item"
+      echo -e "    • ${n_type} 节点: Tag=${n_tag} 端口=${n_port} 当前TLS_ID=${n_tid}"
+    done
+    echo
+    read -rp "  是否仅仅变更现有节点的证书(TLS)？[y/N]: " do_chg
+    do_chg=$(echo "$do_chg" | tr -d ' \r\n' | tr '[:upper:]' '[:lower:]')
+    if [[ "$do_chg" != "y" && "$do_chg" != "yes" ]]; then
+      echo -e "  ${D}已取消操作，未对现有节点进行修改。${N}"
+      return 0
+    fi
+    only_change_tls="true"
+  fi
+
+  local cur_cc
+  cur_cc=$(get_tcp_congestion)
+  local admin_user
+  admin_user=$(get_sui_user)
+  local public_ip
+  public_ip=$(curl -s4m 5 https://api.ipify.org 2>/dev/null || curl -s4m 5 https://ifconfig.me 2>/dev/null || echo "$cert_domain")
+
+  local tuic_p hy2_p
+  tuic_p=$(rand_local_port)
+  hy2_p=$(rand_local_port)
+
+  # 纯原生 REST API 执行 TLS 注册与节点创建/变更
+  SUI_API="$sui_api" \
+  SUI_TOKEN="$sui_token" \
+  CERT_DOMAIN="$cert_domain" \
+  CERT_FILE="$cert_file" \
+  KEY_FILE="$key_file" \
+  IS_INSECURE="$is_insecure" \
+  ONLY_CHANGE_TLS="$only_change_tls" \
+  SUI_ADMIN_USER="$admin_user" \
+  PUBLIC_IP="$public_ip" \
+  CONGESTION_CONTROL="$cur_cc" \
+  TUIC_PORT="$tuic_p" \
+  HY2_PORT="$hy2_p" \
+  python3 <<'PYEOF'
+import json, os, sys, urllib.request, urllib.parse, re, random, string
+
+BASE = os.environ['SUI_API']
+TOKEN = os.environ['SUI_TOKEN']
+cert_domain = os.environ['CERT_DOMAIN']
+cert_file = os.environ['CERT_FILE']
+key_file = os.environ['KEY_FILE']
+is_insecure = (os.environ.get('IS_INSECURE', 'false').lower() == 'true')
+only_change_tls = (os.environ.get('ONLY_CHANGE_TLS', 'false').lower() == 'true')
+admin_name = os.environ.get('SUI_ADMIN_USER', 'admin')
+pub_ip = os.environ.get('PUBLIC_IP', cert_domain)
+cc = os.environ.get('CONGESTION_CONTROL', 'bbr')
+
+def api(method, endpoint, form=None):
+    url = BASE.rstrip('/') + '/' + endpoint.lstrip('/')
+    data = urllib.parse.urlencode(form).encode() if form else None
+    headers = {'Token': TOKEN}
+    if data is not None: headers['Content-Type'] = 'application/x-www-form-urlencoded'
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read().decode('utf-8'))
+
+# 1. 检查现有 TLS 并递增生成 mytlsX
+tls_resp = api('GET', 'tls') or {}
+tls_list = tls_resp.get('obj', {}).get('tls', [])
+max_num = 0
+for t in tls_list:
+    name = t.get('name', '')
+    m = re.match(r'^mytls(\d+)$', name)
+    if m:
+        max_num = max(max_num, int(m.group(1)))
+new_tls_name = f"mytls{max_num + 1}"
+
+new_tls_payload = {
+    'id': 0,
+    'name': new_tls_name,
+    'server': {
+        'enabled': True,
+        'certificate_path': cert_file,
+        'key_path': key_file,
+        'server_name': cert_domain
+    },
+    'client': {
+        'insecure': is_insecure,
+        'utls': {
+            'enabled': True,
+            'fingerprint': 'chrome'
+        }
+    }
+}
+save_tls_res = api('POST', 'save', {'object': 'tls', 'action': 'new', 'data': json.dumps(new_tls_payload)})
+if not save_tls_res.get('success'):
+    print(f"\033[31m[!] 注册 TLS 对象失败: {save_tls_res.get('msg')}\033[0m")
+    sys.exit(1)
+
+# 查出新 TLS 对象的 id
+tls_resp2 = api('GET', 'tls') or {}
+new_tls_id = None
+for t in tls_resp2.get('obj', {}).get('tls', []):
+    if t.get('name') == new_tls_name:
+        new_tls_id = t.get('id')
+        break
+
+if not new_tls_id:
+    print(f"\033[31m[!] 未能检索到新创建的 TLS ID ({new_tls_name})\033[0m")
+    sys.exit(1)
+
+print(f"\033[32m[✓] 成功注册 TLS 配置: {new_tls_name} (ID: {new_tls_id}, 允许不安全连接: {is_insecure})\033[0m")
+
+# 2. 查询当前入站节点
+inb_resp = api('GET', 'inbounds') or {}
+inbound_rows = inb_resp.get('obj', {}).get('inbounds', [])
+existing_tuic = next((ib for ib in inbound_rows if ib.get('type') == 'tuic'), None)
+existing_hy2 = next((ib for ib in inbound_rows if ib.get('type') == 'hysteria2'), None)
+
+if only_change_tls:
+    # 仅仅变更现有节点的 tls_id
+    if existing_tuic:
+        existing_tuic['tls_id'] = new_tls_id
+        api('POST', 'save', {'object': 'inbounds', 'action': 'edit', 'data': json.dumps(existing_tuic)})
+        print(f"\033[32m[✓] TUIC 节点 [{existing_tuic.get('tag')}] 已成功切换至证书 {new_tls_name} (ID: {new_tls_id})\033[0m")
+    if existing_hy2:
+        existing_hy2['tls_id'] = new_tls_id
+        api('POST', 'save', {'object': 'inbounds', 'action': 'edit', 'data': json.dumps(existing_hy2)})
+        print(f"\033[32m[✓] Hysteria2 节点 [{existing_hy2.get('tag')}] 已成功切换至证书 {new_tls_name} (ID: {new_tls_id})\033[0m")
+    sys.exit(0)
+
+# 3. 若不存在则创建全新节点
+def gen_suffix():
+    return "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
+
+tuic_port = int(os.environ['TUIC_PORT'])
+tuic_tag = f"tuic-{gen_suffix()}"
+tuic_payload = {
+    'id': 0,
+    'type': 'tuic',
+    'tag': tuic_tag,
+    'tls_id': new_tls_id,
+    'listen': '::',
+    'listen_port': tuic_port,
+    'congestion_control': cc,
+    'addrs': [{'server': pub_ip, 'server_port': tuic_port}]
+}
+api('POST', 'save', {'object': 'inbounds', 'action': 'new', 'data': json.dumps(tuic_payload)})
+print(f"\033[32m[✓] 已成功创建 TUIC 节点: tag={tuic_tag}, 端口={tuic_port}, 监听=:: (双栈)\033[0m")
+
+hy2_port = int(os.environ['HY2_PORT'])
+hy2_tag = f"hysteria2-{gen_suffix()}"
+hy2_payload = {
+    'id': 0,
+    'type': 'hysteria2',
+    'tag': hy2_tag,
+    'tls_id': new_tls_id,
+    'listen': '::',
+    'listen_port': hy2_port,
+    'ignore_client_bandwidth': True,
+    'addrs': [{'server': pub_ip, 'server_port': hy2_port}]
+}
+api('POST', 'save', {'object': 'inbounds', 'action': 'new', 'data': json.dumps(hy2_payload)})
+print(f"\033[32m[✓] 已成功创建 Hysteria2 节点: tag={hy2_tag}, 端口={hy2_port}, 监听=:: (双栈)\033[0m")
+
+# 4. 重新获取所有 inbound ID 并与 admin 用户关联
+inb_resp2 = api('GET', 'inbounds') or {}
+all_ib_ids = [ib['id'] for ib in inb_resp2.get('obj', {}).get('inbounds', []) if ib.get('id')]
+
+cli_resp = api('GET', 'clients') or {}
+clients = cli_resp.get('obj', {}).get('clients', [])
+admin = next((c for c in clients if c.get('name') == admin_name), None)
+
+client_pass = os.urandom(8).hex()
+client_cfg = admin.get('config', {}) if (admin and isinstance(admin.get('config'), dict)) else {}
+if 'tuic' not in client_cfg:
+    client_cfg['tuic'] = {'name': admin_name, 'uuid': str(random.choice(range(1000000))), 'password': client_pass}
+if 'hysteria2' not in client_cfg:
+    client_cfg['hysteria2'] = {'name': admin_name, 'password': client_pass}
+
+client_payload = {
+    'id': admin.get('id', 0) if admin else 0,
+    'enable': True,
+    'name': admin_name,
+    'remark': '默认用户',
+    'config': client_cfg,
+    'inbounds': all_ib_ids,
+    'links': admin.get('links', []) if admin else [],
+    'volume': admin.get('volume', 0) if admin else 0,
+    'expiry': admin.get('expiry', 0) if admin else 0,
+    'down': admin.get('down', 0) if admin else 0,
+    'up': admin.get('up', 0) if admin else 0,
+    'desc': admin.get('desc', '') if admin else '',
+    'group': admin.get('group', '') if admin else '',
+    'delayStart': False,
+    'autoReset': False,
+    'resetDays': 0,
+    'nextReset': 0,
+    'totalUp': admin.get('totalUp', 0) if admin else 0,
+    'totalDown': admin.get('totalDown', 0) if admin else 0,
+    'createdAt': admin.get('createdAt', 0) if admin else 0,
+    'onlineAt': 0
+}
+api('POST', 'save', {'object': 'clients', 'action': 'edit' if admin else 'new', 'data': json.dumps(client_payload)})
+print(f"\033[32m[✓] 用户 [{admin_name}] 已成功绑定全部入站节点。\033[0m")
+PYEOF
+}
+
 caddy_menu() {
   while true; do
     echo
@@ -3330,30 +3721,30 @@ menu() {
     echo -e "${B}========================================${N}"
     show_info
     echo -e "${D}----------------------------------------${N}"
-    echo -e "   1) 启动服务          2) 停止服务"
-    echo -e "   3) 重启服务          4) 查看运行日志"
-    echo -e "   5) 重置访问口令      6) 重置访问路径"
-    echo -e "   7) 面板 URL 设置     8) SSL / HTTPS 设置"
-    echo -e "   9) 修改面板监听地址和端口"
-    echo -e "  10) Cloudflare隧道/Caddy配置"
-    echo -e "  11) 申请 Cloudflare SSL 证书"
+    echo -e "   1) 启动/重启服务     2) 停止服务"
+    echo -e "   3) 查看运行日志      4) 重置访问口令"
+    echo -e "   5) 重置访问路径      6) 面板 URL 设置"
+    echo -e "   7) SSL / HTTPS 设置  8) 修改面板监听地址和端口"
+    echo -e "   9) Cloudflare隧道/Caddy配置"
+    echo -e "  10) 申请 Cloudflare SSL 证书"
+    echo -e "  11) 创建 TUIC / Hysteria2 节点"
     echo -e "  12) 检查/更新版本    13) 卸载"
     echo -e "   0) 退出脚本"
     echo -e "${D}----------------------------------------${N}"
     read -rp "  请选择 [0-13]: " choice
 
     case "$choice" in
-      1) svc_start   && echo -e "\n  ${G}已启动${N}"; pause ;;
+      1) svc_restart && echo -e "\n  ${G}服务已启动/重启${N}"; pause ;;
       2) svc_stop    && echo -e "\n  ${Y}已停止${N}"; pause ;;
-      3) svc_restart && echo -e "\n  ${G}已重启${N}"; pause ;;
-      4) echo; svc_logs 40; pause ;;
-      5) reset_password; pause ;;
-      6) reset_basepath; pause ;;
-      7) change_panel_url; pause ;;
-      8) change_ssl; pause ;;
-      9) change_listen_and_port; pause ;;
-      10) caddy_menu; pause ;;
-      11) cf_ssl_menu ;;
+      3) echo; svc_logs 40; pause ;;
+      4) reset_password; pause ;;
+      5) reset_basepath; pause ;;
+      6) change_panel_url; pause ;;
+      7) change_ssl; pause ;;
+      8) change_listen_and_port; pause ;;
+      9) caddy_menu; pause ;;
+      10) cf_ssl_menu ;;
+      11) create_tuic_hy2_nodes; pause ;;
       12) check_and_update; pause ;;
       13) do_uninstall; pause ;;
       0) exit 0 ;;
@@ -3370,9 +3761,8 @@ case "${1:-}" in
     shift
     setup_caddy_proxy "$@"
     ;;
-  start)     svc_start ;;
+  start|restart) svc_restart ;;
   stop)      svc_stop ;;
-  restart)   svc_restart ;;
   status)    show_info ;;
   log)       svc_logs_follow ;;
   info)      show_info ;;
@@ -3384,12 +3774,13 @@ case "${1:-}" in
   cert|ssl_cf|acme|cf_ssl) cf_ssl_menu ;;
   view_cert) view_cf_ssl_certs ;;
   apply_cert) apply_cf_ssl_cert ;;
+  tuic|hy2|create_node|create_nodes) create_tuic_hy2_nodes ;;
   update)    check_and_update ;;
   upgrade)   check_and_update ;;
   uninstall) do_uninstall ;;
   "")        menu ;;
   *)
-    echo "用法: sout [start|stop|restart|status|log|info|listen|port|url|ssl|caddy|cert|update|uninstall]"
+    echo "用法: sout [start|stop|restart|status|log|info|listen|port|url|ssl|caddy|cert|tuic|hy2|update|uninstall]"
     echo "直接在终端输入 sout 即可进入交互控制菜单"
     ;;
 esac
