@@ -710,7 +710,7 @@ if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$
       echo "  ⚠️ 安全提示:   该随机密码仅在安装完成时显示一次，请务必妥善保存！"
       echo "                 (若遗忘密码，可随时在终端输入 s-ui 进行重置修改)"
     else
-      echo "  s-ui 密  码:   ${SUI_ADMIN_PASS}  (已按您输入的自定义密码生效)"
+      echo "  s-ui 密  码:   ${SUI_ADMIN_PASS}  [已按您输入的自定义密码生效，若遗忘密码，可随时在终端输入 s-ui 进行重置修改]"
     fi
   else
     echo "  s-ui 密  码:   [由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]"
@@ -762,7 +762,7 @@ else
         echo "  ⚠️ 安全提示:   该随机密码仅在安装完成时显示一次，请务必妥善保存！"
         echo "                 (若遗忘密码，可随时在终端输入 s-ui 进行重置修改)"
       else
-        echo "  s-ui 密  码:   ${SUI_ADMIN_PASS}  (已按您输入的自定义密码生效)"
+        echo "  s-ui 密  码:   ${SUI_ADMIN_PASS}  [已按您输入的自定义密码生效，若遗忘密码，可随时在终端输入 s-ui 进行重置修改]"
       fi
     else
       echo "  s-ui 密  码:   [由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]"
