@@ -120,6 +120,28 @@ except Exception: pass
       systemctl restart sout 2>/dev/null || true
     fi
 
+    local_backend=$(cat /var/lib/sout/panel_mode 2>/dev/null || echo "")
+    if [[ "$local_backend" == "sing-box" || -f /etc/sing-box/config.json ]]; then
+      CUR_DOMAIN="$CUR_DOMAIN" python3 -c "
+import json, os
+p = '/etc/sing-box/config.json'
+try:
+    with open(p, 'r') as f: conf = json.load(f)
+    changed = False
+    for ib in conf.get('inbounds', []):
+        tag = ib.get('tag', '')
+        if 'vmess-argo' in tag or 'argo' in tag:
+            trans = ib.setdefault('transport', {})
+            hdrs = trans.setdefault('headers', {})
+            hdrs['Host'] = os.environ['CUR_DOMAIN']
+            changed = True
+    if changed:
+        with open(p, 'w') as f: json.dump(conf, f, indent=2)
+except Exception: pass
+" 2>/dev/null || true
+      systemctl restart sing-box 2>/dev/null || true
+    fi
+
       if [[ -f "$SUI_DB" ]]; then
         sui_token=$(cat "/var/lib/sout/sui-token" 2>/dev/null || true)
         if [[ -n "$sui_token" ]]; then
