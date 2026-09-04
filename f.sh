@@ -539,8 +539,6 @@ show_info() {
 
   if [[ -f /usr/local/s-ui/db/s-ui.db ]] || [[ -f /usr/local/s-ui/s-ui ]] || command -v sui >/dev/null 2>&1; then
     echo -e "  面板对接:    ${G}s-ui (Sing-Box) 已就绪${N}"
-  elif command -v /usr/local/x-ui/x-ui >/dev/null 2>&1 || [[ -x /usr/bin/x-ui ]]; then
-    echo -e "  面板对接:    ${G}3x-ui 已就绪${N}"
   else
     echo -e "  面板对接:    ${R}未检测到 s-ui 面板${N}"
   fi

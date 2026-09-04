@@ -11,7 +11,7 @@ import (
 
 // Panel 是 fanout 管理节点链接的后端。
 type Panel interface {
-	// Kind 返回 "s-ui", "3x-ui", "xray-cf-lite", "native"
+	// Kind 返回 "s-ui"
 	Kind() string
 	// Describe 给出一行人能读的后端说明。
 	Describe() string
@@ -136,24 +136,12 @@ func openPanel() (Panel, error) {
 		}
 		panelState.current = s
 		return s, nil
-	case "3x-ui":
-		x, err := DetectXUI(panelState.workDir)
-		if err != nil {
-			return nil, fmt.Errorf("指定了 3x-ui 模式但探测失败: %w", err)
-		}
-		panelState.current = x
-		return x, nil
 	}
 
-	// 自动探测优先级：s-ui -> 3x-ui
+	// 自动探测 s-ui
 	if s, err := DetectSUI(panelState.workDir); err == nil {
 		panelState.current = s
 		return s, nil
-	}
-
-	if x, err := DetectXUI(panelState.workDir); err == nil {
-		panelState.current = x
-		return x, nil
 	}
 
 	return nil, fmt.Errorf("未检测到支持的面板（请先安装 s-ui 面板）")
@@ -180,18 +168,12 @@ func availablePanelModes(workDir string) []map[string]any {
 	}
 	modes = append(modes, map[string]any{"mode": "s-ui", "label": "s-ui 面板 (sing-box)", "available": suiOK, "reason": suiReason})
 
-	xuiOK, xuiReason := true, ""
-	if _, err := DetectXUI(workDir); err != nil {
-		xuiOK, xuiReason = false, err.Error()
-	}
-	modes = append(modes, map[string]any{"mode": "3x-ui", "label": "3x-ui 面板 (Xray)", "available": xuiOK, "reason": xuiReason})
-
 	return modes
 }
 
 func switchPanelMode(mode string) (Panel, error) {
 	switch mode {
-	case "", "s-ui", "3x-ui":
+	case "", "s-ui":
 	default:
 		return nil, fmt.Errorf("未知后端模式 %q", mode)
 	}
@@ -221,14 +203,4 @@ func switchPanelMode(mode string) (Panel, error) {
 		log.Printf("记录后端模式失败: %v", err)
 	}
 	return p, nil
-}
-
-func xuiAbsent() bool {
-	if _, err := os.Stat(xuiBinary); err == nil {
-		return false
-	}
-	if _, err := os.Stat(xuiMenu); err == nil {
-		return false
-	}
-	return true
 }

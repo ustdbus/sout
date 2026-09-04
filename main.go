@@ -19,7 +19,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v2.9.0"
+var version = "v2.10.0"
 
 func main() {
 	var (
@@ -27,7 +27,7 @@ func main() {
 		maxSlots = flag.Int("max", 20, "最多同时运行的隧道数")
 		workDir  = flag.String("dir", "/var/lib/sout", "工作目录")
 	)
-	panelMode := flag.String("panel", "", "节点链接后端: 留空自动探测, s-ui, 3x-ui")
+	panelMode := flag.String("panel", "", "节点链接后端: 留空自动探测, s-ui")
 	publicIP := flag.String("ip", "", "母机公网 IPv4，用于分享链接/SOCKS5 地址；留空则自动探测")
 	showVersion := flag.Bool("version", false, "显示版本后退出")
 	flag.Parse()
@@ -82,7 +82,6 @@ func main() {
 		log.Printf("恢复上次状态失败: %v", err)
 	} else if n > 0 {
 		log.Printf("正在恢复上次的 %d 条隧道", n)
-		go mgr.ReconcileOutbounds()
 	}
 
 	go mgr.WatchHealth()
@@ -569,12 +568,6 @@ func apiXUIStatus(w http.ResponseWriter, r *http.Request) {
 		"kind":       p.Kind(),
 		"describe":   p.Describe(),
 		"can_create": true,
-	}
-	if x, ok := p.(*XUI); ok {
-		resp["port"] = x.Port
-		resp["base_path"] = x.BasePath
-		resp["scheme"] = x.Scheme
-		resp["host"] = x.Host
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

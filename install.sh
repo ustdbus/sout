@@ -576,8 +576,6 @@ fi
 echo "[3/6] 检测节点管理面板..."
 if check_sui; then
   echo "      检测到已安装 s-ui 面板（将自动以 s-ui 模式接管分流）"
-elif command -v /usr/local/x-ui/x-ui >/dev/null 2>&1 || [[ -x /usr/bin/x-ui ]]; then
-  echo "      检测到已安装 3x-ui 面板（将自动以 3x-ui 模式接管出入站）"
 else
   echo "      提示：未检测到 s-ui 面板，请配置 s-ui 以启用节点分流联动。"
 fi

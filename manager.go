@@ -543,40 +543,6 @@ func (m *Manager) AddCustomExit(node CustomNode) (*Tunnel, error) {
 	return t, nil
 }
 
-func (m *Manager) ReconcileOutbounds() {
-	p, err := openPanel()
-	if err != nil || p.Kind() != "3x-ui" {
-		return
-	}
-
-	deadline := time.Now().Add(90 * time.Second)
-	for {
-		tunnels := m.Tunnels()
-		if len(tunnels) == 0 {
-			return
-		}
-		var up *Tunnel
-		settled := true
-		for _, t := range tunnels {
-			if t.Status == "up" && up == nil {
-				up = t
-			}
-			if t.Status == "starting" {
-				settled = false
-			}
-		}
-		if (settled || time.Now().After(deadline)) && up != nil {
-			if err := m.resync(up); err != nil {
-				log.Printf("同步出站失败: %v", err)
-			}
-			return
-		}
-		if settled || time.Now().After(deadline) {
-			return
-		}
-		time.Sleep(2 * time.Second)
-	}
-}
 
 func (m *Manager) syncCred(t *Tunnel) {
 	if err := m.resync(t); err != nil {
