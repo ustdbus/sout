@@ -350,16 +350,37 @@ setup_caddy_proxy() {
   mkdir -p "$CADDY_DIR"
   mkdir -p "$WORK_DIR"
 
+  local cur_backend
+  cur_backend=$(cat "${WORK_DIR}/panel_mode" 2>/dev/null || echo "")
+  if [[ -z "$cur_backend" ]]; then
+    if [[ -f "$SUI_DB" ]]; then cur_backend="s-ui"
+    elif [[ -f /etc/sing-box/config.json ]]; then cur_backend="sing-box"
+    fi
+  fi
+
   local sout_p sui_p sub_p ws_p sout_port sui_port sub_port node_port
   sout_p=$(rand_path "sout")
-  sui_p=$(rand_path "sui")
+  sui_p=""
+  [[ "$cur_backend" != "sing-box" ]] && sui_p=$(rand_path "sui")
   sub_p=$(rand_path "sub")
   ws_p=$(rand_path "vlws")
 
   sout_port=$(rand_port)
-  sui_port=$(rand_port)
+  sui_port=0
+  [[ "$cur_backend" != "sing-box" ]] && sui_port=$(rand_port)
   sub_port=$(rand_port)
   node_port=$(rand_port)
+
+  # 构建 Caddyfile 中可选的 s-ui 规则块
+  local sui_caddy_block=""
+  if [[ -n "$sui_p" && "$sui_port" -gt 0 ]]; then
+    sui_caddy_block="    redir /${sui_p} /${sui_p}/ 308
+
+    # 2. s-ui 节点管理面板
+    handle /${sui_p}* {
+        reverse_proxy 127.0.0.1:${sui_port}
+    }"
+  fi
 
   # 生成通配监听的 Caddyfile
   cat > "$CADDY_FILE" <<EOF
@@ -370,26 +391,21 @@ setup_caddy_proxy() {
 
 :${tunnel_port} {
     redir /${sout_p} /${sout_p}/ 308
-    redir /${sui_p} /${sui_p}/ 308
     redir /${sub_p} /${sub_p}/ 308
+${sui_caddy_block}
 
     # 1. sout 动态家宽管理面板
     handle /${sout_p}* {
         reverse_proxy 127.0.0.1:${sout_port}
     }
 
-    # 2. s-ui 节点管理面板
-    handle /${sui_p}* {
-        reverse_proxy 127.0.0.1:${sui_port}
+    # 3. sout 订阅接口（重写到 sout 面板的 /sub）
+    handle /${sub_p}* {
+        rewrite * /${sout_p}/sub{uri}
+        reverse_proxy 127.0.0.1:${sout_port}
     }
 
-      # 3. sout 订阅接口（重写到 sout 面板的 /sub）
-      handle /${sub_p}* {
-          rewrite * /${sout_p}/sub{uri}
-          reverse_proxy 127.0.0.1:${sout_port}
-      }
-
-    # 4. VLESS + WebSocket 节点 (实时零缓冲透传)
+    # 4. WebSocket 节点 (实时零缓冲透传)
     handle /${ws_p}* {
         reverse_proxy 127.0.0.1:${node_port} {
             flush_interval -1
@@ -420,8 +436,44 @@ EOF
     fi
   fi
 
+  local sui_u="admin"
+  if [[ "$cur_backend" == "sing-box" ]]; then
+    # sing-box 纯内核模式：直接向 /etc/sing-box/config.json 注入 127.0.0.1 隧道节点
+    DOMAIN="$domain" NODE_PORT="$node_port" WS_PATH="/${ws_p}" python3 <<'PYEOF'
+import json, os, uuid, random, string
+p = '/etc/sing-box/config.json'
+try:
+    with open(p, 'r') as f:
+        conf = json.load(f)
+except Exception:
+    conf = {}
+inbounds = conf.setdefault('inbounds', [])
+node_port = int(os.environ['NODE_PORT'])
+ws_path = os.environ['WS_PATH']
+domain = os.environ['DOMAIN']
+
+rand_suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
+inbounds.append({
+    'type': 'vmess',
+    'tag': f'vmess-argo-{rand_suffix}',
+    'listen': '127.0.0.1',
+    'listen_port': node_port,
+    'users': [{'name': 'default', 'uuid': str(uuid.uuid4())}],
+    'transport': {
+        'type': 'ws',
+        'path': ws_path,
+        'headers': {'Host': domain},
+        'max_early_data': 2560,
+        'early_data_header_name': 'Sec-WebSocket-Protocol'
+    }
+})
+with open(p, 'w') as f:
+    json.dump(conf, f, indent=2)
+PYEOF
+    systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true
+    echo -e "  [✓] 已在 sing-box 中创建 127.0.0.1 隧道回源节点 (端口: ${node_port}, 路径: /${ws_p}/)"
+  else
     # 配置 s-ui 面板（通过 s-ui API，避免直接写库）
-    local sui_u="admin"
     if [[ -f "$SUI_DB" ]]; then
       local sui_token
       sui_token=$(cat "/var/lib/sout/sui-token" 2>/dev/null || true)
@@ -430,7 +482,7 @@ EOF
       else
         SUI_API="http://127.0.0.1:${sui_port}/${sui_p}/apiv2" \
         SUI_TOKEN="$sui_token" \
-          SUI_DB="$SUI_DB" \
+        SUI_DB="$SUI_DB" \
         DOMAIN="$domain" \
         SUI_PORT="$sui_port" \
         SUB_PORT="$sub_port" \
@@ -478,6 +530,7 @@ PY
       fi
     fi
     [[ -z "$sui_u" ]] && sui_u="admin"
+  fi
 
   # 配置 sout 服务
   local sout_json="${WORK_DIR}/settings.json"
@@ -533,12 +586,19 @@ EOF
   echo "      访问地址:  https://${domain}/${sout_p}/"
   echo "      访问口令:  ${pw}"
   echo
-  echo "  [2] s-ui 节点与分流管理面板"
-  echo "      访问地址:  https://${domain}/${sui_p}/"
-  echo "      管理账号:  ${sui_u}"
-  echo "      管理密码:  [由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]"
+  if [[ "$cur_backend" == "sing-box" ]]; then
+    echo "  [2] sing-box 原生内核"
+    echo "      运行后端:  sing-box 原生内核"
+    echo "      核心配置:  /etc/sing-box/config.json"
+    echo "      运行状态:  $(systemctl is-active sing-box 2>/dev/null || rc-service sing-box status 2>/dev/null || echo 'active')"
+  else
+    echo "  [2] s-ui 节点与分流管理面板"
+    echo "      访问地址:  https://${domain}/${sui_p}/"
+    echo "      管理账号:  ${sui_u}"
+    echo "      管理密码:  [由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]"
+  fi
   echo
-    echo "  [3] sout 订阅地址:  https://${domain}/${sout_p}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")"
+  echo "  [3] sout 订阅地址:  https://${domain}/${sout_p}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")"
   echo "================================================================"
   echo
 }
@@ -623,15 +683,24 @@ except Exception:
     systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || true
   fi
 
-  # 2. 动态探测并自动纠偏 s-ui 面板配置 (确保监听 127.0.0.1 并更新 webURI/subURI)
+  # 2. 动态探测并自动纠偏后端配置
+  local cur_backend
+  cur_backend=$(cat "${WORK_DIR}/panel_mode" 2>/dev/null || echo "")
+  if [[ -z "$cur_backend" ]]; then
+    if [[ -f "$SUI_DB" ]]; then cur_backend="s-ui"
+    elif [[ -f /etc/sing-box/config.json ]]; then cur_backend="sing-box"
+    fi
+  fi
+
   sui_port="2096"
-  sui_p=$(grep -oE '"sui_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
-  [[ -z "$sui_p" ]] && sui_p="sui"
+  sui_p=""
+  [[ "$cur_backend" != "sing-box" ]] && sui_p=$(grep -oE '"sui_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+  [[ "$cur_backend" != "sing-box" && -z "$sui_p" ]] && sui_p="sui"
   sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   [[ -z "$sub_p" ]] && sub_p="sub"
 
   local sui_needs_restart=0
-  if [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
+  if [[ "$cur_backend" != "sing-box" && -f /usr/local/s-ui/db/s-ui.db ]]; then
     local sui_info
     sui_info=$(python3 -c "
 import sqlite3
@@ -687,14 +756,84 @@ print(f'{port}|{path}|{changed}')
     systemctl restart s-ui 2>/dev/null || true
   fi
 
-  # 3. 动态识别/创建 s-ui 隧道节点入站 (核心：识别监听在 127.0.0.1 的隧道节点)
+  # 3. 动态识别/创建隧道节点入站 (核心：识别监听在 127.0.0.1 的隧道节点)
   sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   [[ -z "$sub_p" ]] && sub_p="sub"
   ws_p=$(grep -oE '"ws_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   node_port=$(grep -oE '"node_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
   [[ -z "$node_port" ]] && node_port="2082"
 
-  if [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
+  if [[ "$cur_backend" == "sing-box" ]]; then
+    local sb_node_res
+    sb_node_res=$(python3 -c "
+import json
+sb_conf = '/etc/sing-box/config.json'
+try:
+    with open(sb_conf, 'r') as f:
+        d = json.load(f)
+except Exception:
+    d = {}
+found_p, found_w = '', ''
+for ib in d.get('inbounds', []):
+    if not isinstance(ib, dict): continue
+    if ib.get('listen') == '127.0.0.1' and ib.get('listen_port', 0) > 0:
+        found_p = str(ib.get('listen_port'))
+        tr = ib.get('transport', {})
+        found_w = tr.get('path', '').strip('/') if isinstance(tr, dict) else ''
+        break
+if found_p:
+    print(f'FOUND|{found_p}|{found_w or \"vlws\"}')
+else:
+    print('CREATE')
+" 2>/dev/null || echo "CREATE")
+
+    if [[ "$sb_node_res" == FOUND* ]]; then
+      local n_port n_path
+      n_port=$(echo "$sb_node_res" | cut -d'|' -f2)
+      n_path=$(echo "$sb_node_res" | cut -d'|' -f3)
+      [[ -n "$n_port" ]] && node_port="$n_port"
+      [[ -n "$n_path" ]] && ws_p="$n_path"
+      echo -e "  [+] 成功识别到 sing-box 现有 127.0.0.1 隧道节点 (端口: ${node_port}, 路径: /${ws_p}/)"
+    else
+      echo -e "  [+] sing-box 中未找到 127.0.0.1 隧道节点，正在自动创建..."
+      [[ -z "$ws_p" ]] && ws_p=$(rand_safe_path "vlws")
+      node_port=$(rand_port)
+      DOMAIN="$domain" NODE_PORT="$node_port" WS_PATH="/${ws_p}" python3 <<'PYEOF'
+import json, os, uuid, random, string
+p = '/etc/sing-box/config.json'
+try:
+    with open(p, 'r') as f:
+        conf = json.load(f)
+except Exception:
+    conf = {}
+inbounds = conf.setdefault('inbounds', [])
+node_port = int(os.environ['NODE_PORT'])
+ws_path = os.environ['WS_PATH']
+domain = os.environ['DOMAIN']
+
+rand_suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
+inbounds.append({
+    'type': 'vmess',
+    'tag': f'vmess-argo-{rand_suffix}',
+    'listen': '127.0.0.1',
+    'listen_port': node_port,
+    'users': [{'name': 'default', 'uuid': str(uuid.uuid4())}],
+    'transport': {
+        'type': 'ws',
+        'path': f'/{ws_path}',
+        'headers': {'Host': domain},
+        'max_early_data': 2560,
+        'early_data_header_name': 'Sec-WebSocket-Protocol'
+    }
+})
+with open(p, 'w') as f:
+    json.dump(conf, f, indent=2)
+PYEOF
+      systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true
+      echo -e "  ${G}[✓] 127.0.0.1 隧道节点已在 sing-box 中创建 (端口: ${node_port}, 路径: /${ws_p}/)${N}"
+    fi
+
+  elif [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
     local node_result
     node_result=$(python3 -c "
 import sqlite3, json
@@ -853,6 +992,16 @@ PYEOF
   fi
 
   # 4. 重新生成纯净 Caddyfile
+  local sui_caddy_rules=""
+  if [[ "$cur_backend" != "sing-box" && -n "$sui_p" && -n "$sui_port" ]]; then
+    sui_caddy_rules="    redir /${sui_p} /${sui_p}/ 308
+
+    # 2. s-ui 节点管理面板
+    handle /${sui_p}* {
+        reverse_proxy 127.0.0.1:${sui_port}
+    }"
+  fi
+
   mkdir -p /etc/caddy
   cat > "$CADDY_FILE" <<EOF
 {
@@ -862,17 +1011,12 @@ PYEOF
 
 :${tunnel_port} {
     redir /${sout_p} /${sout_p}/ 308
-    redir /${sui_p} /${sui_p}/ 308
     redir /${sub_p} /${sub_p}/ 308
+${sui_caddy_rules}
 
     # 1. sout 动态家宽管理面板
     handle /${sout_p}* {
         reverse_proxy 127.0.0.1:${sout_port}
-    }
-
-    # 2. s-ui 节点管理面板
-    handle /${sui_p}* {
-        reverse_proxy 127.0.0.1:${sui_port}
     }
 
     # 3. sout 订阅接口（重写到 sout 面板的 /sub）

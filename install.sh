@@ -35,6 +35,183 @@ check_sui() {
   return 1
 }
 
+check_singbox() {
+  if command -v sing-box >/dev/null 2>&1 || [[ -f /usr/local/bin/sing-box ]] || [[ -f /etc/sing-box/config.json ]]; then
+    return 0
+  fi
+  return 1
+}
+
+install_singbox() {
+  echo
+  echo "  [+] 正在检查并配置 sing-box 原生内核..."
+
+  # 1. 优先检测是否可直接复用本地现存的 sing-box 内核
+  if [[ ! -x /usr/local/bin/sing-box ]]; then
+    if [[ -x /usr/local/s-ui/bin/sing-box ]]; then
+      echo "      发现 s-ui 现有 sing-box 内核 (/usr/local/s-ui/bin/sing-box)，正在建立复用软链接..."
+      ln -sf /usr/local/s-ui/bin/sing-box /usr/local/bin/sing-box
+    elif [[ -x /usr/bin/sing-box ]]; then
+      echo "      发现系统 /usr/bin/sing-box，正在建立复用软链接..."
+      ln -sf /usr/bin/sing-box /usr/local/bin/sing-box
+    elif command -v sing-box >/dev/null 2>&1; then
+      local existing_sb
+      existing_sb="$(command -v sing-box)"
+      echo "      发现 PATH 中已有 sing-box (${existing_sb})，正在建立复用软链接..."
+      ln -sf "$existing_sb" /usr/local/bin/sing-box
+    fi
+  fi
+
+  # 2. 若本地无可用内核，自动从官方拉取最新稳定版 (Release)
+  if [[ ! -x /usr/local/bin/sing-box ]]; then
+    echo "      本地未发现 sing-box，正在自动获取官方最新稳定版内核..."
+    local arch
+    arch=$(uname -m)
+    local goarch=""
+    case "$arch" in
+      x86_64) goarch="amd64" ;;
+      aarch64|arm64) goarch="arm64" ;;
+      armv7l|armhf) goarch="armv7" ;;
+      *) echo "  [!] 暂不支持该系统架构: $arch" >&2; return 1 ;;
+    esac
+
+    local tag=""
+    # 方式一：通过 HTTP 302 重定向解析最新稳定 Release 标签（免 GitHub API 频率限制）
+    tag=$(curl -sIL -m 8 "https://github.com/SagerNet/sing-box/releases/latest" 2>/dev/null | grep -i '^location:' | tail -1 | grep -oE 'v[0-9]+(\.[0-9]+)+' | tr -d ' \r\n' || true)
+    
+    # 方式二：备用通过 GitHub API 获取
+    if [[ -z "$tag" ]]; then
+      tag=$(curl -sSL -m 8 "https://api.github.com/repos/SagerNet/sing-box/releases/latest" 2>/dev/null | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | cut -d'"' -f4 || true)
+    fi
+
+    # 方式三：兜底官方稳定版
+    [[ -z "$tag" ]] && tag="v1.11.5"
+    local ver="${tag#v}"
+    echo "      识别到 sing-box 最新稳定版本: ${tag} (${goarch})"
+
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    local download_urls=(
+      "https://github.com/SagerNet/sing-box/releases/download/${tag}/sing-box-${ver}-linux-${goarch}.tar.gz"
+      "https://ghproxy.net/https://github.com/SagerNet/sing-box/releases/download/${tag}/sing-box-${ver}-linux-${goarch}.tar.gz"
+      "https://mirror.ghproxy.com/https://github.com/SagerNet/sing-box/releases/download/${tag}/sing-box-${ver}-linux-${goarch}.tar.gz"
+    )
+
+    local dl_ok=0
+    for u in "${download_urls[@]}"; do
+      echo "      正在下载内核: ${u} ..."
+      if curl -fsSL --connect-timeout 15 "$u" -o "${tmp_dir}/sing-box.tar.gz" 2>/dev/null; then
+        dl_ok=1
+        break
+      fi
+    done
+
+    if [[ "$dl_ok" -eq 0 ]]; then
+      echo "  [!] 下载 sing-box 内核失败，请检查网络连接。" >&2
+      rm -rf "$tmp_dir"
+      return 1
+    fi
+
+    tar -xzf "${tmp_dir}/sing-box.tar.gz" -C "$tmp_dir"
+    local bin_found
+    bin_found=$(find "$tmp_dir" -type f -name "sing-box" | head -1)
+    if [[ -z "$bin_found" || ! -f "$bin_found" ]]; then
+      echo "  [!] 解压缩包中未找到 sing-box 二进制文件！" >&2
+      rm -rf "$tmp_dir"
+      return 1
+    fi
+
+    install -m 755 "$bin_found" /usr/local/bin/sing-box
+    rm -rf "$tmp_dir"
+    echo "      sing-box 原生内核已就绪: $(/usr/local/bin/sing-box version 2>/dev/null | head -1 || echo 'ok')"
+  else
+    echo "      成功复用本地 sing-box 内核: $(/usr/local/bin/sing-box version 2>/dev/null | head -1 || echo 'ok')"
+  fi
+
+  # 初始化目录和精简配置
+  mkdir -p /etc/sing-box
+  if [[ ! -f /etc/sing-box/config.json ]]; then
+    cat > /etc/sing-box/config.json <<'SBCONF'
+{
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "inbounds": [],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "block"
+    }
+  ],
+  "route": {
+    "rules": []
+  }
+}
+SBCONF
+    chmod 644 /etc/sing-box/config.json
+  fi
+
+  # 注册并启动系统服务
+  echo "      正在注册 sing-box 服务 (${INIT_SYS})..."
+  if [[ "$INIT_SYS" == "systemd" ]]; then
+    cat > /etc/systemd/system/sing-box.service <<'SBEU'
+[Unit]
+Description=sing-box service
+Documentation=https://sing-box.sagernet.org
+After=network.target nss-lookup.target network-online.target
+
+[Service]
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
+ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
+Restart=on-failure
+RestartSec=3s
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+SBEU
+    systemctl daemon-reload
+    systemctl enable sing-box >/dev/null 2>&1 || true
+    systemctl restart sing-box >/dev/null 2>&1 || true
+  else
+    cat > /etc/init.d/sing-box <<'SBRC'
+#!/sbin/openrc-run
+name="sing-box"
+description="sing-box service"
+command="/usr/local/bin/sing-box"
+command_args="run -c /etc/sing-box/config.json"
+command_background="yes"
+pidfile="/run/sing-box.pid"
+output_log="/var/log/sing-box.log"
+error_log="/var/log/sing-box.err"
+
+depend() {
+  need net
+  after firewall
+}
+SBRC
+    chmod +x /etc/init.d/sing-box
+    rc-update add sing-box default >/dev/null 2>&1 || true
+    rc-service sing-box restart >/dev/null 2>&1 || true
+  fi
+
+  mkdir -p "$WORK_DIR"
+  echo "sing-box" > "${WORK_DIR}/panel_mode"
+
+  echo
+  echo "================================================================"
+  echo "  [✓] sing-box 原生内核已成功就绪并启动！继续进行 sout 插件安装..."
+  echo "================================================================"
+  echo
+  return 0
+}
+
 # ==============================================================================
 # 系统内核与网络缓冲区参数自动调优 / 备份 / 还原
 # ==============================================================================
@@ -262,38 +439,47 @@ ask_tunnel_setup() {
 ask_tunnel_setup
 
 # ==============================================================================
-# [第二步] 询问 / 检测并安装官方 s-ui 面板
+# [第二步] 询问 / 检测并安装后端 (s-ui 面板 / sing-box 原生内核)
 # ==============================================================================
 SUI_INSTALLED_BY_US=0
 
-ensure_sui() {
+ensure_backend() {
   if check_sui; then
+    mkdir -p "$WORK_DIR"
+    [[ ! -f "${WORK_DIR}/panel_mode" ]] && echo "s-ui" > "${WORK_DIR}/panel_mode"
+    return 0
+  fi
+  if check_singbox; then
+    mkdir -p "$WORK_DIR"
+    [[ ! -f "${WORK_DIR}/panel_mode" ]] && echo "sing-box" > "${WORK_DIR}/panel_mode"
     return 0
   fi
 
   echo
   echo "================================================================"
-  echo "  [!] 检测到当前 VPS 尚未安装 s-ui 面板！"
+  echo "  [!] 检测到当前 VPS 尚未安装 s-ui 面板或 sing-box 内核！"
   echo
-  echo "  sout 是专为 s-ui (Sing-Box) 设计的动态家宽出口与分流插件。"
-  echo "  必须配合 s-ui 面板才能实现多协议入站、单端口多用户及分流联动。"
+  echo "  sout 支持两种节点运行后端："
+  echo "    1) 安装 s-ui 面板"
+  echo "    2) 安装 singbox 内核（默认）"
+  echo "    3) 不安装退出"
   echo
-  echo "  请选择操作："
-  echo "    y) 自动检测当前服务器系统并安装官方 s-ui 面板"
-  echo "    n) 退出并卸载/取消安装脚本"
+  echo "  直接回车默认选择 [2]"
   echo "================================================================"
   echo
 
   local choice=""
   if [[ -t 0 ]]; then
-    read -rp "  是否安装官方 s-ui 面板？[Y/n]: " choice
+    read -rp "  请选择操作 [1-3] (默认: 2): " choice
   else
-    read -rp "  是否安装官方 s-ui 面板？[Y/n]: " choice < /dev/tty || choice="y"
+    read -rp "  请选择操作 [1-3] (默认: 2): " choice < /dev/tty || choice="2"
   fi
 
-  choice="${choice:-y}"
-  case "${choice,,}" in
-    y|yes)
+  choice=$(echo "$choice" | tr -d ' \r\n')
+  [[ -z "$choice" ]] && choice="2"
+
+  case "$choice" in
+    1)
       echo
       echo "  [+] 正在自动检测当前服务器系统架构并安装官方 s-ui 面板..."
       echo "      (官方仓库: https://github.com/alireza0/s-ui)"
@@ -308,6 +494,8 @@ ensure_sui() {
       
       if check_sui; then
         SUI_INSTALLED_BY_US=1
+        mkdir -p "$WORK_DIR"
+        echo "s-ui" > "${WORK_DIR}/panel_mode"
         # 解析官方日志中是否打印了随机生成的账号和密码
         if [[ -f "$sui_log" ]]; then
           local parsed_u parsed_p
@@ -342,9 +530,16 @@ ensure_sui() {
         fi
       fi
       ;;
-    n|no)
+    2)
+      if ! install_singbox; then
+        echo "  [!] sing-box 安装失败，正在退出..."
+        cleanup_sout
+        exit 1
+      fi
+      ;;
+    3)
       echo
-      echo "  [-] 您选择了取消安装，正在卸载并退出..."
+      echo "  [-] 您选择了取消安装，正在退出..."
       cleanup_sout
       exit 0
       ;;
@@ -361,7 +556,7 @@ SUI_ADMIN_USER=""
 SUI_ADMIN_PASS=""
 SUI_PASS_IS_RANDOM=0
 
-ensure_sui
+ensure_backend
 
 # 若未抓取到随机用户名（如已预装或用户在官方脚本中自定义设置），从数据库读取用户名
 if [[ -z "$SUI_ADMIN_USER" && -f "/usr/local/s-ui/db/s-ui.db" ]] && command -v sqlite3 >/dev/null 2>&1; then
@@ -573,11 +768,14 @@ else
   rm -rf "$TMP"
 fi
 
-echo "[3/6] 检测节点管理面板..."
-if check_sui; then
+echo "[3/6] 检测节点管理后端..."
+backend_kind=$(cat "${WORK_DIR}/panel_mode" 2>/dev/null || echo "")
+if [[ "$backend_kind" == "sing-box" ]] || (! check_sui && check_singbox); then
+  echo "      检测到 sing-box 原生内核后端（将以原生内核模式接管分流）"
+elif check_sui; then
   echo "      检测到已安装 s-ui 面板（将自动以 s-ui 模式接管分流）"
 else
-  echo "      提示：未检测到 s-ui 面板，请配置 s-ui 以启用节点分流联动。"
+  echo "      提示：未检测到后端，可在安装后配置 sing-box 或 s-ui 以启用分流联动。"
 fi
 
 echo "[4/6] 准备网络运行环境并优化内核套接字/UDP缓冲区..."
@@ -632,6 +830,8 @@ ACTUAL_PORT=$(grep -oE '"port"[[:space:]]*:[[:space:]]*[0-9]+' "${WORK_DIR}/sett
 WEB_PORT="${ACTUAL_PORT:-8899}"
 
 CADDY_META="${WORK_DIR}/caddy_meta.json"
+backend_mode=$(cat "${WORK_DIR}/panel_mode" 2>/dev/null || echo "")
+
 if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$CADDY_META"; then
   c_dom=$(grep -oE '"domain"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   c_sout_p=$(grep -oE '"sout_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
@@ -641,7 +841,8 @@ if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$
   c_sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   if [[ "$WANT_TUNNEL" != "y" && -x /usr/local/bin/sout ]]; then
     systemctl restart cloudflared 2>/dev/null || rc-service cloudflared restart 2>/dev/null || service cloudflared restart 2>/dev/null || true
-    systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || service s-ui restart 2>/dev/null || true
+    systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || true
+    systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true
     /usr/local/bin/sout reload_caddy >/dev/null 2>&1 || true
   fi
   echo
@@ -653,19 +854,26 @@ if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$
   echo "  访问口令:      $(cat "${WORK_DIR}/password" 2>/dev/null || echo "见 ${WORK_DIR}/password")"
   echo "  sout 唤起命令: sout"
   echo
-  echo "  [s-ui (Sing-Box) 节点面板]"
-  echo "  s-ui 面板:     https://${c_dom}/${c_sui_p}/"
-  echo "  s-ui 用户名:   ${SUI_ADMIN_USER:-${c_sui_u:-admin}}"
-  if [[ -n "$SUI_ADMIN_PASS" && "$SUI_PASS_IS_RANDOM" == "1" ]]; then
-    echo "  s-ui 密  码:   ${SUI_ADMIN_PASS}"
-    echo "  ⚠️ 安全提示:   该随机密码仅在安装完成时显示一次，请务必妥善保存！"
-    echo "                 (若遗忘密码，可随时在终端输入 s-ui 进行重置修改)"
-  elif [[ -n "$SUI_ADMIN_PASS" && "$SUI_PASS_IS_RANDOM" != "1" ]]; then
-    echo "  s-ui 密  码:   [已按您输入的自定义密码生效，若遗忘密码，可随时在终端输入 s-ui 进行重置修改]"
-  else
-    echo "  s-ui 密  码:   [由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]"
+
+  if [[ "$backend_mode" == "sing-box" ]] || (! check_sui && check_singbox); then
+    echo "  [sing-box 原生内核]"
+    echo "  运行后端:      sing-box 原生内核"
+    echo "  核心配置:      /etc/sing-box/config.json"
+  elif check_sui; then
+    echo "  [s-ui (Sing-Box) 节点面板]"
+    echo "  s-ui 面板:     https://${c_dom}/${c_sui_p}/"
+    echo "  s-ui 用户名:   ${SUI_ADMIN_USER:-${c_sui_u:-admin}}"
+    if [[ -n "$SUI_ADMIN_PASS" && "$SUI_PASS_IS_RANDOM" == "1" ]]; then
+      echo "  s-ui 密  码:   ${SUI_ADMIN_PASS}"
+      echo "  ⚠️ 安全提示:   该随机密码仅在安装完成时显示一次，请务必妥善保存！"
+      echo "                 (若遗忘密码，可随时在终端输入 s-ui 进行重置修改)"
+    elif [[ -n "$SUI_ADMIN_PASS" && "$SUI_PASS_IS_RANDOM" != "1" ]]; then
+      echo "  s-ui 密  码:   [已按您输入的自定义密码生效，若遗忘密码，可随时在终端输入 s-ui 进行重置修改]"
+    else
+      echo "  s-ui 密  码:   [由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]"
+    fi
+    echo "  s-ui 唤起命令: s-ui"
   fi
-  echo "  s-ui 唤起命令: s-ui"
   echo
   echo "  [订阅与分流]"
   echo "  订阅链接:      https://${c_dom}/${c_sout_p}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")"
@@ -702,7 +910,12 @@ else
   echo "  访问口令:      $(cat "${WORK_DIR}/password" 2>/dev/null || echo "见 ${WORK_DIR}/password")"
   echo "  sout 唤起命令: sout"
   echo
-  if check_sui; then
+
+  if [[ "$backend_mode" == "sing-box" ]] || (! check_sui && check_singbox); then
+    echo "  [sing-box 原生内核]"
+    echo "  运行后端:      sing-box 原生内核"
+    echo "  核心配置:      /etc/sing-box/config.json"
+  elif check_sui; then
     echo "  [s-ui (Sing-Box) 节点面板]"
     echo "  s-ui 面板:     http://${IP}:${sui_port}${sui_path}"
     echo "  s-ui 用户名:   ${SUI_ADMIN_USER:-${sui_u}}"

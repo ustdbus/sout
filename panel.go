@@ -178,15 +178,26 @@ func openPanel() (Panel, error) {
 		}
 		panelState.current = s
 		return s, nil
+	case "sing-box":
+		sb, err := DetectSingBox(panelState.workDir)
+		if err != nil {
+			return nil, fmt.Errorf("指定了 sing-box 模式但探测失败: %w", err)
+		}
+		panelState.current = sb
+		return sb, nil
 	}
 
-	// 自动探测 s-ui
+	// 自动探测：先看是否存在 s-ui，再看 sing-box
 	if s, err := DetectSUI(panelState.workDir); err == nil {
 		panelState.current = s
 		return s, nil
 	}
+	if sb, err := DetectSingBox(panelState.workDir); err == nil {
+		panelState.current = sb
+		return sb, nil
+	}
 
-	return nil, fmt.Errorf("未检测到支持的面板（请先安装 s-ui 面板）")
+	return nil, fmt.Errorf("未检测到支持的后端（请先安装 sing-box 内核或 s-ui 面板）")
 }
 
 func currentPanelMode() string {
@@ -204,6 +215,12 @@ func currentPanelMode() string {
 func availablePanelModes(workDir string) []map[string]any {
 	modes := []map[string]any{}
 
+	sbOK, sbReason := true, ""
+	if _, err := DetectSingBox(workDir); err != nil {
+		sbOK, sbReason = false, err.Error()
+	}
+	modes = append(modes, map[string]any{"mode": "sing-box", "label": "sing-box 原生内核", "available": sbOK, "reason": sbReason})
+
 	suiOK, suiReason := true, ""
 	if _, err := DetectSUI(workDir); err != nil {
 		suiOK, suiReason = false, err.Error()
@@ -215,7 +232,7 @@ func availablePanelModes(workDir string) []map[string]any {
 
 func switchPanelMode(mode string) (Panel, error) {
 	switch mode {
-	case "", "s-ui":
+	case "", "sing-box", "s-ui":
 	default:
 		return nil, fmt.Errorf("未知后端模式 %q", mode)
 	}

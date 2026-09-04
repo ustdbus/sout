@@ -537,10 +537,24 @@ show_info() {
     echo -e "  服务状态:    ${R}已停止 (${st})${N}"
   fi
 
-  if [[ -f /usr/local/s-ui/db/s-ui.db ]] || [[ -f /usr/local/s-ui/s-ui ]] || command -v sui >/dev/null 2>&1; then
-    echo -e "  面板对接:    ${G}s-ui (Sing-Box) 已就绪${N}"
+  local cur_backend
+  cur_backend=$(cat "${WORK_DIR}/panel_mode" 2>/dev/null || echo "")
+  if [[ -z "$cur_backend" ]]; then
+    if [[ -f /usr/local/s-ui/db/s-ui.db ]] || [[ -f /usr/local/s-ui/s-ui ]] || command -v sui >/dev/null 2>&1; then
+      cur_backend="s-ui"
+    elif [[ -f /etc/sing-box/config.json ]] || command -v sing-box >/dev/null 2>&1; then
+      cur_backend="sing-box"
+    fi
+  fi
+
+  if [[ "$cur_backend" == "sing-box" ]]; then
+    local sb_ver
+    sb_ver=$(/usr/local/bin/sing-box version 2>/dev/null | head -1 | awk '{print $3}' || echo "原生内核")
+    echo -e "  后端对接:    ${G}sing-box (${sb_ver}) 原生内核已就绪${N}"
+  elif [[ "$cur_backend" == "s-ui" ]]; then
+    echo -e "  后端对接:    ${G}s-ui (Sing-Box) 已就绪${N}"
   else
-    echo -e "  面板对接:    ${R}未检测到 s-ui 面板${N}"
+    echo -e "  后端对接:    ${R}未检测到后端 (s-ui / sing-box)${N}"
   fi
 
   local sui_u
@@ -566,8 +580,7 @@ show_info() {
     # 如果是临时隧道，且记录域名失效/需要更新时，动态从 journalctl 抓取最新域名
     if [[ "$c_mode" == "quick_tunnel" ]]; then
       local real_d
-      real_d=$(journalctl -u cloudflared -n 50 --no-pager 2>/dev/null | grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' | tail -1 | sed 's|https://||' | tr -d ' 
-')
+      real_d=$(journalctl -u cloudflared -n 50 --no-pager 2>/dev/null | grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' | tail -1 | sed 's|https://||' | tr -d ' \r\n')
       [[ -n "$real_d" ]] && c_dom="$real_d"
       echo -e "  反代模式:    ${G}Cloudflare 官方免费临时隧道连接和Caddy流量代理 (已开启)${N}"
     else
@@ -577,10 +590,14 @@ show_info() {
     echo -e "  隧道服务:    ${cf_st} (本地回源: 127.0.0.1:${c_tun_p})"
     echo -e "  管理面板:    ${B}https://${c_dom}/${c_sout_p}/${N}"
     echo -e "  访问口令:    ${Y}${pw}${N}"
-    echo -e "  s-ui 面板:   ${B}https://${c_dom}/${c_sui_p}/${N}"
-    echo -e "  s-ui 用户名: ${Y}${sui_u}${N}"
-    echo -e "  s-ui 密  码: ${D}[由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]${N}"
-      echo -e "  订阅链接:    ${B}https://${c_dom}/${c_sout_p}/sub=${pw}${N}"
+    if [[ "$cur_backend" != "sing-box" ]]; then
+      echo -e "  s-ui 面板:   ${B}https://${c_dom}/${c_sui_p}/${N}"
+      echo -e "  s-ui 用户名: ${Y}${sui_u}${N}"
+      echo -e "  s-ui 密  码: ${D}[由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]${N}"
+    else
+      echo -e "  核心配置:    ${B}/etc/sing-box/config.json${N}"
+    fi
+    echo -e "  订阅链接:    ${B}https://${c_dom}/${c_sout_p}/sub=${pw}${N}"
   else
     if [[ "$ssl_en" == "true" ]]; then
       echo -e "  SSL 加密:    ${G}已开启 (HTTPS)${N}"
@@ -608,27 +625,31 @@ show_info() {
     fi
     echo -e "  访问口令:    ${Y}${pw}${N}"
 
-    local sui_db="/usr/local/s-ui/db/s-ui.db"
-    if [[ -f "$sui_db" || -x /usr/local/s-ui/sui ]]; then
-      local sui_port="8443"
-      local sui_path="/app/"
-      if [[ -f "$sui_db" ]]; then
-        if command -v sqlite3 >/dev/null 2>&1; then
-          local p_val path_val
-          p_val=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPort' LIMIT 1;" 2>/dev/null || true)
-          path_val=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPath' LIMIT 1;" 2>/dev/null || true)
-          [[ -n "$p_val" ]] && sui_port="$p_val"
-          [[ -n "$path_val" ]] && sui_path="$path_val"
+    if [[ "$cur_backend" == "sing-box" ]]; then
+      echo -e "  核心配置:    ${B}/etc/sing-box/config.json${N}"
+    else
+      local sui_db="/usr/local/s-ui/db/s-ui.db"
+      if [[ -f "$sui_db" || -x /usr/local/s-ui/sui ]]; then
+        local sui_port="8443"
+        local sui_path="/app/"
+        if [[ -f "$sui_db" ]]; then
+          if command -v sqlite3 >/dev/null 2>&1; then
+            local p_val path_val
+            p_val=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPort' LIMIT 1;" 2>/dev/null || true)
+            path_val=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPath' LIMIT 1;" 2>/dev/null || true)
+            [[ -n "$p_val" ]] && sui_port="$p_val"
+            [[ -n "$path_val" ]] && sui_path="$path_val"
+          fi
         fi
+        sui_path="/${sui_path#/}"
+        [[ "$sui_path" != */ ]] && sui_path="${sui_path}/"
+        echo -e "  s-ui 面板:   ${B}http://${pip}:${sui_port}${sui_path}${N}"
+        echo -e "  s-ui 用户名: ${Y}${sui_u}${N}"
+        echo -e "  s-ui 密  码: ${D}[由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]${N}"
       fi
-      sui_path="/${sui_path#/}"
-      [[ "$sui_path" != */ ]] && sui_path="${sui_path}/"
-      echo -e "  s-ui 面板:   ${B}http://${pip}:${sui_port}${sui_path}${N}"
-      echo -e "  s-ui 用户名: ${Y}${sui_u}${N}"
-      echo -e "  s-ui 密  码: ${D}[由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]${N}"
     fi
   fi
-  echo -e "  s-ui 唤起命令: ${C}s-ui${N}"
+  [[ "$cur_backend" != "sing-box" ]] && echo -e "  s-ui 唤起命令: ${C}s-ui${N}"
   echo -e "  sout 唤起命令: ${C}sout${N}"
   echo
 }
@@ -1200,6 +1221,12 @@ uninstall_all() {
   rm -rf /etc/s-ui /usr/local/s-ui 2>/dev/null || true
   rm -f /usr/bin/s-ui /usr/local/bin/s-ui /usr/bin/sui /usr/local/bin/sui 2>/dev/null || true
 
+  # 彻底清理 sing-box 服务
+  systemctl stop sing-box 2>/dev/null || rc-service sing-box stop 2>/dev/null || true
+  systemctl disable sing-box 2>/dev/null || rc-update del sing-box default 2>/dev/null || true
+  rm -f /etc/systemd/system/sing-box.service /etc/init.d/sing-box 2>/dev/null || true
+  rm -f /var/log/sing-box.log /var/log/sing-box.err /run/sing-box.pid 2>/dev/null || true
+
   # 清理运行日志、PID 与可能存在的旧迁移目录
   rm -f /var/log/sout.log /var/log/sout.err /var/log/s-ui.log /var/log/caddy.log /var/log/cloudflared.log /var/log/cloudflared_quick.log 2>/dev/null || true
   rm -f /run/sout.pid /run/fanout.pid /run/caddy.pid /run/cloudflared.pid /run/s-ui.pid 2>/dev/null || true
@@ -1231,7 +1258,110 @@ do_uninstall() {
   esac
 }
 
+update_singbox_kernel() {
+  echo
+  echo -e "${B}========================================${N}"
+  echo -e "${B}   检查/更新 sing-box 原生内核到最新稳定版${N}"
+  echo -e "${B}========================================${N}"
+
+  local cur_sb_ver="未安装"
+  if command -v sing-box >/dev/null 2>&1; then
+    cur_sb_ver=$(sing-box version 2>/dev/null | head -1 | awk '{print $3}' || echo "已安装")
+  elif [[ -x /usr/local/bin/sing-box ]]; then
+    cur_sb_ver=$(/usr/local/bin/sing-box version 2>/dev/null | head -1 | awk '{print $3}' || echo "已安装")
+  fi
+
+  echo -e "  当前 sing-box 版本: ${Y}${cur_sb_ver}${N}"
+  echo -e "  ${B}正在连接官方检查最新稳定版本...${N}"
+
+  local tag=""
+  tag=$(curl -sIL -m 8 "https://github.com/SagerNet/sing-box/releases/latest" 2>/dev/null | grep -i '^location:' | tail -1 | grep -oE 'v[0-9]+(\.[0-9]+)+' | tr -d ' \r\n' || true)
+  if [[ -z "$tag" ]]; then
+    tag=$(curl -sSL -m 8 "https://api.github.com/repos/SagerNet/sing-box/releases/latest" 2>/dev/null | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | cut -d'"' -f4 || true)
+  fi
+  [[ -z "$tag" ]] && tag="v1.11.5"
+  local ver="${tag#v}"
+
+  echo -e "  官方最新稳定版本:   ${G}${tag}${N}"
+  echo
+
+  if [[ "$cur_sb_ver" == "$ver" || "$cur_sb_ver" == "$tag" ]]; then
+    echo -e "  ${G}当前 sing-box 已是官方最新稳定版！${N}"
+    read -rp "  是否仍要强制重新下载并覆盖？[y/N]: " force_sb
+    [[ ${force_sb,,} == y ]] || return 0
+  else
+    read -rp "  是否立即更新 sing-box 到 ${tag}？[Y/n]: " do_sb
+    [[ ${do_sb,,} == n ]] && return 0
+  fi
+
+  local arch uname_m
+  uname_m=$(uname -m)
+  case "$uname_m" in
+    x86_64|amd64) arch="amd64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    armv7l|armhf) arch="armv7" ;;
+    *) echo -e "  ${R}不支持的系统架构: $uname_m${N}"; return 1 ;;
+  esac
+
+  local tmp_dir
+  tmp_dir=$(mktemp -d)
+  trap 'rm -rf "$tmp_dir"' RETURN
+
+  local download_urls=(
+    "https://github.com/SagerNet/sing-box/releases/download/${tag}/sing-box-${ver}-linux-${arch}.tar.gz"
+    "https://ghproxy.net/https://github.com/SagerNet/sing-box/releases/download/${tag}/sing-box-${ver}-linux-${arch}.tar.gz"
+    "https://mirror.ghproxy.com/https://github.com/SagerNet/sing-box/releases/download/${tag}/sing-box-${ver}-linux-${arch}.tar.gz"
+  )
+
+  local dl_ok=0
+  for u in "${download_urls[@]}"; do
+    echo -e "  正在下载: ${u} ..."
+    if curl -fsSL --connect-timeout 15 "$u" -o "${tmp_dir}/sing-box.tar.gz" 2>/dev/null; then
+      dl_ok=1
+      break
+    fi
+  done
+
+  if [[ "$dl_ok" -eq 0 ]]; then
+    echo -e "  ${R}[!] 下载 sing-box 失败，请检查网络连接。${N}"
+    return 1
+  fi
+
+  tar -xzf "${tmp_dir}/sing-box.tar.gz" -C "$tmp_dir"
+  local bin_found
+  bin_found=$(find "$tmp_dir" -type f -name "sing-box" | head -1)
+  if [[ -z "$bin_found" || ! -f "$bin_found" ]]; then
+    echo -e "  ${R}[!] 解压包中未找到 sing-box 二进制文件！${N}"
+    return 1
+  fi
+
+  install -m 755 "$bin_found" /usr/local/bin/sing-box
+  echo -e "  ${G}[✓] sing-box 已成功更新到最新稳定版: $(/usr/local/bin/sing-box version 2>/dev/null | head -1)${N}"
+  systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true
+  systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || true
+  return 0
+}
+
 check_and_update() {
+  echo
+  echo -e "${B}========================================${N}"
+  echo -e "${B}       检查与更新组件版本${N}"
+  echo -e "${B}========================================${N}"
+  echo -e "   1) 检查/更新 sout 插件与管理脚本"
+  echo -e "   2) 检查/更新 sing-box 原生内核到官方最新稳定版"
+  echo -e "   0) 返回上级菜单"
+  echo -e "${D}----------------------------------------${N}"
+  read -rp "  请选择 [0-2] (默认 1): " up_choice
+  up_choice=$(echo "$up_choice" | tr -d ' \r\n')
+  [[ -z "$up_choice" ]] && up_choice="1"
+
+  case "$up_choice" in
+    1) ;;
+    2) update_singbox_kernel; return $? ;;
+    0) return 0 ;;
+    *) return 0 ;;
+  esac
+
   echo
   echo -e "  ${B}正在连接 GitHub 检查最新版本...${N}"
   local cur_ver="dev"
@@ -3183,31 +3313,219 @@ cf_ssl_menu() {
   done
 }
 
+apply_tuic_hy2_to_singbox() {
+  local cert_domain="$1"
+  local cert_file="$2"
+  local key_file="$3"
+  local is_insecure="${4:-false}"
+
+  echo
+  echo -e "  ${B}[+] 正在为 sing-box 原生内核配置 TUIC / Hysteria2 入站...${N}"
+
+  local sb_conf="/etc/sing-box/config.json"
+  if [[ ! -f "$sb_conf" ]]; then
+    echo -e "  ${R}[!] sing-box 配置文件 ${sb_conf} 不存在！${N}"
+    return 1
+  fi
+
+  local default_server="$cert_domain"
+  local pip
+  pip=$(public_ip || true)
+  if [[ "$is_insecure" == "true" && -n "$pip" ]]; then
+    default_server="$pip"
+  fi
+
+  read -rp "  请输入客户端连接节点地址 (域名或IP) [默认 ${default_server}]: " node_server
+  node_server=$(echo "$node_server" | tr -d ' \r\n')
+  [[ -z "$node_server" ]] && node_server="$default_server"
+
+  local tuic_port="8443"
+  read -rp "  请输入 TUIC 监听端口 [默认 8443]: " in_tp
+  in_tp=$(echo "$in_tp" | tr -d ' \r\n')
+  [[ -n "$in_tp" ]] && tuic_port="$in_tp"
+
+  local hy2_port="443"
+  read -rp "  请输入 Hysteria2 监听端口 [默认 443]: " in_hp
+  in_hp=$(echo "$in_hp" | tr -d ' \r\n')
+  [[ -n "$in_hp" ]] && hy2_port="$in_hp"
+
+  local tuic_uuid
+  tuic_uuid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || true)
+  [[ -z "$tuic_uuid" ]] && tuic_uuid="a1b2c3d4-e5f6-7a8b-9c0d-ef1234567890"
+
+  local tuic_pass hy2_pass
+  tuic_pass=$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n' | cut -c1-8)
+  hy2_pass=$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n' | cut -c1-8)
+
+  read -rp "  请输入 TUIC 密码 [直接回车使用随机: ${tuic_pass}]: " in_tpass
+  in_tpass=$(echo "$in_tpass" | tr -d ' \r\n')
+  [[ -n "$in_tpass" ]] && tuic_pass="$in_tpass"
+
+  read -rp "  请输入 Hysteria2 密码 [直接回车使用随机: ${hy2_pass}]: " in_hpass
+  in_hpass=$(echo "$in_hpass" | tr -d ' \r\n')
+  [[ -n "$in_hpass" ]] && hy2_pass="$in_hpass"
+
+  cp -f "$sb_conf" "${sb_conf}.bak"
+  SB_CONF="$sb_conf" \
+  CERT_DOM="$cert_domain" \
+  CERT_FILE="$cert_file" \
+  KEY_FILE="$key_file" \
+  TUIC_PORT="$tuic_port" \
+  HY2_PORT="$hy2_port" \
+  TUIC_UUID="$tuic_uuid" \
+  TUIC_PASS="$tuic_pass" \
+  HY2_PASS="$hy2_pass" \
+  python3 <<'PYEOF'
+import json, os
+
+p = os.environ['SB_CONF']
+try:
+    with open(p, 'r') as f:
+        conf = json.load(f)
+except Exception:
+    conf = {}
+
+inbounds = conf.setdefault('inbounds', [])
+tuic_p = int(os.environ['TUIC_PORT'])
+hy2_p = int(os.environ['HY2_PORT'])
+
+cleaned = []
+for ib in inbounds:
+    if not isinstance(ib, dict): continue
+    t = ib.get('type')
+    port = ib.get('listen_port', 0)
+    tag = ib.get('tag', '')
+    if t in ('tuic', 'hysteria2') or tag in ('tuic-in', 'hy2-in') or port in (tuic_p, hy2_p):
+        continue
+    cleaned.append(ib)
+
+cleaned.append({
+    "type": "tuic",
+    "tag": "tuic-in",
+    "listen": "::",
+    "listen_port": tuic_p,
+    "users": [
+        {
+            "uuid": os.environ['TUIC_UUID'],
+            "password": os.environ['TUIC_PASS']
+        }
+    ],
+    "congestion_control": "bbr",
+    "tls": {
+        "enabled": True,
+        "server_name": os.environ['CERT_DOM'],
+        "certificate_path": os.environ['CERT_FILE'],
+        "key_path": os.environ['KEY_FILE']
+    }
+})
+
+cleaned.append({
+    "type": "hysteria2",
+    "tag": "hy2-in",
+    "listen": "::",
+    "listen_port": hy2_p,
+    "users": [
+        {
+            "password": os.environ['HY2_PASS']
+        }
+    ],
+    "tls": {
+        "enabled": True,
+        "server_name": os.environ['CERT_DOM'],
+        "certificate_path": os.environ['CERT_FILE'],
+        "key_path": os.environ['KEY_FILE']
+    }
+})
+
+conf['inbounds'] = cleaned
+with open(p, 'w') as f:
+    json.dump(conf, f, indent=2)
+PYEOF
+
+  if command -v sing-box >/dev/null 2>&1 || [[ -x /usr/local/bin/sing-box ]]; then
+    local sb_bin
+    sb_bin="$(command -v sing-box 2>/dev/null || echo '/usr/local/bin/sing-box')"
+    if ! "$sb_bin" check -c "$sb_conf" >/dev/null 2>&1; then
+      echo -e "  ${R}[×] sing-box 配置文件校验失败，已自动回滚原配置！${N}"
+      cp -f "${sb_conf}.bak" "$sb_conf"
+      return 1
+    fi
+  fi
+  rm -f "${sb_conf}.bak"
+
+  systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true
+
+  local insec_flag=0
+  [[ "$is_insecure" == "true" ]] && insec_flag=1
+
+  local tuic_link="tuic://${tuic_uuid}:${tuic_pass}@${node_server}:${tuic_port}?sni=${cert_domain}&alpn=h3&congestion_control=bbr&allow_insecure=${insec_flag}#TUIC-${cert_domain}"
+  local hy2_link="hysteria2://${hy2_pass}@${node_server}:${hy2_port}?sni=${cert_domain}&insecure=${insec_flag}#Hy2-${cert_domain}"
+
+  mkdir -p "$WORK_DIR"
+  cat > "${WORK_DIR}/nodes_tuic_hy2.txt" <<NODEOF
+TUIC 节点链接:
+${tuic_link}
+
+Hysteria2 节点链接:
+${hy2_link}
+NODEOF
+  chmod 600 "${WORK_DIR}/nodes_tuic_hy2.txt"
+
+  echo
+  echo -e "${G}================================================================${N}"
+  echo -e "${G}  🎉 TUIC / Hysteria2 节点已成功在 sing-box 原生内核中创建！${N}"
+  echo -e "${G}================================================================${N}"
+  echo -e "  [TUIC 节点]"
+  echo -e "  端口:        ${tuic_port} (UDP)"
+  echo -e "  UUID:        ${tuic_uuid}"
+  echo -e "  密码:        ${tuic_pass}"
+  echo -e "  分享链接:    ${B}${tuic_link}${N}"
+  echo
+  echo -e "  [Hysteria2 节点]"
+  echo -e "  端口:        ${hy2_port} (UDP)"
+  echo -e "  密码:        ${hy2_pass}"
+  echo -e "  分享链接:    ${B}${hy2_link}${N}"
+  echo -e "${G}================================================================${N}"
+  echo -e "  💡 节点链接已自动保存至: ${WORK_DIR}/nodes_tuic_hy2.txt"
+  return 0
+}
+
 create_tuic_hy2_nodes() {
   echo
   echo -e "${B}========================================${N}"
   echo -e "${B}     创建 TUIC / Hysteria2 节点${N}"
   echo -e "${B}========================================${N}"
 
+  local cur_backend
+  cur_backend=$(cat "${WORK_DIR}/panel_mode" 2>/dev/null || echo "")
+  if [[ -z "$cur_backend" ]]; then
+    if [[ -f /usr/local/s-ui/db/s-ui.db ]]; then cur_backend="s-ui"
+    elif [[ -f /etc/sing-box/config.json ]]; then cur_backend="sing-box"
+    fi
+  fi
+
   local sui_db="/usr/local/s-ui/db/s-ui.db"
-  if [[ ! -f "$sui_db" ]]; then
-    echo -e "  ${R}[!] 未检测到 s-ui 面板，请先安装并配置 s-ui。${N}"
-    return 1
-  fi
+  local sui_token=""
+  local cur_port="" cur_path="" sui_api=""
 
-  local sui_token
-  sui_token=$(get_or_create_sui_token "$sui_db")
-  if [[ -z "$sui_token" ]]; then
-    echo -e "  ${R}[!] 未能获取到 s-ui API Token，请先在终端运行一次 sout 生成凭据。${N}"
-    return 1
-  fi
+  if [[ "$cur_backend" != "sing-box" ]]; then
+    if [[ ! -f "$sui_db" ]]; then
+      echo -e "  ${R}[!] 未检测到 s-ui 面板，请先安装并配置 s-ui。${N}"
+      return 1
+    fi
 
-  local cur_port cur_path
-  cur_port=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPort'" 2>/dev/null || echo "8443")
-  cur_path=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPath'" 2>/dev/null || echo "/app/")
-  cur_path="/${cur_path#/}"
-  [[ "$cur_path" != */ ]] && cur_path="${cur_path}/"
-  local sui_api="http://127.0.0.1:${cur_port}${cur_path}apiv2"
+    sui_token=$(get_or_create_sui_token "$sui_db")
+    if [[ -z "$sui_token" ]]; then
+      echo -e "  ${R}[!] 未能获取到 s-ui API Token，请先在终端运行一次 sout 生成凭据。${N}"
+      return 1
+    fi
+
+    cur_port=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPort'" 2>/dev/null || echo "8443")
+    cur_path=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPath'" 2>/dev/null || echo "/app/")
+    cur_path="/${cur_path#/}"
+    [[ "$cur_path" != */ ]] && cur_path="${cur_path}/"
+    sui_api="http://127.0.0.1:${cur_port}${cur_path}apiv2"
+  fi
 
   local in_domain="${1:-}"
   local in_cert_file="${2:-}"
@@ -3354,6 +3672,11 @@ create_tuic_hy2_nodes() {
       echo -e "  ${Y}无效选项，已取消。${N}"
       return 1
     fi
+  fi
+
+  if [[ "$cur_backend" == "sing-box" ]]; then
+    apply_tuic_hy2_to_singbox "$cert_domain" "$cert_file" "$key_file" "$is_insecure"
+    return $?
   fi
 
   # 查询当前是否已存在 TUIC / Hysteria2 节点
