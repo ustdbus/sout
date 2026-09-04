@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -365,7 +364,7 @@ func (sb *SingBox) buildLinksForInbound(ibMap map[string]any, publicHost string)
 		if sn, ok := tlsMap["server_name"].(string); ok && sn != "" {
 			sni = sn
 		}
-		if insec, ok := tlsMap["insecure"].(bool); insec {
+		if insec, _ := tlsMap["insecure"].(bool); insec {
 			allowInsecure = "1"
 		}
 	}
@@ -1003,17 +1002,7 @@ func getFloat(val any) float64 {
 	}
 }
 
-func hasCmd(cmd string) bool {
-	_, err := exec.LookPath(cmd)
-	return err == nil
-}
-
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
-}
-
-func dirExists(p string) bool {
-	st, err := os.Stat(p)
-	return err == nil && st.IsDir()
 }
