@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -e
+mkdir -p /var/tmp && export TMPDIR=/var/tmp
 
 REPO="${REPO:-ustdbus/sout}"
 BIN="/usr/local/bin/sout-server"
@@ -100,43 +101,22 @@ install_singbox() {
     local dl_ok=0
     for u in "${download_urls[@]}"; do
       echo "      正在下载内核: ${u} ..."
-      rm -f "${tmp_dir}/sing-box.tar.gz"
-      if curl -fL -# --connect-timeout 10 --max-time 180 "$u" -o "${tmp_dir}/sing-box.tar.gz" && tar -tzf "${tmp_dir}/sing-box.tar.gz" >/dev/null 2>&1; then
-        dl_ok=1
-        break
+      rm -f /usr/local/bin/sing-box
+      if curl -fL -# --connect-timeout 10 --max-time 180 "$u" | tar -xzf - --wildcards "*/sing-box" -O > /usr/local/bin/sing-box 2>/dev/null && [[ -s /usr/local/bin/sing-box ]]; then
+        chmod 755 /usr/local/bin/sing-box
+        if /usr/local/bin/sing-box version >/dev/null 2>&1; then
+          dl_ok=1
+          break
+        fi
       fi
     done
 
     if [[ "$dl_ok" -eq 0 ]]; then
-      echo "  [!] 下载 sing-box 内核失败，请检查网络连接。" >&2
-      rm -rf "$tmp_dir"
+      echo "  [!] 下载并校验 sing-box 内核失败，请检查网络连接。" >&2
+      rm -f /usr/local/bin/sing-box
       return 1
     fi
 
-    tar -xzf "${tmp_dir}/sing-box.tar.gz" -C "$tmp_dir"
-    local bin_found
-    bin_found=$(find "$tmp_dir" -type f -name "sing-box" | head -1)
-    if [[ -z "$bin_found" || ! -f "$bin_found" ]]; then
-      echo "  [!] 解压缩包中未找到 sing-box 二进制文件！" >&2
-      rm -rf "$tmp_dir"
-      return 1
-    fi
-
-    # 如存在 libcronet.so 库则一并安装
-    local lib_found
-    lib_found=$(find "$tmp_dir" -type f -name "libcronet.so" | head -1)
-    if [[ -n "$lib_found" && -f "$lib_found" ]]; then
-      install -m 755 "$lib_found" /usr/local/lib/libcronet.so 2>/dev/null || true
-      command -v ldconfig >/dev/null 2>&1 && ldconfig 2>/dev/null || true
-    fi
-
-    install -m 755 "$bin_found" /usr/local/bin/sing-box
-    rm -rf "$tmp_dir"
-
-    if ! /usr/local/bin/sing-box version >/dev/null 2>&1; then
-      echo "  [!] sing-box 二进制校验失败，无法执行！" >&2
-      return 1
-    fi
     echo "      sing-box 原生内核已就绪: $(/usr/local/bin/sing-box version 2>/dev/null | head -1 || echo 'ok')"
   else
     echo "      成功复用本地 sing-box 内核: $(/usr/local/bin/sing-box version 2>/dev/null | head -1 || echo 'ok')"
