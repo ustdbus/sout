@@ -1316,7 +1316,8 @@ update_singbox_kernel() {
   local dl_ok=0
   for u in "${download_urls[@]}"; do
     echo -e "  正在下载: ${u} ..."
-    if curl -fsSL --connect-timeout 15 "$u" -o "${tmp_dir}/sing-box.tar.gz" 2>/dev/null; then
+    rm -f "${tmp_dir}/sing-box.tar.gz"
+    if curl -fsSL --connect-timeout 10 --max-time 180 "$u" -o "${tmp_dir}/sing-box.tar.gz" 2>/dev/null && tar -tzf "${tmp_dir}/sing-box.tar.gz" >/dev/null 2>&1; then
       dl_ok=1
       break
     fi
@@ -1335,7 +1336,18 @@ update_singbox_kernel() {
     return 1
   fi
 
+  local lib_found
+  lib_found=$(find "$tmp_dir" -type f -name "libcronet.so" | head -1)
+  if [[ -n "$lib_found" && -f "$lib_found" ]]; then
+    install -m 755 "$lib_found" /usr/local/lib/libcronet.so 2>/dev/null || true
+    command -v ldconfig >/dev/null 2>&1 && ldconfig 2>/dev/null || true
+  fi
+
   install -m 755 "$bin_found" /usr/local/bin/sing-box
+  if ! /usr/local/bin/sing-box version >/dev/null 2>&1; then
+    echo -e "  ${R}[!] sing-box 二进制校验失败，无法执行！${N}"
+    return 1
+  fi
   echo -e "  ${G}[✓] sing-box 已成功更新到最新稳定版: $(/usr/local/bin/sing-box version 2>/dev/null | head -1)${N}"
   systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true
   systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || true

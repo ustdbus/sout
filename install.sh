@@ -100,7 +100,8 @@ install_singbox() {
     local dl_ok=0
     for u in "${download_urls[@]}"; do
       echo "      正在下载内核: ${u} ..."
-      if curl -fsSL --connect-timeout 15 "$u" -o "${tmp_dir}/sing-box.tar.gz" 2>/dev/null; then
+      rm -f "${tmp_dir}/sing-box.tar.gz"
+      if curl -fsSL --connect-timeout 10 --max-time 180 "$u" -o "${tmp_dir}/sing-box.tar.gz" 2>/dev/null && tar -tzf "${tmp_dir}/sing-box.tar.gz" >/dev/null 2>&1; then
         dl_ok=1
         break
       fi
@@ -121,8 +122,21 @@ install_singbox() {
       return 1
     fi
 
+    # 如存在 libcronet.so 库则一并安装
+    local lib_found
+    lib_found=$(find "$tmp_dir" -type f -name "libcronet.so" | head -1)
+    if [[ -n "$lib_found" && -f "$lib_found" ]]; then
+      install -m 755 "$lib_found" /usr/local/lib/libcronet.so 2>/dev/null || true
+      command -v ldconfig >/dev/null 2>&1 && ldconfig 2>/dev/null || true
+    fi
+
     install -m 755 "$bin_found" /usr/local/bin/sing-box
     rm -rf "$tmp_dir"
+
+    if ! /usr/local/bin/sing-box version >/dev/null 2>&1; then
+      echo "  [!] sing-box 二进制校验失败，无法执行！" >&2
+      return 1
+    fi
     echo "      sing-box 原生内核已就绪: $(/usr/local/bin/sing-box version 2>/dev/null | head -1 || echo 'ok')"
   else
     echo "      成功复用本地 sing-box 内核: $(/usr/local/bin/sing-box version 2>/dev/null | head -1 || echo 'ok')"
@@ -747,9 +761,20 @@ if [[ -f main.go ]] && command -v go >/dev/null; then
 else
   echo "      正在拉取预编译包 (${GOARCH})..."
   TMP=$(mktemp -d)
-  URL="https://github.com/${REPO}/releases/latest/download/sout-linux-${GOARCH}.tar.gz"
-  if ! curl -fsSL "$URL" -o "$TMP/f.tar.gz"; then
-    echo "      下载失败: $URL" >&2
+  local sout_urls=(
+    "https://github.com/${REPO}/releases/latest/download/sout-linux-${GOARCH}.tar.gz"
+    "https://ghproxy.net/https://github.com/${REPO}/releases/latest/download/sout-linux-${GOARCH}.tar.gz"
+  )
+  local sout_dl_ok=0
+  for u in "${sout_urls[@]}"; do
+    if curl -fsSL --connect-timeout 10 --max-time 120 "$u" -o "$TMP/f.tar.gz" && tar -tzf "$TMP/f.tar.gz" >/dev/null 2>&1; then
+      sout_dl_ok=1
+      break
+    fi
+  done
+  if [[ "$sout_dl_ok" -eq 0 ]]; then
+    echo "      下载失败: 无法获取 sout-linux-${GOARCH}.tar.gz，请检查网络！" >&2
+    rm -rf "$TMP"
     exit 1
   fi
   tar xzf "$TMP/f.tar.gz" -C "$TMP"
