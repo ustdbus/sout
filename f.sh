@@ -1996,9 +1996,18 @@ else:
                 u_uuid = p_cfg.get('uuid') or str(uuid.uuid4())
                 u_pass = p_cfg.get('password') or ''
                 u_flow = p_cfg.get('flow', '')
-                user_obj = {'name': admin_name, 'uuid': u_uuid}
-                if u_pass: user_obj['password'] = u_pass
-                if u_flow and proto == 'vless': user_obj['flow'] = u_flow
+                if proto == 'vmess':
+                    user_obj = {'name': admin_name, 'uuid': u_uuid}
+                elif proto == 'vless':
+                    user_obj = {'name': admin_name, 'uuid': u_uuid}
+                    if u_flow: user_obj['flow'] = u_flow
+                elif proto == 'tuic':
+                    user_obj = {'name': admin_name, 'uuid': u_uuid, 'password': u_pass or os.urandom(8).hex()}
+                elif proto in ['hysteria2', 'shadowsocks', 'trojan']:
+                    user_obj = {'name': admin_name, 'password': u_pass or os.urandom(8).hex()}
+                else:
+                    user_obj = {'name': admin_name, 'uuid': u_uuid}
+                    if u_pass: user_obj['password'] = u_pass
                 s_ib['users'] = [user_obj]
 
                 tid = ib.get('tls_id')

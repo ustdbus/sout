@@ -253,6 +253,19 @@ func (sb *SingBox) Inbounds(live map[string]bool) ([]Inbound, error) {
 					boundUp = live[sanitizeTag(boundHost)]
 				}
 				branchRemark := fmt.Sprintf("%s [出口: %s]", remark, boundHost)
+				bindings := loadBranchBindings(sb.workDir)
+				for _, b := range bindings {
+					if b.Host != "" && strings.Contains(userName, sanitizeTag(b.Host)) {
+						if b.Region != "" {
+							pName := "家宽"
+							if b.PoolType == "datacenter" {
+								pName = "机房"
+							}
+							branchRemark = fmt.Sprintf("%s [%s%s]", remark, countryNameCN(b.Region, ""), pName)
+						}
+						break
+					}
+				}
 
 				result = append(result, Inbound{
 					ID:       baseID,
@@ -477,8 +490,12 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 		for _, b := range bindings {
 			if b.Host != "" && strings.Contains(uName, sanitizeTag(b.Host)) {
 				if b.Region != "" {
+					pName := "家宽"
+					if b.PoolType == "datacenter" {
+						pName = "机房"
+					}
 					cName := countryNameCN(b.Region, "")
-					matchedRegion = fmt.Sprintf("[%s家宽]", cName)
+					matchedRegion = fmt.Sprintf("[%s%s]", cName, pName)
 				}
 				break
 			}
@@ -764,26 +781,38 @@ func (sb *SingBox) CloneToTunnels(templateID int, hosts []string, tunnels []*Tun
 		}
 
 		if !exists {
-			newClient := map[string]any{
-				"name":     clientName,
-				"uuid":     generateUUID(),
-				"password": generateRandomPassword(16),
+			var sampleUser map[string]any
+			for _, u := range usersRaw {
+				if uMap, ok := u.(map[string]any); ok {
+					sampleUser = uMap
+					break
+				}
 			}
+			ibType, _ := ibMap["type"].(string)
+			newClient := makeSingboxUser(ibType, clientName, sampleUser)
 			usersRaw = append(usersRaw, newClient)
 		}
 
-		// 添加或更新 route.rules 规则
+		// 添加或更新 route.rules 规则 (针对 clientName 精准匹配)
 		outboundTag := "sout" + hTag
-		ruleExists := false
+		ruleFound := false
 		for _, r := range rulesRaw {
 			if rMap, ok := r.(map[string]any); ok {
-				if rMap["outbound"] == outboundTag {
-					ruleExists = true
+				if authUsers, ok := rMap["auth_user"].([]any); ok {
+					for _, au := range authUsers {
+						if au == clientName {
+							rMap["outbound"] = outboundTag
+							ruleFound = true
+							break
+						}
+					}
+				}
+				if ruleFound {
 					break
 				}
 			}
 		}
-		if !ruleExists {
+		if !ruleFound {
 			newRule := map[string]any{
 				"auth_user": []any{clientName},
 				"outbound":  outboundTag,
@@ -1108,10 +1137,9 @@ func (sb *SingBox) CreateInbound(spec NewInboundSpec, tunnels []*Tunnel) (*Creat
 		"listen_port": port,
 	}
 
-	defaultUser := map[string]any{
-		"name":     "default",
-		"uuid":     generateUUID(),
-		"password": generateRandomPassword(16),
+	defaultUser := makeSingboxUser(spec.Protocol, "default", nil)
+	if spec.Protocol == "vless" && spec.Security == "reality" {
+		defaultUser["flow"] = "xtls-rprx-vision"
 	}
 	newIb["users"] = []any{defaultUser}
 
@@ -1347,23 +1375,41 @@ func (sb *SingBox) OnTunnelsChanged(tunnels []*Tunnel) error {
 				}
 			}
 			if !userExists {
-				usersRaw = append(usersRaw, map[string]any{
-					"name":     clientName,
-					"uuid":     generateUUID(),
-					"password": generateRandomPassword(16),
-				})
+				var sampleUser map[string]any
+				for _, u := range usersRaw {
+					if uMap, ok := u.(map[string]any); ok {
+						sampleUser = uMap
+						break
+					}
+				}
+				ibType, _ := ibMap["type"].(string)
+				newClient := makeSingboxUser(ibType, clientName, sampleUser)
+				usersRaw = append(usersRaw, newClient)
 				ibMap["users"] = usersRaw
 				changed = true
 			}
 
-			ruleExists := false
+			ruleFound := false
 			for _, r := range rulesRaw {
-				if rMap, ok := r.(map[string]any); ok && rMap["outbound"] == outboundTag {
-					ruleExists = true
-					break
+				if rMap, ok := r.(map[string]any); ok {
+					if authUsers, ok := rMap["auth_user"].([]any); ok {
+						for _, au := range authUsers {
+							if au == clientName {
+								if rMap["outbound"] != outboundTag {
+									rMap["outbound"] = outboundTag
+									changed = true
+								}
+								ruleFound = true
+								break
+							}
+						}
+					}
+					if ruleFound {
+						break
+					}
 				}
 			}
-			if !ruleExists {
+			if !ruleFound {
 				rulesRaw = append([]any{map[string]any{
 					"auth_user": []any{clientName},
 					"outbound":  outboundTag,
@@ -1393,6 +1439,56 @@ func generateRandomPassword(length int) string {
 		b[i] = charset[int(b[i])%len(charset)]
 	}
 	return string(b)
+}
+
+// makeSingboxUser 根据入站协议类型生成符合 sing-box 严格校验的合法 user 字典
+func makeSingboxUser(proto, clientName string, sampleUser map[string]any) map[string]any {
+	proto = strings.ToLower(strings.TrimSpace(proto))
+	u := map[string]any{
+		"name": clientName,
+	}
+
+	switch proto {
+	case "vmess":
+		u["uuid"] = generateUUID()
+		if sampleUser != nil {
+			if aid, ok := sampleUser["alterId"]; ok {
+				u["alterId"] = aid
+			}
+		}
+	case "vless":
+		u["uuid"] = generateUUID()
+		if sampleUser != nil {
+			if flow, ok := sampleUser["flow"].(string); ok && flow != "" {
+				u["flow"] = flow
+			}
+		}
+	case "tuic":
+		u["uuid"] = generateUUID()
+		u["password"] = generateRandomPassword(16)
+	case "hysteria2", "hy2":
+		u["password"] = generateRandomPassword(16)
+	case "shadowsocks", "ss", "trojan":
+		u["password"] = generateRandomPassword(16)
+	default:
+		if sampleUser != nil {
+			_, hasUUID := sampleUser["uuid"]
+			_, hasPass := sampleUser["password"]
+			if hasUUID && !hasPass {
+				u["uuid"] = generateUUID()
+			} else if hasPass && !hasUUID {
+				u["password"] = generateRandomPassword(16)
+			} else {
+				u["uuid"] = generateUUID()
+				u["password"] = generateRandomPassword(16)
+			}
+		} else {
+			u["uuid"] = generateUUID()
+			u["password"] = generateRandomPassword(16)
+		}
+	}
+
+	return u
 }
 
 func getFloat(val any) float64 {
