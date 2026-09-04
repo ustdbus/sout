@@ -41,6 +41,48 @@ type Panel interface {
 	Close()
 }
 
+type Inbound struct {
+	ID       int    `json:"id"`
+	ClientID int    `json:"client_id,omitempty"`
+	Port     int    `json:"port"`
+	Protocol string `json:"protocol"`
+	Remark   string `json:"remark"`
+	Enable   bool   `json:"enable"`
+	Tag      string `json:"tag"`
+	BoundTo  string `json:"route_to,omitempty"`
+	BoundUp  bool   `json:"bound_up,omitempty"`
+	IsBase   bool   `json:"is_base,omitempty"`
+}
+
+type InboundDetail struct {
+	Inbound
+	Clients []ClientInfo `json:"clients"`
+	Links   []string     `json:"links"`
+	Listen  string       `json:"listen"`
+	Network string       `json:"network"`
+	TLS     string       `json:"tls"`
+}
+
+type ClientInfo struct {
+	Email  string `json:"email"`
+	ID     string `json:"id"`
+	Enable bool   `json:"enable"`
+}
+
+func sanitizeTag(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "node"
+	}
+	return strings.ToLower(b.String())
+}
+
 type NodeAddrItem struct {
 	Server     string `json:"server"`
 	ServerPort int    `json:"server_port"`
