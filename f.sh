@@ -1836,57 +1836,205 @@ except Exception:
 " 2>/dev/null || true
   fi
 
+  local has_sui=false
+  local sui_token=""
   if [[ -f "$sui_db" ]]; then
-    local sui_token
+    has_sui=true
     sui_token=$(get_or_create_sui_token "$sui_db")
+  fi
 
-    if [[ -z "$sui_token" ]]; then
-      echo -e "  ${Y}[!] 未找到 s-ui API Token，跳过自动配置（请先启动 sout 生成 Token）${N}"
-    else
-      echo -e "  [+] 正在通过 s-ui API 自动配置 (路径分流与动态分流节点)..."
-      if ! SUI_API="http://127.0.0.1:${sui_port}/${sui_path}/apiv2" \
-      SUI_TOKEN="$sui_token" \
-      SUI_DB="$sui_db" \
-      DOMAIN="$domain" \
-      PUBLIC_IP="$public_ip" \
-      SUI_PORT="$sui_port" \
-      SUI_PATH="/${sui_path}/" \
-      SUB_PORT="$sub_port" \
-      SUB_PATH="/${sub_path}/" \
-      NODE_PORT="$node_port" \
-      REALITY_PORT="$reality_port" \
-      TUIC_PORT="$tuic_port" \
-      HY2_PORT="$hy2_port" \
-      WS_PATH="/${ws_path}" \
-      SUI_ADMIN_USER="$sui_admin_user" \
-      APPLY_CERT="$apply_cert" \
-      CONGESTION_CONTROL="$cur_cc" \
-      python3 <<'PYEOF'
-import json, os, sqlite3, uuid, urllib.request, urllib.parse, string, random, base64
+  echo -e "  [+] 正在自动配置基础节点 (vmess-argo 路径分流与 vless-reality)..."
+  if ! SUI_API="http://127.0.0.1:${sui_port}/${sui_path}/apiv2" \
+  SUI_TOKEN="$sui_token" \
+  SUI_DB="$sui_db" \
+  HAS_SUI="$has_sui" \
+  DOMAIN="$domain" \
+  PUBLIC_IP="$public_ip" \
+  SUI_PORT="$sui_port" \
+  SUI_PATH="/${sui_path}/" \
+  SUB_PORT="$sub_port" \
+  SUB_PATH="/${sub_path}/" \
+  NODE_PORT="$node_port" \
+  REALITY_PORT="$reality_port" \
+  TUIC_PORT="$tuic_port" \
+  HY2_PORT="$hy2_port" \
+  WS_PATH="/${ws_path}" \
+  SUI_ADMIN_USER="$sui_admin_user" \
+  APPLY_CERT="$apply_cert" \
+  CONGESTION_CONTROL="$cur_cc" \
+  python3 <<'PYEOF'
+import json, os, uuid, urllib.request, urllib.parse, string, random, base64
 
-con = sqlite3.connect(os.environ['SUI_DB'])
-cur = con.cursor()
-cur.execute("SELECT value FROM settings WHERE key='webPort'")
-cur_port_row = cur.fetchone()
-cur_port = cur_port_row[0] if cur_port_row and cur_port_row[0] else '8443'
-cur.execute("SELECT value FROM settings WHERE key='webPath'")
-cur_path_row = cur.fetchone()
-cur_path = cur_path_row[0] if cur_path_row and cur_path_row[0] else '/app/'
-if not cur_path.startswith('/'): cur_path = '/' + cur_path
-if not cur_path.endswith('/'): cur_path += '/'
-con.close()
-BASE = f'http://127.0.0.1:{cur_port}{cur_path}apiv2'
-TOKEN = os.environ['SUI_TOKEN']
+has_sui = (os.environ.get('HAS_SUI') == 'true') and os.path.exists(os.environ.get('SUI_DB', '')) and bool(os.environ.get('SUI_TOKEN'))
 
-def api(method, endpoint, form=None):
-    url = BASE.rstrip('/') + '/' + endpoint.lstrip('/')
-    data = urllib.parse.urlencode(form).encode() if form else None
-    headers = {'Token': TOKEN}
-    if data is not None:
-        headers['Content-Type'] = 'application/x-www-form-urlencoded'
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        return json.loads(resp.read().decode('utf-8'))
+if has_sui:
+    import sqlite3
+    con = sqlite3.connect(os.environ['SUI_DB'])
+    cur = con.cursor()
+    cur.execute("SELECT value FROM settings WHERE key='webPort'")
+    cur_port_row = cur.fetchone()
+    cur_port = cur_port_row[0] if cur_port_row and cur_port_row[0] else '8443'
+    cur.execute("SELECT value FROM settings WHERE key='webPath'")
+    cur_path_row = cur.fetchone()
+    cur_path = cur_path_row[0] if cur_path_row and cur_path_row[0] else '/app/'
+    if not cur_path.startswith('/'): cur_path = '/' + cur_path
+    if not cur_path.endswith('/'): cur_path += '/'
+    con.close()
+    BASE = f'http://127.0.0.1:{cur_port}{cur_path}apiv2'
+    TOKEN = os.environ['SUI_TOKEN']
+
+    def api(method, endpoint, form=None):
+        url = BASE.rstrip('/') + '/' + endpoint.lstrip('/')
+        data = urllib.parse.urlencode(form).encode() if form else None
+        headers = {'Token': TOKEN}
+        if data is not None:
+            headers['Content-Type'] = 'application/x-www-form-urlencoded'
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return json.loads(resp.read().decode('utf-8'))
+else:
+    class SingboxAPICompat:
+        def __init__(self, config_path='/etc/sing-box/config.json', addrs_path='/var/lib/sout/singbox_inbound_addrs.json'):
+            self.config_path = config_path
+            self.addrs_path = addrs_path
+            self.tls_list = []
+            self.inbounds_list = []
+            self.clients_list = []
+            self._load()
+
+        def _load(self):
+            try:
+                with open(self.config_path, 'r') as f:
+                    conf = json.load(f)
+            except Exception:
+                conf = {}
+            for idx, ib in enumerate(conf.get('inbounds', [])):
+                self.inbounds_list.append({
+                    'id': (idx + 1) * 1000,
+                    'type': ib.get('type', ''),
+                    'tag': ib.get('tag', ''),
+                    'listen_port': ib.get('listen_port', 0),
+                    'addrs': ib.get('addrs', []),
+                    'raw': ib
+                })
+
+        def request(self, method, endpoint, form=None):
+            ep = endpoint.strip('/')
+            if method == 'GET':
+                if ep == 'inbounds': return {'success': True, 'obj': {'inbounds': self.inbounds_list}}
+                elif ep == 'tls': return {'success': True, 'obj': {'tls': self.tls_list}}
+                elif ep == 'clients': return {'success': True, 'obj': {'clients': self.clients_list}}
+                return {'success': True, 'obj': {}}
+            elif method == 'POST' and ep == 'save':
+                obj = form.get('object')
+                action = form.get('action')
+                data = json.loads(form.get('data', '{}'))
+                if obj == 'tls':
+                    if action == 'new':
+                        data['id'] = len(self.tls_list) + 1
+                        self.tls_list.append(data)
+                        return {'success': True, 'obj': {'id': data['id']}}
+                    elif action == 'edit':
+                        for i, t in enumerate(self.tls_list):
+                            if t.get('id') == data.get('id') or t.get('name') == data.get('name'):
+                                self.tls_list[i] = data
+                                break
+                        return {'success': True}
+                elif obj == 'inbounds':
+                    if action == 'new':
+                        data['id'] = (len(self.inbounds_list) + 1) * 1000
+                        self.inbounds_list.append(data)
+                        return {'success': True, 'obj': {'id': data['id']}}
+                    elif action == 'edit':
+                        for i, ib in enumerate(self.inbounds_list):
+                            if ib.get('id') == data.get('id') or ib.get('tag') == data.get('tag'):
+                                self.inbounds_list[i] = data
+                                break
+                        return {'success': True}
+                elif obj == 'clients':
+                    if action == 'new':
+                        data['id'] = 1
+                        self.clients_list.append(data)
+                        return {'success': True, 'obj': {'id': 1}}
+                    elif action == 'edit':
+                        for i, c in enumerate(self.clients_list):
+                            if c.get('id') == data.get('id') or c.get('name') == data.get('name'):
+                                self.clients_list[i] = data
+                                break
+                        else:
+                            self.clients_list.append(data)
+                        return {'success': True}
+                elif obj == 'settings':
+                    return {'success': True}
+            return {'success': True}
+
+        def flush(self):
+            try:
+                with open(self.config_path, 'r') as f: conf = json.load(f)
+            except Exception: conf = {}
+            admin_cfg = self.clients_list[0].get('config', {}) if self.clients_list else {}
+            admin_name = self.clients_list[0].get('name', 'default') if self.clients_list else 'default'
+            tls_map = {t['id']: t for t in self.tls_list}
+            final_inbs = []
+            addrs_store = {}
+
+            seen_tags = set()
+            for ib in self.inbounds_list:
+                tag = ib.get('tag')
+                proto = ib.get('type')
+                if not tag or not proto or tag in seen_tags: continue
+                seen_tags.add(tag)
+
+                if ib.get('addrs'): addrs_store[tag] = ib['addrs']
+                s_ib = {
+                    'type': proto,
+                    'tag': tag,
+                    'listen': ib.get('listen', '::'),
+                    'listen_port': int(ib.get('listen_port', 0))
+                }
+                p_cfg = admin_cfg.get(proto, {})
+                u_uuid = p_cfg.get('uuid') or str(uuid.uuid4())
+                u_pass = p_cfg.get('password') or ''
+                u_flow = p_cfg.get('flow', '')
+                user_obj = {'name': admin_name, 'uuid': u_uuid}
+                if u_pass: user_obj['password'] = u_pass
+                if u_flow and proto == 'vless': user_obj['flow'] = u_flow
+                s_ib['users'] = [user_obj]
+
+                tid = ib.get('tls_id')
+                if tid and tid in tls_map:
+                    t_obj = tls_map[tid]
+                    t_srv = t_obj.get('server', {})
+                    if 'reality' in t_srv:
+                        s_ib['tls'] = {
+                            'enabled': True,
+                            'server_name': t_srv.get('server_name', 'apple.com'),
+                            'reality': t_srv.get('reality', {})
+                        }
+                    elif t_obj.get('certificate_path'):
+                        s_ib['tls'] = {
+                            'enabled': True,
+                            'server_name': t_obj.get('server_name', ''),
+                            'certificate_path': t_obj.get('certificate_path'),
+                            'key_path': t_obj.get('key_path')
+                        }
+                if ib.get('transport'): s_ib['transport'] = ib['transport']
+                final_inbs.append(s_ib)
+
+            conf['inbounds'] = final_inbs
+            os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
+            with open(self.config_path, 'w') as f: json.dump(conf, f, indent=2)
+
+            os.makedirs(os.path.dirname(self.addrs_path), exist_ok=True)
+            try:
+                with open(self.addrs_path, 'r') as f: cur_addrs = json.load(f)
+            except Exception: cur_addrs = {}
+            cur_addrs.update(addrs_store)
+            with open(self.addrs_path, 'w') as f: json.dump(cur_addrs, f, indent=2)
+
+    compat = SingboxAPICompat()
+    def api(method, endpoint, form=None):
+        return compat.request(method, endpoint, form)
 
 # 1. 更新 s-ui settings，全部走 s-ui API
 settings_data = {
@@ -2170,13 +2318,18 @@ api('POST', 'save', {
     'action': 'edit' if admin else 'new',
     'data': json.dumps(client_payload)
 })
+
+if not has_sui:
+    compat.flush()
 PYEOF
-      then
-        echo -e "  ${Y}[!] s-ui API 自动配置未完成，请稍后在 s-ui 面板手动补充节点/订阅。${N}"
-      fi
-      systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || service s-ui restart 2>/dev/null || true
-    fi
+  then
+    echo -e "  ${Y}[!] 节点 API 自动配置未完成，请稍后手动检查。${N}"
+  fi
+
+  if [[ "$has_sui" == "true" ]]; then
     systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || service s-ui restart 2>/dev/null || true
+  else
+    systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || service sing-box restart 2>/dev/null || true
   fi
 
   # 5. 自动化配置 sout
