@@ -740,12 +740,12 @@ if [[ -f main.go ]] && command -v go >/dev/null; then
   CGO_ENABLED=0 go build -trimpath -tags "with_gvisor with_quic netgo osusergo" -ldflags "-s -w" -o "$BIN" .
 else
   echo "      正在拉取预编译包 (${GOARCH})..."
-  TMP=$(mktemp -d)
-  local sout_urls=(
+  TMP=$(mktemp -d -p /var/tmp)
+  sout_urls=(
     "https://github.com/${REPO}/releases/latest/download/sout-linux-${GOARCH}.tar.gz"
     "https://ghproxy.net/https://github.com/${REPO}/releases/latest/download/sout-linux-${GOARCH}.tar.gz"
   )
-  local sout_dl_ok=0
+  sout_dl_ok=0
   for u in "${sout_urls[@]}"; do
     if curl -fL -# --connect-timeout 10 --max-time 120 "$u" -o "$TMP/f.tar.gz" && tar -tzf "$TMP/f.tar.gz" >/dev/null 2>&1; then
       sout_dl_ok=1
