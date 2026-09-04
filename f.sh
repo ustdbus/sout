@@ -1317,7 +1317,7 @@ update_singbox_kernel() {
   for u in "${download_urls[@]}"; do
     echo -e "  正在下载: ${u} ..."
     rm -f "${tmp_dir}/sing-box.tar.gz"
-    if curl -fsSL --connect-timeout 10 --max-time 180 "$u" -o "${tmp_dir}/sing-box.tar.gz" 2>/dev/null && tar -tzf "${tmp_dir}/sing-box.tar.gz" >/dev/null 2>&1; then
+    if curl -fL -# --connect-timeout 10 --max-time 180 "$u" -o "${tmp_dir}/sing-box.tar.gz" && tar -tzf "${tmp_dir}/sing-box.tar.gz" >/dev/null 2>&1; then
       dl_ok=1
       break
     fi
