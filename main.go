@@ -19,7 +19,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v2.10.0"
+var version = "v2.10.1"
 
 func main() {
 	var (
@@ -45,7 +45,7 @@ func main() {
 	}
 
 	if os.Geteuid() != 0 {
-		log.Fatal("需要 root 权限（要创建 netns 和改 iptables）")
+		log.Fatal("需要 root 权限（服务监听与状态管理）")
 	}
 
 	// 自动平滑迁移历史工作目录

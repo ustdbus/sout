@@ -56,11 +56,10 @@ func (m *Manager) WatchHealth() {
 	}
 }
 
-// tunnelHealthy 判断隧道是否还真的走在 VPN 上。
+// tunnelHealthy 判断隧道是否还真的走在指定出口上。
 //
-// 只看"能不能出网"是不够的：netns 通过 veth 走母机 NAT，
-// openvpn 死掉后照样能出网，只是出口变回了母机 IP。
-// 所以要比对出口 IP 是否仍是建立隧道时拿到的那个。
+// 必须比对出口 IP 是否仍是建立隧道时拿到的那个，
+// 避免隧道断开后回退到母机原生网络。
 func (m *Manager) tunnelHealthy(t *Tunnel) bool {
 	if t.Kind == "custom" {
 		remoteAddr := fmt.Sprintf("%s:%d", t.CustomHost, t.CustomPort)
