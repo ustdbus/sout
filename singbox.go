@@ -558,13 +558,16 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 		}
 	}
 
+	if proto == "vmess" && wsHost != "" && net.ParseIP(wsHost) == nil {
+		sni = wsHost
+	}
+
 	if len(addrs) == 0 {
 		serverAddr := defaultHost
 		serverPort := listenPort
 		if proto == "vmess" && wsHost != "" && net.ParseIP(wsHost) == nil {
 			serverAddr = wsHost
 			serverPort = 443
-			sni = wsHost
 		}
 		addrs = []NodeAddrItem{
 			{
@@ -1251,16 +1254,19 @@ func (sb *SingBox) UpdateNodeConfig(id int, listen string, listenPort int, addrs
 	if listenPort > 0 {
 		ibMap["listen_port"] = listenPort
 	}
-	if tlsEnabled {
-		tlsMap, ok := ibMap["tls"].(map[string]any)
-		if !ok {
-			tlsMap = map[string]any{}
+	if !tlsEnabled {
+		if tlsMap, ok := ibMap["tls"].(map[string]any); ok && tlsMap != nil {
+			tlsMap["enabled"] = false
+			ibMap["tls"] = tlsMap
 		}
-		tlsMap["enabled"] = true
-		if sni != "" {
-			tlsMap["server_name"] = sni
+	} else {
+		if tlsMap, ok := ibMap["tls"].(map[string]any); ok && tlsMap != nil && len(tlsMap) > 0 {
+			tlsMap["enabled"] = true
+			if sni != "" {
+				tlsMap["server_name"] = sni
+			}
+			ibMap["tls"] = tlsMap
 		}
-		ibMap["tls"] = tlsMap
 	}
 
 	// 持久化优选域名/IP 列表
