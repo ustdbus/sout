@@ -2006,10 +2006,14 @@ else:
                     t_obj = tls_map[tid]
                     t_srv = t_obj.get('server', {})
                     if 'reality' in t_srv:
+                        r_conf = dict(t_srv.get('reality', {}))
+                        c_reality = t_obj.get('client', {}).get('reality', {})
+                        if c_reality.get('public_key'):
+                            r_conf['public_key'] = c_reality['public_key']
                         s_ib['tls'] = {
                             'enabled': True,
                             'server_name': t_srv.get('server_name', 'apple.com'),
-                            'reality': t_srv.get('reality', {})
+                            'reality': r_conf
                         }
                     elif t_obj.get('certificate_path'):
                         s_ib['tls'] = {

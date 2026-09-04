@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -300,6 +301,8 @@ func (sb *SingBox) InboundBranchLinks(baseID int, clientID int, clientTag string
 	addrs := addrsMap[tag]
 
 	usersRaw, _ := ibMap["users"].([]any)
+	isBaseBranch := (clientID == 0) || !strings.HasPrefix(clientTag, "soutu")
+
 	for cIdx, uRaw := range usersRaw {
 		uMap, ok := uRaw.(map[string]any)
 		if !ok {
@@ -308,15 +311,29 @@ func (sb *SingBox) InboundBranchLinks(baseID int, clientID int, clientTag string
 		uName, _ := uMap["name"].(string)
 		curClientID := baseID + (cIdx + 1)
 		match := false
-		if clientTag != "" && uName == clientTag {
-			match = true
-		} else if clientID > 0 && curClientID == clientID {
-			match = true
-		} else if clientID == 0 && clientTag == "" && (uName == "default" || cIdx == 0) {
-			match = true
+
+		if isBaseBranch {
+			// 母节点直连分支：取 default 用户或第一个非 soutu 用户
+			if uName == "default" || (!strings.HasPrefix(uName, "soutu") && cIdx == 0) {
+				match = true
+			}
+		} else {
+			// 家宽分流分支：精准匹配用户名或 clientID
+			if clientTag != "" && uName == clientTag {
+				match = true
+			} else if clientID > 0 && curClientID == clientID {
+				match = true
+			}
 		}
 
 		if match {
+			return sb.buildLinksForUser(proto, tag, port, ibMap, uMap, publicHost, addrs)
+		}
+	}
+
+	// 兜底方案：母节点直连分支若上面未命中且有 users，默认直接取首个用户
+	if isBaseBranch && len(usersRaw) > 0 {
+		if uMap, ok := usersRaw[0].(map[string]any); ok {
 			return sb.buildLinksForUser(proto, tag, port, ibMap, uMap, publicHost, addrs)
 		}
 	}
@@ -454,7 +471,23 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 	// 确定基础备注名
 	baseRemark := tag
 	if strings.HasPrefix(uName, "soutu") {
-		baseRemark = fmt.Sprintf("%s-%s", tag, uName)
+		branchName := uName
+		bindings := loadBranchBindings(sb.workDir)
+		matchedRegion := ""
+		for _, b := range bindings {
+			if b.Host != "" && strings.Contains(uName, sanitizeTag(b.Host)) {
+				if b.Region != "" {
+					cName := countryNameCN(b.Region, "")
+					matchedRegion = fmt.Sprintf("[%s家宽]", cName)
+				}
+				break
+			}
+		}
+		if matchedRegion != "" {
+			baseRemark = fmt.Sprintf("%s %s", tag, matchedRegion)
+		} else {
+			baseRemark = fmt.Sprintf("%s [%s]", tag, branchName)
+		}
 	}
 
 	defaultHost := publicHost
@@ -483,6 +516,21 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 				}
 				if realityPBK == "" {
 					realityPBK, _ = rMap["public_key"].(string)
+				}
+				// 若配置中无 public_key，使用 private_key 经 x25519 曲线自愈推导公钥
+				if realityPBK == "" {
+					if privStr, ok := rMap["private_key"].(string); ok && privStr != "" {
+						privStr = strings.TrimSpace(privStr)
+						privBytes, err := base64.RawURLEncoding.DecodeString(privStr)
+						if err != nil {
+							privBytes, err = base64.StdEncoding.DecodeString(privStr)
+						}
+						if err == nil && len(privBytes) == 32 {
+							if priv, err := ecdh.X25519().NewPrivateKey(privBytes); err == nil {
+								realityPBK = base64.RawURLEncoding.EncodeToString(priv.PublicKey().Bytes())
+							}
+						}
+					}
 				}
 				if realitySID == "" {
 					if sids, ok := rMap["short_id"].([]any); ok && len(sids) > 0 {

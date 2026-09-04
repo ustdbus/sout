@@ -266,6 +266,9 @@ func (m *Manager) ExitsOf() ExitsView {
 		if !enabled {
 			links = nil
 		}
+		if links == nil {
+			links = []string{}
+		}
 		branch := NodeBranch{
 			ID:         targetID,
 			Tag:        ib.Tag,
