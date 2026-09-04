@@ -795,6 +795,36 @@ fi
 rm -f /usr/local/bin/f /usr/local/bin/sout-cli 2>/dev/null || true
 mkdir -p "$WORK_DIR"
 chmod 700 "$WORK_DIR"
+
+# 若为 sing-box 后端，确保持久化 panel_mode 并确保守护进程服务存在
+if [[ "$backend_kind" == "sing-box" ]] || (! check_sui && check_singbox); then
+  echo -n "sing-box" > "${WORK_DIR}/panel_mode"
+  if [[ "$INIT_SYS" == "systemd" ]]; then
+    if [[ ! -f /etc/systemd/system/sing-box.service ]]; then
+      cat > /etc/systemd/system/sing-box.service <<'SBEU'
+[Unit]
+Description=sing-box service
+Documentation=https://sing-box.sagernet.org
+After=network.target nss-lookup.target network-online.target
+
+[Service]
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
+ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
+Restart=on-failure
+RestartSec=3s
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+SBEU
+      systemctl daemon-reload
+    fi
+    systemctl enable sing-box >/dev/null 2>&1 || true
+    systemctl restart sing-box >/dev/null 2>&1 || true
+  fi
+fi
+
 seed_settings
 svc_install
 svc_enable_start
