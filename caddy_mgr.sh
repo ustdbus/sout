@@ -352,6 +352,12 @@ setup_caddy_proxy() {
   local tunnel_token="${2:-}"
   local tunnel_port="${3:-8081}"
 
+  # 若第二个参数为纯端口且第三参数为空，智能识别为省略 token 的临时隧道配置
+  if [[ "$tunnel_token" =~ ^[0-9]+$ && -z "${3:-}" ]]; then
+    tunnel_port="$tunnel_token"
+    tunnel_token=""
+  fi
+
   local is_quick="false"
   if [[ -z "$domain" && -z "$tunnel_token" ]]; then
     is_quick="true"
@@ -462,25 +468,79 @@ EOF
   if [[ "$cur_backend" == "sing-box" ]]; then
     # sing-box 纯内核模式：直接向 /etc/sing-box/config.json 注入 127.0.0.1 隧道节点
     DOMAIN="$domain" NODE_PORT="$node_port" WS_PATH="/${ws_p}" python3 <<'PYEOF'
-import json, os, uuid, random, string
+import json, os, uuid, random, string, base64
+
+def gen_x25519():
+    P = 2**255 - 19
+    A24 = 121665
+    def clamp(n):
+        n &= ~7
+        n &= ~(128 << 8 * 31)
+        n |= 64 << 8 * 31
+        return n
+    def cswap(swap, x_2, x_3):
+        dummy = swap * ((x_2 - x_3) % P)
+        return (x_2 - dummy) % P, (x_3 + dummy) % P
+    raw_priv = os.urandom(32)
+    k = clamp(int.from_bytes(raw_priv, 'little'))
+    x_1, x_2, z_2, x_3, z_3, swap = 9, 1, 0, 9, 1, 0
+    for t in reversed(range(255)):
+        k_t = (k >> t) & 1
+        swap ^= k_t
+        x_2, x_3 = cswap(swap, x_2, x_3)
+        z_2, z_3 = cswap(swap, z_2, z_3)
+        swap = k_t
+        A = (x_2 + z_2) % P; AA = (A * A) % P; B = (x_2 - z_2) % P; BB = (B * B) % P
+        E = (AA - BB) % P; C = (x_3 + z_3) % P; D = (x_3 - z_3) % P
+        DA = (D * A) % P; CB = (C * B) % P
+        x_3 = ((DA + CB) ** 2) % P; z_3 = (x_1 * ((DA - CB) ** 2)) % P
+        x_2 = (AA * BB) % P; z_2 = (E * ((AA + A24 * E) % P)) % P
+    x_2, x_3 = cswap(swap, x_2, x_3); z_2, z_3 = cswap(swap, z_2, z_3)
+    pub_int = (x_2 * pow(z_2, P - 2, P)) % P
+    raw_pub = pub_int.to_bytes(32, 'little')
+    priv_b64 = base64.urlsafe_b64encode(raw_priv).decode().rstrip('=')
+    pub_b64 = base64.urlsafe_b64encode(raw_pub).decode().rstrip('=')
+    return priv_b64, pub_b64
+
 p = '/etc/sing-box/config.json'
 try:
     with open(p, 'r') as f:
         conf = json.load(f)
 except Exception:
     conf = {}
+
 inbounds = conf.setdefault('inbounds', [])
 node_port = int(os.environ['NODE_PORT'])
 ws_path = os.environ['WS_PATH']
+if not ws_path.startswith('/'):
+    ws_path = '/' + ws_path
+if not ws_path.endswith('/'):
+    ws_path = ws_path + '/'
 domain = os.environ['DOMAIN']
 
-rand_suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
-inbounds.append({
+# 1. 查找并清理所有旧 vmess-argo 相关的残留入站，只保留一个主入站
+vmess_nodes = []
+kept_inbounds = []
+for ib in inbounds:
+    tag = str(ib.get('tag', ''))
+    itype = str(ib.get('type', ''))
+    if itype == 'vmess' and (tag == 'vmess-argo' or tag.startswith('vmess-argo-')):
+        vmess_nodes.append(ib)
+    else:
+        kept_inbounds.append(ib)
+
+users = [{'name': 'default', 'uuid': str(uuid.uuid4())}]
+if vmess_nodes:
+    old_users = vmess_nodes[0].get('users')
+    if old_users and isinstance(old_users, list) and len(old_users) > 0:
+        users = old_users
+
+primary_vmess = {
     'type': 'vmess',
-    'tag': f'vmess-argo-{rand_suffix}',
+    'tag': 'vmess-argo',
     'listen': '127.0.0.1',
     'listen_port': node_port,
-    'users': [{'name': 'default', 'uuid': str(uuid.uuid4())}],
+    'users': users,
     'transport': {
         'type': 'ws',
         'path': ws_path,
@@ -488,12 +548,43 @@ inbounds.append({
         'max_early_data': 2560,
         'early_data_header_name': 'Sec-WebSocket-Protocol'
     }
-})
+}
+kept_inbounds.append(primary_vmess)
+
+# 2. 检查并确保 vless-reality 基础节点存在
+has_reality = any(ib.get('type') == 'vless' and (ib.get('tag') == 'vless-reality' or 'reality' in str(ib.get('tls', {}))) for ib in kept_inbounds)
+if not has_reality:
+    reality_port = random.randint(20000, 45000)
+    priv_k, pub_k = gen_x25519()
+    sid = os.urandom(4).hex()
+    reality_inbound = {
+        'type': 'vless',
+        'tag': 'vless-reality',
+        'listen': '::',
+        'listen_port': reality_port,
+        'users': [{'name': 'default', 'uuid': str(uuid.uuid4()), 'flow': 'xtls-rprx-vision'}],
+        'tls': {
+            'enabled': True,
+            'server_name': 'apple.com',
+            'reality': {
+                'enabled': True,
+                'handshake': {
+                    'server': 'apple.com',
+                    'server_port': 443
+                },
+                'private_key': priv_k,
+                'short_id': [sid]
+            }
+        }
+    }
+    kept_inbounds.append(reality_inbound)
+
+conf['inbounds'] = kept_inbounds
 with open(p, 'w') as f:
     json.dump(conf, f, indent=2)
 PYEOF
     systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true
-    echo -e "  [✓] 已在 sing-box 中创建 127.0.0.1 隧道回源节点 (端口: ${node_port}, 路径: /${ws_p}/)"
+    echo -e "  [✓] 已在 sing-box 中配置基础节点 (vmess-argo 端口: ${node_port}, 路径: /${ws_p}/ 及 vless-reality)"
   else
     # 配置 s-ui 面板（通过 s-ui API，避免直接写库）
     if [[ -f "$SUI_DB" ]]; then
@@ -821,33 +912,118 @@ else:
       [[ -z "$ws_p" ]] && ws_p=$(rand_safe_path "vlws")
       node_port=$(rand_port)
       DOMAIN="$domain" NODE_PORT="$node_port" WS_PATH="/${ws_p}" python3 <<'PYEOF'
-import json, os, uuid, random, string
+import json, os, uuid, random, string, base64
+
+def gen_x25519():
+    P = 2**255 - 19
+    A24 = 121665
+    def clamp(n):
+        n &= ~7
+        n &= ~(128 << 8 * 31)
+        n |= 64 << 8 * 31
+        return n
+    def cswap(swap, x_2, x_3):
+        dummy = swap * ((x_2 - x_3) % P)
+        return (x_2 - dummy) % P, (x_3 + dummy) % P
+    raw_priv = os.urandom(32)
+    k = clamp(int.from_bytes(raw_priv, 'little'))
+    x_1, x_2, z_2, x_3, z_3, swap = 9, 1, 0, 9, 1, 0
+    for t in reversed(range(255)):
+        k_t = (k >> t) & 1
+        swap ^= k_t
+        x_2, x_3 = cswap(swap, x_2, x_3)
+        z_2, z_3 = cswap(swap, z_2, z_3)
+        swap = k_t
+        A = (x_2 + z_2) % P; AA = (A * A) % P; B = (x_2 - z_2) % P; BB = (B * B) % P
+        E = (AA - BB) % P; C = (x_3 + z_3) % P; D = (x_3 - z_3) % P
+        DA = (D * A) % P; CB = (C * B) % P
+        x_3 = ((DA + CB) ** 2) % P; z_3 = (x_1 * ((DA - CB) ** 2)) % P
+        x_2 = (AA * BB) % P; z_2 = (E * ((AA + A24 * E) % P)) % P
+    x_2, x_3 = cswap(swap, x_2, x_3); z_2, z_3 = cswap(swap, z_2, z_3)
+    pub_int = (x_2 * pow(z_2, P - 2, P)) % P
+    raw_pub = pub_int.to_bytes(32, 'little')
+    priv_b64 = base64.urlsafe_b64encode(raw_priv).decode().rstrip('=')
+    pub_b64 = base64.urlsafe_b64encode(raw_pub).decode().rstrip('=')
+    return priv_b64, pub_b64
+
 p = '/etc/sing-box/config.json'
 try:
     with open(p, 'r') as f:
         conf = json.load(f)
 except Exception:
     conf = {}
+
 inbounds = conf.setdefault('inbounds', [])
 node_port = int(os.environ['NODE_PORT'])
 ws_path = os.environ['WS_PATH']
+if not ws_path.startswith('/'):
+    ws_path = '/' + ws_path
+if not ws_path.endswith('/'):
+    ws_path = ws_path + '/'
 domain = os.environ['DOMAIN']
 
-rand_suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
-inbounds.append({
+# 1. 查找并清理所有旧 vmess-argo 相关的残留入站，只保留一个主入站
+vmess_nodes = []
+kept_inbounds = []
+for ib in inbounds:
+    tag = str(ib.get('tag', ''))
+    itype = str(ib.get('type', ''))
+    if itype == 'vmess' and (tag == 'vmess-argo' or tag.startswith('vmess-argo-')):
+        vmess_nodes.append(ib)
+    else:
+        kept_inbounds.append(ib)
+
+users = [{'name': 'default', 'uuid': str(uuid.uuid4())}]
+if vmess_nodes:
+    old_users = vmess_nodes[0].get('users')
+    if old_users and isinstance(old_users, list) and len(old_users) > 0:
+        users = old_users
+
+primary_vmess = {
     'type': 'vmess',
-    'tag': f'vmess-argo-{rand_suffix}',
+    'tag': 'vmess-argo',
     'listen': '127.0.0.1',
     'listen_port': node_port,
-    'users': [{'name': 'default', 'uuid': str(uuid.uuid4())}],
+    'users': users,
     'transport': {
         'type': 'ws',
-        'path': f'/{ws_path}',
+        'path': ws_path,
         'headers': {'Host': domain},
         'max_early_data': 2560,
         'early_data_header_name': 'Sec-WebSocket-Protocol'
     }
-})
+}
+kept_inbounds.append(primary_vmess)
+
+# 2. 检查并确保 vless-reality 基础节点存在
+has_reality = any(ib.get('type') == 'vless' and (ib.get('tag') == 'vless-reality' or 'reality' in str(ib.get('tls', {}))) for ib in kept_inbounds)
+if not has_reality:
+    reality_port = random.randint(20000, 45000)
+    priv_k, pub_k = gen_x25519()
+    sid = os.urandom(4).hex()
+    reality_inbound = {
+        'type': 'vless',
+        'tag': 'vless-reality',
+        'listen': '::',
+        'listen_port': reality_port,
+        'users': [{'name': 'default', 'uuid': str(uuid.uuid4()), 'flow': 'xtls-rprx-vision'}],
+        'tls': {
+            'enabled': True,
+            'server_name': 'apple.com',
+            'reality': {
+                'enabled': True,
+                'handshake': {
+                    'server': 'apple.com',
+                    'server_port': 443
+                },
+                'private_key': priv_k,
+                'short_id': [sid]
+            }
+        }
+    }
+    kept_inbounds.append(reality_inbound)
+
+conf['inbounds'] = kept_inbounds
 with open(p, 'w') as f:
     json.dump(conf, f, indent=2)
 PYEOF

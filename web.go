@@ -21,7 +21,7 @@ const indexHTML = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>sout - s-ui 动态家宽出口插件</title>
+<title>sout - 节点与分流管理</title>
 <style>
 :root{
   color-scheme: dark;
@@ -152,7 +152,7 @@ option{background:#161b22;color:var(--text);padding:8px}
   <h1>
     <svg viewBox="0 0 24 24" style="color:var(--accent)"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
     sout
-    <span class="badge" id="backendBadge">s-ui 已连接</span>
+    <span class="badge" id="backendBadge">已连接</span>
   </h1>
   <span class="spacer"></span>
   <button id="exportAll">
@@ -190,13 +190,13 @@ option{background:#161b22;color:var(--text);padding:8px}
 
   <div id="exitsContainer"></div>
 
-  <!-- 模块二：s-ui 节点与分流管理（专注从已存在的出站中添加绑定） -->
+  <!-- 模块二：节点与分流管理（专注从已存在的出站中添加绑定） -->
   <div class="section-head" style="margin-top:36px">
     <h2>
       <svg viewBox="0 0 24 24" style="color:var(--accent)"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
-      s-ui 节点与分流管理
+      <span id="nodesTitle">节点与分流管理</span>
     </h2>
-    <span class="desc">直接读取 s-ui 面板中的已有节点，点击每个节点的「+」从上方隧道池中选择出口绑定</span>
+    <span class="desc" id="nodesDesc">点击每个节点的「+」从上方隧道池中选择出口绑定</span>
     <span class="spacer"></span>
     <button id="refreshNodesBtn">
       <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
@@ -649,12 +649,13 @@ function renderExits(){
   }).join('') + '</div>';
 }
 
-// ---- 渲染 s-ui 节点列表 ----
+// ---- 渲染节点列表 ----
 function renderNodes(){
   const box = $('#nodesContainer');
   const nodes = viewData.nodes || [];
   if(!nodes.length){
-    box.innerHTML = '<div class="empty">s-ui 面板中暂无入站节点，请在 s-ui 中创建入站后刷新</div>';
+    const bName = (viewData && viewData.backend === 'sing-box') ? 'sing-box 内核' : 's-ui 面板';
+    box.innerHTML = '<div class="empty">' + bName + '中暂无入站节点，请先创建基础入站后刷新</div>';
     return;
   }
 
@@ -695,8 +696,8 @@ function renderNodes(){
               +   '</label>'
               +   (hasLink ? '<button class="chip-btn" data-copy="' + esc(firstLink) + '">' + ICON.copy + ' 复制链接</button>' : '')
               +   (!b.is_base ? '<button class="icon danger" data-delone="' + b.id + '" data-name="' + esc(b.tag) + '" title="删除此出口分流">' + ICON.trash + '</button>' : '<span style="font-size:11px;color:var(--dim);margin-right:6px">基础直连</span>')
-              + '</div>'
-              + '</div>';
+            + '</div>'
+            + '</div>';
           }).join('')
       + '</div>'
       + '</div>';
@@ -706,6 +707,27 @@ function renderNodes(){
 async function poll(){
   try{
     viewData = await api('/api/exits');
+    const backend = (viewData.backend || 's-ui').toLowerCase();
+    const bBadge = $('#backendBadge');
+    if(bBadge){
+      if(backend === 'sing-box'){
+        bBadge.textContent = 'sing-box 已就绪';
+        bBadge.style.background = 'var(--ok)';
+      } else {
+        bBadge.textContent = 's-ui 已连接';
+        bBadge.style.background = 'var(--ok)';
+      }
+    }
+    const nTitle = $('#nodesTitle');
+    if(nTitle){
+      nTitle.textContent = (backend === 'sing-box' ? 'sing-box' : 's-ui') + ' 节点与分流管理';
+    }
+    const nDesc = $('#nodesDesc');
+    if(nDesc){
+      nDesc.textContent = (backend === 'sing-box')
+        ? '直接接管本机 sing-box 原生内核节点，点击每个节点的「+」从上方隧道池中选择出口绑定'
+        : '直接读取 s-ui 面板中的已有节点，点击每个节点的「+」从上方隧道池中选择出口绑定';
+    }
     renderExits();
     renderNodes();
   }catch(e){}

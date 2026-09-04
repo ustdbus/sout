@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -32,6 +33,25 @@ func (sb *SingBox) Kind() string { return "sing-box" }
 
 func (sb *SingBox) Describe() string {
 	return fmt.Sprintf("接管本机 sing-box 原生内核 (%s)", sb.configPath)
+}
+
+func (sb *SingBox) addrsFilePath() string {
+	return filepath.Join(sb.workDir, "singbox_inbound_addrs.json")
+}
+
+func (sb *SingBox) loadInboundAddrs() map[string][]NodeAddrItem {
+	res := make(map[string][]NodeAddrItem)
+	data, err := os.ReadFile(sb.addrsFilePath())
+	if err == nil {
+		_ = json.Unmarshal(data, &res)
+	}
+	return res
+}
+
+func (sb *SingBox) saveInboundAddrs(m map[string][]NodeAddrItem) {
+	_ = os.MkdirAll(sb.workDir, 0755)
+	b, _ := json.MarshalIndent(m, "", "  ")
+	_ = os.WriteFile(sb.addrsFilePath(), b, 0644)
 }
 
 // DetectSingBox 探测本机是否安装 sing-box 或存在配置文件
@@ -235,7 +255,7 @@ func (sb *SingBox) Inbounds(live map[string]bool) ([]Inbound, error) {
 
 				result = append(result, Inbound{
 					ID:       baseID,
-					ClientID: cIdx + 1,
+					ClientID: baseID + (cIdx + 1),
 					Port:     port,
 					Protocol: proto,
 					Remark:   branchRemark,
@@ -252,6 +272,58 @@ func (sb *SingBox) Inbounds(live map[string]bool) ([]Inbound, error) {
 	return result, nil
 }
 
+// InboundBranchLinks 专门为某个特定分流分支获取生成的链接（支持优选域名裂变）
+func (sb *SingBox) InboundBranchLinks(baseID int, clientID int, clientTag string, publicHost string) []string {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+
+	cfg, err := sb.loadConfig()
+	if err != nil {
+		return nil
+	}
+
+	inboundsRaw, _ := cfg["inbounds"].([]any)
+	idx := (baseID / 1000) - 1
+	if idx < 0 || idx >= len(inboundsRaw) {
+		return nil
+	}
+	ibMap, ok := inboundsRaw[idx].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	proto, _ := ibMap["type"].(string)
+	tag, _ := ibMap["tag"].(string)
+	port := int(getFloat(ibMap["listen_port"]))
+
+	addrsMap := sb.loadInboundAddrs()
+	addrs := addrsMap[tag]
+
+	usersRaw, _ := ibMap["users"].([]any)
+	for cIdx, uRaw := range usersRaw {
+		uMap, ok := uRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		uName, _ := uMap["name"].(string)
+		curClientID := baseID + (cIdx + 1)
+		match := false
+		if clientTag != "" && uName == clientTag {
+			match = true
+		} else if clientID > 0 && curClientID == clientID {
+			match = true
+		} else if clientID == 0 && clientTag == "" && (uName == "default" || cIdx == 0) {
+			match = true
+		}
+
+		if match {
+			return sb.buildLinksForUser(proto, tag, port, ibMap, uMap, publicHost, addrs)
+		}
+	}
+
+	return nil
+}
+
 // InboundDetail 获取指定入站的完整详情与分享链接
 func (sb *SingBox) InboundDetail(id int, publicHost string) (*InboundDetail, error) {
 	sb.mu.Lock()
@@ -263,6 +335,7 @@ func (sb *SingBox) InboundDetail(id int, publicHost string) (*InboundDetail, err
 	}
 
 	inboundsRaw, _ := cfg["inbounds"].([]any)
+	baseID := (id / 1000) * 1000
 	idx := (id / 1000) - 1
 	if idx < 0 || idx >= len(inboundsRaw) {
 		return nil, fmt.Errorf("找不到对应的节点 (ID: %d)", id)
@@ -311,11 +384,28 @@ func (sb *SingBox) InboundDetail(id int, publicHost string) (*InboundDetail, err
 		networkStr = "udp"
 	}
 
-	links := sb.buildLinksForInbound(ibMap, publicHost)
+	addrsMap := sb.loadInboundAddrs()
+	addrs := addrsMap[tag]
+
+	var targetUser map[string]any
+	if id%1000 > 0 {
+		cIdx := (id % 1000) - 1
+		if cIdx >= 0 && cIdx < len(usersRaw) {
+			targetUser, _ = usersRaw[cIdx].(map[string]any)
+		}
+	}
+	if targetUser == nil && len(usersRaw) > 0 {
+		targetUser, _ = usersRaw[0].(map[string]any)
+	}
+
+	var links []string
+	if targetUser != nil {
+		links = sb.buildLinksForUser(proto, tag, port, ibMap, targetUser, publicHost, addrs)
+	}
 
 	detail := &InboundDetail{
 		Inbound: Inbound{
-			ID:       id,
+			ID:       baseID,
 			Port:     port,
 			Protocol: proto,
 			Remark:   tag,
@@ -345,21 +435,38 @@ func (sb *SingBox) InboundLinks(ids []int, publicHost string) ([]string, error) 
 	return allLinks, nil
 }
 
-func (sb *SingBox) buildLinksForInbound(ibMap map[string]any, publicHost string) []string {
-	proto, _ := ibMap["type"].(string)
-	tag, _ := ibMap["tag"].(string)
-	port := int(getFloat(ibMap["listen_port"]))
-	if port == 0 {
+func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, uMap map[string]any, publicHost string, addrs []NodeAddrItem) []string {
+	if listenPort == 0 {
 		return nil
 	}
 
-	host := publicHost
-	if host == "" {
-		host = "127.0.0.1"
+	uName, _ := uMap["name"].(string)
+	uuidStr, _ := uMap["uuid"].(string)
+	passStr, _ := uMap["password"].(string)
+	flowStr, _ := uMap["flow"].(string)
+	if uuidStr == "" {
+		uuidStr = passStr
+	}
+	if passStr == "" {
+		passStr = uuidStr
 	}
 
-	sni := host
+	// 确定基础备注名
+	baseRemark := tag
+	if strings.HasPrefix(uName, "soutu") {
+		baseRemark = fmt.Sprintf("%s-%s", tag, uName)
+	}
+
+	defaultHost := publicHost
+	if defaultHost == "" || defaultHost == "127.0.0.1" || defaultHost == "::" {
+		defaultHost = "127.0.0.1"
+	}
+
+	sni := defaultHost
 	allowInsecure := "0"
+	var realityPBK, realitySID string
+	isReality := false
+
 	if tlsMap, ok := ibMap["tls"].(map[string]any); ok {
 		if sn, ok := tlsMap["server_name"].(string); ok && sn != "" {
 			sni = sn
@@ -367,80 +474,164 @@ func (sb *SingBox) buildLinksForInbound(ibMap map[string]any, publicHost string)
 		if insec, _ := tlsMap["insecure"].(bool); insec {
 			allowInsecure = "1"
 		}
+		if rMap, ok := tlsMap["reality"].(map[string]any); ok {
+			if en, _ := rMap["enabled"].(bool); en {
+				isReality = true
+				if clientR, ok := rMap["client"].(map[string]any); ok {
+					realityPBK, _ = clientR["public_key"].(string)
+					realitySID, _ = clientR["short_id"].(string)
+				}
+				if realityPBK == "" {
+					realityPBK, _ = rMap["public_key"].(string)
+				}
+				if realitySID == "" {
+					if sids, ok := rMap["short_id"].([]any); ok && len(sids) > 0 {
+						realitySID, _ = sids[0].(string)
+					}
+				}
+			}
+		}
 	}
 
-	usersRaw, _ := ibMap["users"].([]any)
-	if len(usersRaw) == 0 {
-		return nil
+	transportType := "tcp"
+	wsPath := ""
+	wsHost := sni
+	if trMap, ok := ibMap["transport"].(map[string]any); ok {
+		if tp, ok := trMap["type"].(string); ok {
+			transportType = tp
+		}
+		if pth, ok := trMap["path"].(string); ok {
+			wsPath = pth
+		}
+		if hdrs, ok := trMap["headers"].(map[string]any); ok {
+			if h, ok := hdrs["Host"].(string); ok && h != "" {
+				wsHost = h
+			}
+		}
+	}
+
+	if len(addrs) == 0 {
+		serverAddr := defaultHost
+		serverPort := listenPort
+		if proto == "vmess" && wsHost != "" && net.ParseIP(wsHost) == nil {
+			serverAddr = wsHost
+			serverPort = 443
+			sni = wsHost
+		}
+		addrs = []NodeAddrItem{
+			{
+				Server:     serverAddr,
+				ServerPort: serverPort,
+				Remark:     "",
+			},
+		}
 	}
 
 	var links []string
-	for _, uRaw := range usersRaw {
-		uMap, ok := uRaw.(map[string]any)
-		if !ok {
-			continue
+	for _, item := range addrs {
+		connectHost := strings.TrimSpace(item.Server)
+		if connectHost == "" {
+			connectHost = defaultHost
 		}
-		uName, _ := uMap["name"].(string)
-		uuidStr, _ := uMap["uuid"].(string)
-		passStr, _ := uMap["password"].(string)
-
-		nodeRemark := tag
-		if strings.HasPrefix(uName, "soutu") {
-			nodeRemark = fmt.Sprintf("%s-%s", tag, uName)
+		connectPort := item.ServerPort
+		if connectPort <= 0 {
+			connectPort = listenPort
 		}
 
-		switch proto {
+		remark := baseRemark
+		if item.Remark != "" {
+			remark = fmt.Sprintf("%s - %s", baseRemark, item.Remark)
+		}
+
+		switch strings.ToLower(proto) {
+		case "vmess":
+			vmessTLS := "tls"
+			if connectPort == 80 {
+				vmessTLS = ""
+			}
+			vmessObj := map[string]any{
+				"v":    "2",
+				"ps":   remark,
+				"add":  connectHost,
+				"port": connectPort,
+				"id":   uuidStr,
+				"aid":  0,
+				"net":  transportType,
+				"type": "none",
+				"host": wsHost,
+				"path": wsPath,
+				"tls":  vmessTLS,
+				"sni":  sni,
+			}
+			b, _ := json.Marshal(vmessObj)
+			links = append(links, "vmess://"+base64.StdEncoding.EncodeToString(b))
+
+		case "vless":
+			v := url.Values{}
+			v.Set("encryption", "none")
+			v.Set("type", transportType)
+
+			if isReality {
+				v.Set("security", "reality")
+				v.Set("sni", sni)
+				v.Set("fp", "chrome")
+				if realityPBK != "" {
+					v.Set("pbk", realityPBK)
+				}
+				if realitySID != "" {
+					v.Set("sid", realitySID)
+				}
+				if flowStr != "" {
+					v.Set("flow", flowStr)
+				}
+			} else {
+				if connectPort == 443 || sni != "" {
+					v.Set("security", "tls")
+					v.Set("sni", sni)
+					if allowInsecure == "1" {
+						v.Set("allowInsecure", "1")
+					}
+				} else {
+					v.Set("security", "none")
+				}
+			}
+
+			if transportType == "ws" && wsPath != "" {
+				v.Set("path", wsPath)
+				if wsHost != "" {
+					v.Set("host", wsHost)
+				}
+			}
+
+			link := fmt.Sprintf("vless://%s@%s:%d?%s#%s",
+				uuidStr, connectHost, connectPort, v.Encode(), url.QueryEscape(remark))
+			links = append(links, link)
+
 		case "tuic":
 			authPart := uuidStr
-			if passStr != "" {
+			if passStr != "" && passStr != uuidStr {
 				authPart += ":" + passStr
 			}
 			link := fmt.Sprintf("tuic://%s@%s:%d?congestion_control=bbr&alpn=h3&sni=%s&allow_insecure=%s#%s",
-				authPart, host, port, url.QueryEscape(sni), allowInsecure, url.QueryEscape(nodeRemark))
+				authPart, connectHost, connectPort, url.QueryEscape(sni), allowInsecure, url.QueryEscape(remark))
 			links = append(links, link)
 
-		case "hysteria2":
+		case "hysteria2", "hy2":
 			authPart := passStr
 			if authPart == "" {
 				authPart = uuidStr
 			}
 			link := fmt.Sprintf("hysteria2://%s@%s:%d?sni=%s&insecure=%s#%s",
-				authPart, host, port, url.QueryEscape(sni), allowInsecure, url.QueryEscape(nodeRemark))
+				authPart, connectHost, connectPort, url.QueryEscape(sni), allowInsecure, url.QueryEscape(remark))
 			links = append(links, link)
 
-		case "vless":
-			security := "none"
-			if tlsMap, ok := ibMap["tls"].(map[string]any); ok {
-				if en, _ := tlsMap["enabled"].(bool); en {
-					security = "tls"
-				}
-			}
-			transportType := "tcp"
-			wsPath := ""
-			wsHost := sni
-			if trMap, ok := ibMap["transport"].(map[string]any); ok {
-				if tp, ok := trMap["type"].(string); ok {
-					transportType = tp
-				}
-				if pth, ok := trMap["path"].(string); ok {
-					wsPath = pth
-				}
-				if h, ok := trMap["host"].(string); ok && h != "" {
-					wsHost = h
-				}
-			}
-			link := fmt.Sprintf("vless://%s@%s:%d?encryption=none&security=%s&sni=%s&type=%s",
-				uuidStr, host, port, security, url.QueryEscape(sni), transportType)
-			if transportType == "ws" && wsPath != "" {
-				link += fmt.Sprintf("&path=%s&host=%s", url.QueryEscape(wsPath), url.QueryEscape(wsHost))
-			}
-			link += "#" + url.QueryEscape(nodeRemark)
-			links = append(links, link)
-
-		case "shadowsocks":
+		case "shadowsocks", "ss":
 			method, _ := ibMap["method"].(string)
+			if method == "" {
+				method = "2022-blake3-aes-128-gcm"
+			}
 			auth := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", method, passStr)))
-			link := fmt.Sprintf("ss://%s@%s:%d#%s", auth, host, port, url.QueryEscape(nodeRemark))
+			link := fmt.Sprintf("ss://%s@%s:%d#%s", auth, connectHost, connectPort, url.QueryEscape(remark))
 			links = append(links, link)
 		}
 	}
@@ -481,6 +672,32 @@ func (sb *SingBox) CloneToTunnels(templateID int, hosts []string, tunnels []*Tun
 	createdPorts := []int{}
 
 	for _, host := range hosts {
+		var targetTunnel *Tunnel
+		for _, t := range tunnels {
+			if t.Node.HostName == host {
+				targetTunnel = t
+				break
+			}
+		}
+
+		slot := 0
+		region := ""
+		poolType := ""
+		if targetTunnel != nil {
+			slot = targetTunnel.Slot
+			region = targetTunnel.TargetRegion
+			poolType = targetTunnel.TargetPoolType
+		}
+
+		// 持久化保存分流绑定记录，重启或隧道切换时自动自愈
+		saveBranchBinding(sb.workDir, branchBinding{
+			TemplateID: templateID,
+			Slot:       slot,
+			Host:       host,
+			Region:     region,
+			PoolType:   poolType,
+		})
+
 		hTag := sanitizeTag(host)
 		clientName := fmt.Sprintf("soutu%d%s", templateID, hTag)
 
@@ -679,40 +896,73 @@ func (sb *SingBox) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
 	inboundsRaw, _ := cfg["inbounds"].([]any)
 	routeRaw, _ := cfg["route"].(map[string]any)
 
-	idSet := make(map[int]bool)
 	for _, id := range ids {
-		idSet[id] = true
-	}
-
-	var remainingInbounds []any
-	for idx, ib := range inboundsRaw {
-		baseID := (idx + 1) * 1000
-		if idSet[baseID] {
-			// 删除该整条入站及其规则
+		tplIdx := (id / 1000) - 1
+		if tplIdx < 0 || tplIdx >= len(inboundsRaw) {
 			continue
 		}
-		remainingInbounds = append(remainingInbounds, ib)
-	}
-	cfg["inbounds"] = remainingInbounds
 
-	// 清理 route.rules 中悬空的 sout 出站规则
-	if routeRaw != nil {
-		rulesRaw, _ := routeRaw["rules"].([]any)
-		var validRules []any
-		for _, r := range rulesRaw {
-			if rMap, ok := r.(map[string]any); ok {
-				outbound, _ := rMap["outbound"].(string)
-				if strings.HasPrefix(outbound, "sout") {
-					authUsers, _ := rMap["auth_user"].([]any)
-					if len(authUsers) > 0 {
-						validRules = append(validRules, r)
+		if id%1000 > 0 {
+			// 精准删除特定 Client 分流分支
+			cIdx := (id % 1000) - 1
+			ibMap, ok := inboundsRaw[tplIdx].(map[string]any)
+			if ok {
+				usersRaw, _ := ibMap["users"].([]any)
+				if cIdx >= 0 && cIdx < len(usersRaw) {
+					delUser, _ := usersRaw[cIdx].(map[string]any)
+					delName, _ := delUser["name"].(string)
+
+					// 移除该 user
+					usersRaw = append(usersRaw[:cIdx], usersRaw[cIdx+1:]...)
+					ibMap["users"] = usersRaw
+
+					// 从 route.rules 移除对应规则
+					if routeRaw != nil {
+						rulesRaw, _ := routeRaw["rules"].([]any)
+						var keptRules []any
+						for _, r := range rulesRaw {
+							if rMap, ok := r.(map[string]any); ok {
+								authUsers, _ := rMap["auth_user"].([]any)
+								match := false
+								for _, au := range authUsers {
+									if au == delName {
+										match = true
+										break
+									}
+								}
+								if !match {
+									keptRules = append(keptRules, r)
+								}
+							}
+						}
+						routeRaw["rules"] = keptRules
 					}
-				} else {
-					validRules = append(validRules, r)
+
+					// 清理持久化绑定记录
+					removeBranchBinding(sb.workDir, (tplIdx+1)*1000, "", 0)
 				}
 			}
 		}
-		routeRaw["rules"] = validRules
+	}
+
+	// 处理母入站整体删除
+	baseDeleteSet := make(map[int]bool)
+	for _, id := range ids {
+		if id%1000 == 0 {
+			baseDeleteSet[id] = true
+		}
+	}
+	if len(baseDeleteSet) > 0 {
+		var remainingInbounds []any
+		for idx, ib := range inboundsRaw {
+			bID := (idx + 1) * 1000
+			if baseDeleteSet[bID] {
+				removeBranchBinding(sb.workDir, bID, "", 0)
+				continue
+			}
+			remainingInbounds = append(remainingInbounds, ib)
+		}
+		cfg["inbounds"] = remainingInbounds
 	}
 
 	sb.syncOutboundsInternal(cfg, tunnels)
@@ -773,6 +1023,7 @@ func (sb *SingBox) DeleteBranchesByHost(host string, tunnels []*Tunnel) error {
 		}
 	}
 
+	removeBranchBinding(sb.workDir, 0, host, 0)
 	sb.syncOutboundsInternal(cfg, tunnels)
 	return sb.saveConfig(cfg)
 }
@@ -910,6 +1161,12 @@ func (sb *SingBox) NodeDetail(id int) (*NodeDetailInfo, error) {
 		sni, _ = tlsMap["server_name"].(string)
 	}
 
+	addrsMap := sb.loadInboundAddrs()
+	addrs := addrsMap[tag]
+	if addrs == nil {
+		addrs = []NodeAddrItem{}
+	}
+
 	return &NodeDetailInfo{
 		ID:           id,
 		Name:         tag,
@@ -919,7 +1176,7 @@ func (sb *SingBox) NodeDetail(id int) (*NodeDetailInfo, error) {
 		TLSEnabled:   tlsEnabled,
 		SNI:          sni,
 		ServerHasTLS: tlsEnabled,
-		Addrs:        []NodeAddrItem{},
+		Addrs:        addrs,
 	}, nil
 }
 
@@ -939,6 +1196,7 @@ func (sb *SingBox) UpdateNodeConfig(id int, listen string, listenPort int, addrs
 	}
 
 	ibMap, _ := inboundsRaw[idx].(map[string]any)
+	tag, _ := ibMap["tag"].(string)
 	if listen != "" {
 		ibMap["listen"] = listen
 	}
@@ -957,6 +1215,12 @@ func (sb *SingBox) UpdateNodeConfig(id int, listen string, listenPort int, addrs
 		ibMap["tls"] = tlsMap
 	}
 
+	// 持久化优选域名/IP 列表
+	addrsMap := sb.loadInboundAddrs()
+	addrsMap[tag] = addrs
+	sb.saveInboundAddrs(addrsMap)
+
+	invalidateInbounds()
 	return sb.saveConfig(cfg)
 }
 
@@ -973,7 +1237,96 @@ func (sb *SingBox) OnTunnelsChanged(tunnels []*Tunnel) error {
 		return err
 	}
 	sb.syncOutboundsInternal(cfg, tunnels)
-	return sb.saveConfig(cfg)
+
+	// 自动从持久化绑定中自愈恢复家宽分流规则
+	bindings := loadBranchBindings(sb.workDir)
+	changed := false
+	if len(bindings) > 0 {
+		inboundsRaw, _ := cfg["inbounds"].([]any)
+		routeRaw, ok := cfg["route"].(map[string]any)
+		if !ok || routeRaw == nil {
+			routeRaw = map[string]any{"final": "direct", "rules": []any{}}
+			cfg["route"] = routeRaw
+		}
+		rulesRaw, _ := routeRaw["rules"].([]any)
+
+		for _, b := range bindings {
+			if b.TemplateID <= 0 {
+				continue
+			}
+			tplIdx := (b.TemplateID / 1000) - 1
+			if tplIdx < 0 || tplIdx >= len(inboundsRaw) {
+				continue
+			}
+			ibMap, ok := inboundsRaw[tplIdx].(map[string]any)
+			if !ok {
+				continue
+			}
+
+			var targetTunnel *Tunnel
+			for _, t := range tunnels {
+				if t.Status == "up" {
+					if b.Host != "" && (t.Node.HostName == b.Host || sanitizeTag(t.Node.HostName) == sanitizeTag(b.Host)) {
+						targetTunnel = t
+						break
+					}
+					if b.Slot > 0 && t.Slot == b.Slot {
+						targetTunnel = t
+						break
+					}
+				}
+			}
+			if targetTunnel == nil {
+				continue
+			}
+
+			hTag := sanitizeTag(targetTunnel.Node.HostName)
+			clientName := fmt.Sprintf("soutu%d%s", b.TemplateID, hTag)
+			outboundTag := "sout" + hTag
+
+			usersRaw, _ := ibMap["users"].([]any)
+			userExists := false
+			for _, u := range usersRaw {
+				if uMap, ok := u.(map[string]any); ok && uMap["name"] == clientName {
+					userExists = true
+					break
+				}
+			}
+			if !userExists {
+				usersRaw = append(usersRaw, map[string]any{
+					"name":     clientName,
+					"uuid":     generateUUID(),
+					"password": generateRandomPassword(16),
+				})
+				ibMap["users"] = usersRaw
+				changed = true
+			}
+
+			ruleExists := false
+			for _, r := range rulesRaw {
+				if rMap, ok := r.(map[string]any); ok && rMap["outbound"] == outboundTag {
+					ruleExists = true
+					break
+				}
+			}
+			if !ruleExists {
+				rulesRaw = append([]any{map[string]any{
+					"auth_user": []any{clientName},
+					"outbound":  outboundTag,
+				}}, rulesRaw...)
+				routeRaw["rules"] = rulesRaw
+				changed = true
+			}
+		}
+	}
+
+	if err := sb.saveConfig(cfg); err != nil {
+		return err
+	}
+	if changed {
+		invalidateInbounds()
+	}
+	return nil
 }
 
 func (sb *SingBox) Close() {}
