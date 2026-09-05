@@ -1296,10 +1296,20 @@ func (sb *SingBox) CreateInbound(spec NewInboundSpec, tunnels []*Tunnel) (*Creat
 	}
 
 	if spec.Network != "" && spec.Network != "tcp" {
-		newIb["transport"] = map[string]any{
+		tr := map[string]any{
 			"type": spec.Network,
 			"path": spec.Path,
 		}
+		if spec.Network == "ws" {
+			tr["early_data_header_name"] = "Sec-WebSocket-Protocol"
+			tr["max_early_data"] = 2560
+			if spec.ServerName != "" {
+				tr["headers"] = map[string]any{
+					"Host": spec.ServerName,
+				}
+			}
+		}
+		newIb["transport"] = tr
 	}
 
 	cfg["inbounds"] = append(inboundsRaw, newIb)
@@ -1527,8 +1537,14 @@ func (sb *SingBox) UpdateNodeConfig(id int, listen string, listenPort int, addrs
 		ibMap["tls"] = tlsMap
 	}
 
-	// 同步更新 transport.headers.Host
+	// 同步更新 transport.headers.Host 以及 WebSocket 早期数据加速
 	if trMap, ok := ibMap["transport"].(map[string]any); ok && trMap != nil {
+		if tp, _ := trMap["type"].(string); tp == "ws" {
+			if _, hasED := trMap["early_data_header_name"]; !hasED {
+				trMap["early_data_header_name"] = "Sec-WebSocket-Protocol"
+				trMap["max_early_data"] = 2560
+			}
+		}
 		if hdrs, ok := trMap["headers"].(map[string]any); ok && hdrs != nil {
 			if sni != "" {
 				hdrs["Host"] = sni

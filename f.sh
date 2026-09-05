@@ -2010,6 +2010,11 @@ else:
                     if u_pass: user_obj['password'] = u_pass
                 s_ib['users'] = [user_obj]
 
+                if proto == 'tuic':
+                    s_ib['congestion_control'] = 'bbr'
+                elif proto == 'hysteria2':
+                    s_ib['ignore_client_bandwidth'] = True
+
                 tid = ib.get('tls_id')
                 if tid and tid in tls_map:
                     t_obj = tls_map[tid]
@@ -2022,13 +2027,25 @@ else:
                             'server_name': t_srv.get('server_name', 'apple.com'),
                             'reality': r_conf
                         }
-                    elif t_obj.get('certificate_path'):
-                        s_ib['tls'] = {
+                    elif t_obj.get('certificate_path') or t_srv.get('certificate_path'):
+                        cert_p = t_obj.get('certificate_path') or t_srv.get('certificate_path')
+                        key_p = t_obj.get('key_path') or t_srv.get('key_path')
+                        s_name = t_obj.get('server_name') or t_srv.get('server_name', '')
+                        tls_entry = {
                             'enabled': True,
-                            'server_name': t_obj.get('server_name', ''),
-                            'certificate_path': t_obj.get('certificate_path'),
-                            'key_path': t_obj.get('key_path')
+                            'server_name': s_name,
+                            'certificate_path': cert_p,
+                            'key_path': key_p
                         }
+                        if proto in ('tuic', 'hysteria2'):
+                            tls_entry['alpn'] = ['h3']
+                        s_ib['tls'] = tls_entry
+                elif isinstance(ib.get('tls'), dict):
+                    raw_tls = dict(ib['tls'])
+                    if proto in ('tuic', 'hysteria2'):
+                        raw_tls['alpn'] = ['h3']
+                    s_ib['tls'] = raw_tls
+
                 if ib.get('transport'): s_ib['transport'] = ib['transport']
                 final_inbs.append(s_ib)
 
