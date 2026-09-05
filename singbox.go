@@ -617,9 +617,6 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 		}
 
 		remark := baseRemark
-		if item.Remark != "" {
-			remark = fmt.Sprintf("%s - %s", baseRemark, item.Remark)
-		}
 
 		switch strings.ToLower(proto) {
 		case "vmess":

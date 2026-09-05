@@ -1655,13 +1655,6 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 		}
 
 		remark := baseRemark
-		if addr.Remark != "" {
-			if tag == "" || tag == out.Tag {
-				remark = addr.Remark
-			} else {
-				remark = tag + " - " + addr.Remark
-			}
-		}
 
 		switch strings.ToLower(out.Type) {
 		case "vless":
