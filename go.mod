@@ -1,6 +1,6 @@
 module sout
 
-go 1.24.0
+go 1.25.5
 
 require (
 	github.com/sagernet/sing v0.9.0-beta.2
