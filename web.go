@@ -834,6 +834,19 @@ document.addEventListener('click', async e => {
         } else {
           $('#nodeClientAddrsText').value = '';
         }
+
+        // 双向联动保障：若未锁定服务端证书且当前未勾选 TLS，但地址含 443/8443，自动联动开启并填入 SNI
+        if(!detail.server_has_tls && !$('#clientTlsToggle').checked){
+          const val = $('#nodeClientAddrsText').value;
+          if(val.includes(':443') || val.includes(':8443')){
+            $('#clientTlsToggle').checked = true;
+            $('#clientTlsBox').style.display = 'block';
+            if(!$('#clientSniInput').value.trim()){
+              const match = val.match(/([a-zA-Z0-9][-a-zA-Z0-9]*(\.[a-zA-Z0-9][-a-zA-Z0-9]*)+)/);
+              if(match && match[0]) $('#clientSniInput').value = match[0];
+            }
+          }
+        }
       }
     } catch(err) {
       toast(err.message, true);
@@ -1052,6 +1065,26 @@ $('#saveEditNodeBtn').onclick = async () => {
 
 $('#clientTlsToggle').onchange = e => {
   $('#clientTlsBox').style.display = e.target.checked ? 'block' : 'none';
+  if(e.target.checked && !$('#clientSniInput').value.trim()){
+    const val = $('#nodeClientAddrsText').value;
+    const match = val.match(/([a-zA-Z0-9][-a-zA-Z0-9]*(\.[a-zA-Z0-9][-a-zA-Z0-9]*)+)/);
+    if(match && match[0]) $('#clientSniInput').value = match[0];
+  }
+};
+
+$('#nodeClientAddrsText').oninput = e => {
+  if($('#clientTlsToggle').disabled) return;
+  const val = e.target.value;
+  if(val.includes(':443') || val.includes(':8443')){
+    if(!$('#clientTlsToggle').checked){
+      $('#clientTlsToggle').checked = true;
+      $('#clientTlsBox').style.display = 'block';
+    }
+    if(!$('#clientSniInput').value.trim()){
+      const match = val.match(/([a-zA-Z0-9][-a-zA-Z0-9]*(\.[a-zA-Z0-9][-a-zA-Z0-9]*)+)/);
+      if(match && match[0]) $('#clientSniInput').value = match[0];
+    }
+  }
 };
 
 // 从无出口提示跳转到新建出口

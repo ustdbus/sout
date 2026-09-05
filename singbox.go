@@ -49,6 +49,15 @@ func (sb *SingBox) loadInboundAddrs() map[string][]NodeAddrItem {
 	return res
 }
 
+func (sb *SingBox) loadRawInboundAddrs() map[string][]map[string]any {
+	res := make(map[string][]map[string]any)
+	data, err := os.ReadFile(sb.addrsFilePath())
+	if err == nil {
+		_ = json.Unmarshal(data, &res)
+	}
+	return res
+}
+
 func (sb *SingBox) saveInboundAddrs(m map[string][]NodeAddrItem) {
 	_ = os.MkdirAll(sb.workDir, 0755)
 	b, _ := json.MarshalIndent(m, "", "  ")
@@ -1234,17 +1243,94 @@ func (sb *SingBox) NodeDetail(id int) (*NodeDetailInfo, error) {
 	port := int(getFloat(ibMap["listen_port"]))
 	listen, _ := ibMap["listen"].(string)
 
+	serverHasTLS := false
 	tlsEnabled := false
 	sni := ""
-	if tlsMap, ok := ibMap["tls"].(map[string]any); ok {
-		tlsEnabled, _ = tlsMap["enabled"].(bool)
-		sni, _ = tlsMap["server_name"].(string)
+
+	// 1. 服务端本身是否配置了证书或 Reality (由服务端直接做 TLS 终结)
+	if tlsMap, ok := ibMap["tls"].(map[string]any); ok && tlsMap != nil {
+		if en, _ := tlsMap["enabled"].(bool); en {
+			tlsEnabled = true
+			sni, _ = tlsMap["server_name"].(string)
+			if _, hasCert := tlsMap["certificate_path"]; hasCert {
+				serverHasTLS = true
+			}
+			if rMap, hasR := tlsMap["reality"].(map[string]any); hasR && rMap != nil {
+				if rEn, _ := rMap["enabled"].(bool); rEn {
+					serverHasTLS = true
+				}
+			}
+		}
 	}
 
+	// 2. 读取原始的客户端连接配置 (从 singbox_inbound_addrs.json)
+	rawAddrsMap := sb.loadRawInboundAddrs()
+	rawItems := rawAddrsMap[tag]
+	if len(rawItems) > 0 {
+		for _, rawItem := range rawItems {
+			if tlsObj, ok := rawItem["tls"].(map[string]any); ok && tlsObj != nil {
+				if en, ok := tlsObj["enabled"].(bool); ok && en {
+					tlsEnabled = true
+					if sni == "" {
+						if s, ok := tlsObj["server_name"].(string); ok && s != "" {
+							sni = s
+						}
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// 3. 从 transport 传输层中提取 Host 作为 SNI 兜底
+	if trMap, ok := ibMap["transport"].(map[string]any); ok && trMap != nil {
+		if hdrs, ok := trMap["headers"].(map[string]any); ok && hdrs != nil {
+			if h, ok := hdrs["Host"].(string); ok && h != "" {
+				if sni == "" {
+					sni = h
+				}
+				if listen == "127.0.0.1" && net.ParseIP(h) == nil {
+					tlsEnabled = true
+				}
+			}
+		}
+	}
+
+	// 4. 组装标准 addrs 列表
 	addrsMap := sb.loadInboundAddrs()
 	addrs := addrsMap[tag]
 	if addrs == nil {
 		addrs = []NodeAddrItem{}
+	}
+
+	// 若未记录 addrs，但 transport 明确有域名 Host 且为 127.0.0.1 隧道节点，自动补充回显
+	if len(addrs) == 0 && sni != "" && listen == "127.0.0.1" {
+		addrs = append(addrs, NodeAddrItem{
+			Server:     sni,
+			ServerPort: 443,
+		})
+	}
+
+	// 若 addrs 包含 443/8443 端口或域名，且未判定为 TLS，自动联动为开启客户端 TLS
+	if !tlsEnabled && len(addrs) > 0 {
+		for _, a := range addrs {
+			if a.ServerPort == 443 || a.ServerPort == 8443 {
+				tlsEnabled = true
+				if sni == "" && net.ParseIP(a.Server) == nil {
+					sni = a.Server
+				}
+				break
+			}
+		}
+	}
+
+	if tlsEnabled && sni == "" {
+		for _, a := range addrs {
+			if a.Server != "" && net.ParseIP(a.Server) == nil {
+				sni = a.Server
+				break
+			}
+		}
 	}
 
 	return &NodeDetailInfo{
@@ -1255,7 +1341,7 @@ func (sb *SingBox) NodeDetail(id int) (*NodeDetailInfo, error) {
 		ListenPort:   port,
 		TLSEnabled:   tlsEnabled,
 		SNI:          sni,
-		ServerHasTLS: tlsEnabled,
+		ServerHasTLS: serverHasTLS,
 		Addrs:        addrs,
 	}, nil
 }
@@ -1283,25 +1369,60 @@ func (sb *SingBox) UpdateNodeConfig(id int, listen string, listenPort int, addrs
 	if listenPort > 0 {
 		ibMap["listen_port"] = listenPort
 	}
-	if !tlsEnabled {
-		if tlsMap, ok := ibMap["tls"].(map[string]any); ok && tlsMap != nil {
-			tlsMap["enabled"] = false
-			ibMap["tls"] = tlsMap
+
+	sni = strings.TrimSpace(sni)
+
+	// 若服务端原本有 tls 配置（如 Reality 或证书）
+	if tlsMap, ok := ibMap["tls"].(map[string]any); ok && tlsMap != nil && len(tlsMap) > 0 {
+		tlsMap["enabled"] = tlsEnabled
+		if sni != "" {
+			tlsMap["server_name"] = sni
 		}
-	} else {
-		if tlsMap, ok := ibMap["tls"].(map[string]any); ok && tlsMap != nil && len(tlsMap) > 0 {
-			tlsMap["enabled"] = true
+		ibMap["tls"] = tlsMap
+	}
+
+	// 同步更新 transport.headers.Host
+	if trMap, ok := ibMap["transport"].(map[string]any); ok && trMap != nil {
+		if hdrs, ok := trMap["headers"].(map[string]any); ok && hdrs != nil {
 			if sni != "" {
-				tlsMap["server_name"] = sni
+				hdrs["Host"] = sni
 			}
-			ibMap["tls"] = tlsMap
 		}
 	}
 
-	// 持久化优选域名/IP 列表
-	addrsMap := sb.loadInboundAddrs()
-	addrsMap[tag] = addrs
-	sb.saveInboundAddrs(addrsMap)
+	// 持久化保存包含客户端 TLS 的完整 addrs 元数据
+	rawAddrsMap := sb.loadRawInboundAddrs()
+	var newRawItems []map[string]any
+	for _, a := range addrs {
+		item := map[string]any{
+			"server":      a.Server,
+			"server_port": a.ServerPort,
+		}
+		if a.Remark != "" {
+			item["remark"] = a.Remark
+		}
+		if tlsEnabled {
+			targetSNI := sni
+			if targetSNI == "" && net.ParseIP(a.Server) == nil {
+				targetSNI = a.Server
+			}
+			item["tls"] = map[string]any{
+				"enabled":     true,
+				"server_name": targetSNI,
+				"insecure":    false,
+				"utls": map[string]any{
+					"enabled":     true,
+					"fingerprint": "chrome",
+				},
+			}
+		}
+		newRawItems = append(newRawItems, item)
+	}
+	rawAddrsMap[tag] = newRawItems
+
+	_ = os.MkdirAll(sb.workDir, 0755)
+	b, _ := json.MarshalIndent(rawAddrsMap, "", "  ")
+	_ = os.WriteFile(sb.addrsFilePath(), b, 0644)
 
 	invalidateInbounds()
 	return sb.saveConfig(cfg)
