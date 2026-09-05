@@ -496,7 +496,7 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 						pName = "机房"
 					}
 					cName := countryNameCN(b.Region, "")
-					matchedRegion = fmt.Sprintf("[%s%s]", cName, pName)
+					matchedRegion = fmt.Sprintf("(%s%s)", cName, pName)
 				}
 				break
 			}
@@ -504,7 +504,7 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 		if matchedRegion != "" {
 			baseRemark = fmt.Sprintf("%s %s", tag, matchedRegion)
 		} else {
-			baseRemark = fmt.Sprintf("%s [%s]", tag, branchName)
+			baseRemark = fmt.Sprintf("%s (%s)", tag, branchName)
 		}
 	}
 
@@ -673,7 +673,7 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 			}
 
 			link := fmt.Sprintf("vless://%s@%s:%d?%s#%s",
-				uuidStr, connectHost, connectPort, v.Encode(), url.QueryEscape(remark))
+				uuidStr, connectHost, connectPort, v.Encode(), url.PathEscape(remark))
 			links = append(links, link)
 
 		case "tuic":
@@ -682,7 +682,7 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 				authPart += ":" + passStr
 			}
 			link := fmt.Sprintf("tuic://%s@%s:%d?congestion_control=bbr&alpn=h3&sni=%s&allow_insecure=%s#%s",
-				authPart, connectHost, connectPort, url.QueryEscape(sni), allowInsecure, url.QueryEscape(remark))
+				authPart, connectHost, connectPort, url.PathEscape(sni), allowInsecure, url.PathEscape(remark))
 			links = append(links, link)
 
 		case "hysteria2", "hy2":
@@ -691,7 +691,7 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 				authPart = uuidStr
 			}
 			link := fmt.Sprintf("hysteria2://%s@%s:%d?sni=%s&insecure=%s#%s",
-				authPart, connectHost, connectPort, url.QueryEscape(sni), allowInsecure, url.QueryEscape(remark))
+				authPart, connectHost, connectPort, url.PathEscape(sni), allowInsecure, url.PathEscape(remark))
 			links = append(links, link)
 
 		case "shadowsocks", "ss":
@@ -700,7 +700,7 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 				method = "2022-blake3-aes-128-gcm"
 			}
 			auth := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", method, passStr)))
-			link := fmt.Sprintf("ss://%s@%s:%d#%s", auth, connectHost, connectPort, url.QueryEscape(remark))
+			link := fmt.Sprintf("ss://%s@%s:%d#%s", auth, connectHost, connectPort, url.PathEscape(remark))
 			links = append(links, link)
 		}
 	}

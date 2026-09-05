@@ -3537,7 +3537,10 @@ apply_tuic_hy2_to_singbox() {
   TUIC_PASS="$tuic_pass" \
   HY2_PASS="$hy2_pass" \
   python3 <<'PYEOF'
-import json, os
+import json, os, random, string
+
+def gen_suffix():
+    return "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
 
 p = os.environ['SB_CONF']
 try:
@@ -3550,19 +3553,35 @@ inbounds = conf.setdefault('inbounds', [])
 tuic_p = int(os.environ['TUIC_PORT'])
 hy2_p = int(os.environ['HY2_PORT'])
 
+tuic_tag = None
+hy2_tag = None
+for ib in inbounds:
+    if not isinstance(ib, dict): continue
+    t = ib.get('type')
+    tg = ib.get('tag', '')
+    if t == 'tuic' and not tuic_tag:
+        tuic_tag = tg
+    elif t == 'hysteria2' and not hy2_tag:
+        hy2_tag = tg
+
+if not tuic_tag or tuic_tag == 'tuic-in':
+    tuic_tag = f"tuic-{gen_suffix()}"
+if not hy2_tag or hy2_tag == 'hy2-in':
+    hy2_tag = f"hysteria2-{gen_suffix()}"
+
 cleaned = []
 for ib in inbounds:
     if not isinstance(ib, dict): continue
     t = ib.get('type')
     port = ib.get('listen_port', 0)
     tag = ib.get('tag', '')
-    if t in ('tuic', 'hysteria2') or tag in ('tuic-in', 'hy2-in') or port in (tuic_p, hy2_p):
+    if t in ('tuic', 'hysteria2') or port in (tuic_p, hy2_p) or tag.startswith('tuic-') or tag.startswith('hysteria2-') or tag in ('tuic-in', 'hy2-in'):
         continue
     cleaned.append(ib)
 
 cleaned.append({
     "type": "tuic",
-    "tag": "tuic-in",
+    "tag": tuic_tag,
     "listen": "::",
     "listen_port": tuic_p,
     "users": [
@@ -3582,7 +3601,7 @@ cleaned.append({
 
 cleaned.append({
     "type": "hysteria2",
-    "tag": "hy2-in",
+    "tag": hy2_tag,
     "listen": "::",
     "listen_port": hy2_p,
     "users": [
