@@ -213,7 +213,24 @@ func (m *Manager) tryCandidates(t *Tunnel, notify bool) bool {
 			t.Err = fmt.Sprintf("正在尝试第 %d/%d 个候选节点 (%s)...", i+1, len(candidates), node.IP)
 		}
 
-		err := m.tryNode(t)
+		var err error
+		maxRetries := 1
+		if i == 0 {
+			maxRetries = 3
+		}
+		for try := 0; try < maxRetries; try++ {
+			if !m.tunnelActive(t) {
+				return false
+			}
+			if try > 0 {
+				time.Sleep(2 * time.Second)
+			}
+			err = m.tryNode(t)
+			if err == nil {
+				break
+			}
+		}
+
 		if err == nil {
 			t.Status = "up"
 			t.Err = ""

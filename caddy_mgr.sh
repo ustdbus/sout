@@ -117,7 +117,6 @@ try:
     with open('/var/lib/sout/settings.json', 'w') as f: json.dump(d, f, indent=2)
 except Exception: pass
 " 2>/dev/null || true
-      systemctl restart sout 2>/dev/null || true
     fi
 
     local_backend=$(cat /var/lib/sout/panel_mode 2>/dev/null || echo "")
@@ -538,6 +537,49 @@ if vmess_nodes:
     old_tag = vmess_nodes[0].get('tag', '')
     if old_tag.startswith('vmess-argo-') and len(old_tag) == len('vmess-argo-') + 4:
         vmess_tag = old_tag
+    old_port = vmess_nodes[0].get('listen_port')
+    if old_port:
+        node_port = int(old_port)
+    old_tr = vmess_nodes[0].get('transport')
+    if isinstance(old_tr, dict) and old_tr.get('path'):
+        ws_path = old_tr['path']
+
+# 保持已有的优选 IP 列表，仅更新 TLS SNI 为新域名
+addrs_file = '/var/lib/sout/singbox_inbound_addrs.json'
+try:
+    with open(addrs_file, 'r', encoding='utf-8') as af:
+        addrs_map = json.load(af)
+except Exception:
+    addrs_map = {}
+
+cur_addrs = addrs_map.get(vmess_tag, [])
+if cur_addrs and isinstance(cur_addrs, list) and len(cur_addrs) > 0:
+    for it in cur_addrs:
+        if isinstance(it, dict):
+            if 'tls' not in it or not isinstance(it['tls'], dict):
+                it['tls'] = {'enabled': True, 'insecure': False, 'utls': {'enabled': True, 'fingerprint': 'chrome'}}
+            it['tls']['server_name'] = domain
+            it['tls']['enabled'] = True
+            if len(cur_addrs) == 1 and (it.get('server') == '' or '.trycloudflare.com' in str(it.get('server'))):
+                it['server'] = domain
+else:
+    cur_addrs = [{
+        'server': domain,
+        'server_port': 443,
+        'tls': {
+            'enabled': True,
+            'insecure': False,
+            'server_name': domain,
+            'utls': {'enabled': True, 'fingerprint': 'chrome'}
+        }
+    }]
+addrs_map[vmess_tag] = cur_addrs
+try:
+    os.makedirs(os.path.dirname(addrs_file), exist_ok=True)
+    with open(addrs_file, 'w', encoding='utf-8') as af:
+        json.dump(addrs_map, af, indent=2, ensure_ascii=False)
+except Exception:
+    pass
 
 primary_vmess = {
     'type': 'vmess',
@@ -651,6 +693,44 @@ form = urllib.parse.urlencode({
 req = urllib.request.Request(BASE.rstrip('/') + '/save', data=form, headers={'Token': TOKEN, 'Content-Type': 'application/x-www-form-urlencoded'})
 with urllib.request.urlopen(req, timeout=20) as resp:
     resp.read()
+
+# 同步更新 s-ui 数据库中 127.0.0.1 节点的 TLS SNI 与 Host，绝不清空原有优选列表
+try:
+    con_s = sqlite3.connect(os.environ['SUI_DB'])
+    cur_s = con_s.cursor()
+    cur_s.execute('SELECT id, options, addrs FROM inbounds')
+    for row in cur_s.fetchall():
+        ib_id, opt_raw, addrs_raw = row[0], row[1], row[2]
+        opt_str = opt_raw.decode('utf-8', errors='replace') if isinstance(opt_raw, bytes) else str(opt_raw or '')
+        addrs_str = addrs_raw.decode('utf-8', errors='replace') if isinstance(addrs_raw, bytes) else str(addrs_raw or '')
+        try:
+            opt_dict = json.loads(opt_str) if opt_str else {}
+        except Exception:
+            opt_dict = {}
+        if opt_dict.get('listen') == '127.0.0.1':
+            tr = opt_dict.get('transport', {})
+            if isinstance(tr, dict) and 'headers' in tr and isinstance(tr['headers'], dict):
+                tr['headers']['Host'] = os.environ['DOMAIN']
+                opt_dict['transport'] = tr
+                cur_s.execute('UPDATE inbounds SET options=? WHERE id=?', (sqlite3.Binary(json.dumps(opt_dict).encode('utf-8')), ib_id))
+            try:
+                addrs_list = json.loads(addrs_str) if addrs_str else []
+            except Exception:
+                addrs_list = []
+            if isinstance(addrs_list, list) and len(addrs_list) > 0:
+                for it in addrs_list:
+                    if isinstance(it, dict):
+                        if 'tls' not in it or not isinstance(it['tls'], dict):
+                            it['tls'] = {'enabled': True, 'insecure': False, 'utls': {'enabled': True, 'fingerprint': 'chrome'}}
+                        it['tls']['server_name'] = os.environ['DOMAIN']
+                        it['tls']['enabled'] = True
+                if len(addrs_list) == 1 and (addrs_list[0].get('server') == '' or '.trycloudflare.com' in str(addrs_list[0].get('server'))):
+                    addrs_list[0]['server'] = os.environ['DOMAIN']
+                cur_s.execute('UPDATE inbounds SET addrs=? WHERE id=?', (sqlite3.Binary(json.dumps(addrs_list).encode('utf-8')), ib_id))
+    con_s.commit()
+    con_s.close()
+except Exception:
+    pass
 PY
         systemctl restart s-ui 2>/dev/null || true
       fi
@@ -669,7 +749,9 @@ PY
 }
 EOF
   echo "$sout_p" > "${WORK_DIR}/basepath"
-  systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || true
+  if ! systemctl is-active --quiet sout 2>/dev/null && ! systemctl is-active --quiet fanout 2>/dev/null; then
+    systemctl start sout 2>/dev/null || systemctl start fanout 2>/dev/null || true
+  fi
 
   # 保存 meta
   local meta_mode="tunnel"
@@ -781,16 +863,18 @@ try:
     purl = d.get('panel_url', '')
     target_url = 'https://${domain}'
     changed = False
+    needs_restart = False
     if la != '127.0.0.1':
         d['listen_addr'] = '127.0.0.1'
         changed = True
+        needs_restart = True
     if purl != target_url:
         d['panel_url'] = target_url
         changed = True
     if changed:
         with open('${WORK_DIR}/settings.json', 'w') as f:
             json.dump(d, f, indent=2)
-    print(f'{p}|{changed}')
+    print(f'{p}|{needs_restart}')
 except Exception:
     print('8899|False')
 " 2>/dev/null || echo "8899|False")
@@ -802,7 +886,7 @@ except Exception:
   sout_p=$(grep -oE '"sout_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   [[ -z "$sout_p" ]] && sout_p="sout"
   if [[ "$sout_needs_restart" -eq 1 ]]; then
-    echo -e "  [+] 检测到 sout 监听地址/面板URL需要更新，已自动修正并重启服务..."
+    echo -e "  [+] 检测到 sout 监听地址不是 127.0.0.1，已自动修正并重启服务..."
     systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || true
   fi
 

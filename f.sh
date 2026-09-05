@@ -2134,14 +2134,51 @@ created_inbound_tags = []
 vmess_tag, vmess_id = get_or_create_tag_and_id('vmess-argo')
 reality_tag, reality_id = get_or_create_tag_and_id('vless-reality')
 
-vmess_payload = {
-    'id': vmess_id or 0,
-    'type': 'vmess',
-    'tag': vmess_tag,
-    'tls_id': 0,
-    'listen': '127.0.0.1',
-    'listen_port': int(os.environ['NODE_PORT']),
-    'addrs': [{
+existing_vmess = None
+for r in inbound_rows:
+    t = r.get('tag', '')
+    if t.startswith('vmess-argo') or r.get('type') == 'vmess':
+        existing_vmess = r
+        break
+
+node_port = int(os.environ['NODE_PORT'])
+ws_path = os.environ['WS_PATH']
+if existing_vmess:
+    if existing_vmess.get('listen_port'):
+        node_port = int(existing_vmess['listen_port'])
+    old_tr = existing_vmess.get('transport')
+    if isinstance(old_tr, dict) and old_tr.get('path'):
+        ws_path = old_tr['path']
+    elif existing_vmess.get('raw', {}).get('transport', {}).get('path'):
+        ws_path = existing_vmess['raw']['transport']['path']
+
+# 优选 IP/域名：保留所有已有的条目与备注，仅更新其 TLS server_name 为新域名
+vmess_addrs = []
+old_addrs = existing_vmess.get('addrs') if existing_vmess else None
+if not old_addrs:
+    try:
+        with open('/var/lib/sout/singbox_inbound_addrs.json', 'r') as af:
+            ad_map = json.load(af)
+            old_addrs = ad_map.get(vmess_tag)
+    except Exception:
+        pass
+
+if old_addrs and isinstance(old_addrs, list) and len(old_addrs) > 0:
+    for item in old_addrs:
+        if not isinstance(item, dict): continue
+        new_item = dict(item)
+        tls_info = new_item.get('tls')
+        if not isinstance(tls_info, dict):
+            tls_info = {'enabled': True, 'insecure': False, 'utls': {'enabled': True, 'fingerprint': 'chrome'}}
+        tls_info['server_name'] = domain
+        tls_info['enabled'] = True
+        new_item['tls'] = tls_info
+        if len(old_addrs) == 1 and (new_item.get('server') == '' or '.trycloudflare.com' in str(new_item.get('server'))):
+            new_item['server'] = domain
+        vmess_addrs.append(new_item)
+
+if not vmess_addrs:
+    vmess_addrs = [{
         'server': domain,
         'server_port': 443,
         'tls': {
@@ -2151,12 +2188,21 @@ vmess_payload = {
             'server_name': domain,
             'utls': {'enabled': True, 'fingerprint': 'chrome'}
         }
-    }],
+    }]
+
+vmess_payload = {
+    'id': vmess_id or 0,
+    'type': 'vmess',
+    'tag': vmess_tag,
+    'tls_id': 0,
+    'listen': '127.0.0.1',
+    'listen_port': node_port,
+    'addrs': vmess_addrs,
     'transport': {
         'early_data_header_name': 'Sec-WebSocket-Protocol',
         'max_early_data': 2560,
         'headers': {'Host': domain},
-        'path': os.environ['WS_PATH'],
+        'path': ws_path,
         'type': 'ws'
     }
 }
@@ -2388,7 +2434,10 @@ with open(path, 'w') as f:
 METAEOF
   chmod 600 "$CADDY_META"
 
-  systemctl restart sout 2>/dev/null || rc-service sout restart 2>/dev/null || service sout restart 2>/dev/null || true
+  # 仅当 sout 服务未运行时才启动它；若已在运行，绝不重启，避免中断后台已绑定的出口隧道与出口 IP
+  if ! systemctl is-active --quiet sout 2>/dev/null && ! rc-service sout status 2>/dev/null; then
+    systemctl start sout 2>/dev/null || rc-service sout start 2>/dev/null || service sout start 2>/dev/null || true
+  fi
 
   # 7. 统一调用终端菜单中的 Caddy 探测并分流，确保 Caddyfile 规则与隧道回源完全一致
   reload_caddy_proxy >/dev/null 2>&1 || true
@@ -2705,16 +2754,18 @@ try:
     purl = d.get('panel_url', '')
     target_url = 'https://${domain}'
     changed = False
+    needs_restart = False
     if la != '127.0.0.1':
         d['listen_addr'] = '127.0.0.1'
         changed = True
+        needs_restart = True
     if purl != target_url:
         d['panel_url'] = target_url
         changed = True
     if changed:
         with open('${WORK_DIR}/settings.json', 'w') as f:
             json.dump(d, f, indent=2)
-    print(f'{p}|{changed}')
+    print(f'{p}|{needs_restart}')
 except Exception:
     print('8899|False')
 " 2>/dev/null || echo "8899|False")
@@ -2726,7 +2777,7 @@ except Exception:
   sout_p=$(grep -oE '"sout_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   [[ -z "$sout_p" ]] && sout_p="sout"
   if [[ "$sout_needs_restart" -eq 1 ]]; then
-    echo -e "  [+] 检测到 sout 监听地址/面板URL需要更新，已自动修正并重启服务..."
+    echo -e "  [+] 检测到 sout 监听地址不是 127.0.0.1，已自动修正并重启服务..."
     systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || true
   fi
 
@@ -2849,9 +2900,14 @@ for r in rows:
             if domain_val:
                 addrs = json.loads(addrs_raw) if addrs_raw else []
                 if isinstance(addrs, list) and len(addrs) > 0:
-                    addrs[0]['server'] = domain_val
-                    if 'tls' in addrs[0] and isinstance(addrs[0]['tls'], dict):
-                        addrs[0]['tls']['server_name'] = domain_val
+                    for it in addrs:
+                        if not isinstance(it, dict): continue
+                        if 'tls' not in it or not isinstance(it['tls'], dict):
+                            it['tls'] = {'enabled': True, 'insecure': False, 'utls': {'enabled': True, 'fingerprint': 'chrome'}}
+                        it['tls']['server_name'] = domain_val
+                        it['tls']['enabled'] = True
+                    if len(addrs) == 1 and (addrs[0].get('server') == '' or '.trycloudflare.com' in str(addrs[0].get('server'))):
+                        addrs[0]['server'] = domain_val
                     cur.execute('UPDATE inbounds SET addrs=? WHERE id=?', (sqlite3.Binary(json.dumps(addrs).encode('utf-8')), ib_id))
                     
                 if isinstance(tr, dict) and 'headers' in tr and isinstance(tr['headers'], dict):
@@ -2928,6 +2984,7 @@ try:
         if t == 'vmess-argo' or t.startswith('vmess-argo-'):
             node_tag = t
             existing_id = r.get('id')
+            existing_row = r
             break
 
     if not node_tag:
@@ -2937,30 +2994,57 @@ try:
         node_tag = f"vmess-argo-{rand_suffix}"
 
     client_uuid = str(uuid.uuid4())
-    addrs_data = [{
-        'server': os.environ['DOMAIN'],
-        'server_port': 443,
-        'tls': {
-            'disable_sni': False,
-            'enabled': True,
-            'insecure': False,
-            'server_name': os.environ['DOMAIN'],
-            'utls': {'enabled': True, 'fingerprint': 'chrome'}
-        }
-    }]
+    node_port = int(os.environ['NODE_PORT'])
+    ws_path = os.environ['WS_PATH']
+    if existing_row:
+        if existing_row.get('listen_port'):
+            node_port = int(existing_row['listen_port'])
+        old_tr = existing_row.get('transport')
+        if isinstance(old_tr, dict) and old_tr.get('path'):
+            ws_path = old_tr['path']
+
+    addrs_data = []
+    old_addrs = existing_row.get('addrs') if existing_row else None
+    if old_addrs and isinstance(old_addrs, list) and len(old_addrs) > 0:
+        for item in old_addrs:
+            if not isinstance(item, dict): continue
+            new_item = dict(item)
+            tls_info = new_item.get('tls')
+            if not isinstance(tls_info, dict):
+                tls_info = {'enabled': True, 'insecure': False, 'utls': {'enabled': True, 'fingerprint': 'chrome'}}
+            tls_info['server_name'] = os.environ['DOMAIN']
+            tls_info['enabled'] = True
+            new_item['tls'] = tls_info
+            if len(old_addrs) == 1 and (new_item.get('server') == '' or '.trycloudflare.com' in str(new_item.get('server'))):
+                new_item['server'] = os.environ['DOMAIN']
+            addrs_data.append(new_item)
+
+    if not addrs_data:
+        addrs_data = [{
+            'server': os.environ['DOMAIN'],
+            'server_port': 443,
+            'tls': {
+                'disable_sni': False,
+                'enabled': True,
+                'insecure': False,
+                'server_name': os.environ['DOMAIN'],
+                'utls': {'enabled': True, 'fingerprint': 'chrome'}
+            }
+        }]
+
     inbound_payload = {
         'id': existing_id or 0,
         'type': 'vmess',
         'tag': node_tag,
         'tls_id': 0,
         'listen': '127.0.0.1',
-        'listen_port': int(os.environ['NODE_PORT']),
+        'listen_port': node_port,
         'addrs': addrs_data,
         'transport': {
             'early_data_header_name': 'Sec-WebSocket-Protocol',
             'max_early_data': 2560,
             'headers': {'Host': os.environ['DOMAIN']},
-            'path': os.environ['WS_PATH'],
+            'path': ws_path,
             'type': 'ws'
         }
     }
