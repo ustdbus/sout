@@ -1270,6 +1270,12 @@ func (sb *SingBox) CreateInbound(spec NewInboundSpec, tunnels []*Tunnel) (*Creat
 	}
 	newIb["users"] = []any{defaultUser}
 
+	if spec.Protocol == "tuic" {
+		newIb["congestion_control"] = "bbr"
+	} else if spec.Protocol == "hysteria2" {
+		newIb["ignore_client_bandwidth"] = true
+	}
+
 	if spec.Security == "tls" || spec.Security == "reality" {
 		tlsMap := map[string]any{
 			"enabled": true,

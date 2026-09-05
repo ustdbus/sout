@@ -3709,6 +3709,7 @@ cleaned.append({
     "listen_port": tuic_p,
     "users": [
         {
+            "name": "admin",
             "uuid": os.environ['TUIC_UUID'],
             "password": os.environ['TUIC_PASS']
         }
@@ -3728,8 +3729,10 @@ cleaned.append({
     "tag": hy2_tag,
     "listen": "::",
     "listen_port": hy2_p,
+    "ignore_client_bandwidth": True,
     "users": [
         {
+            "name": "admin",
             "password": os.environ['HY2_PASS']
         }
     ],
