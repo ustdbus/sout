@@ -2086,7 +2086,7 @@ inbound_rows = [r for r in inbound_rows if isinstance(r, dict)]
 def get_or_create_tag_and_id(prefix):
     for row in inbound_rows:
         t = row.get('tag', '')
-        if t == prefix or t.startswith(prefix + '-'):
+        if t.startswith(prefix + '-') and len(t) == len(prefix) + 5:
             return t, row.get('id')
     return f"{prefix}-{gen_rand_suffix()}", None
 
@@ -4100,10 +4100,13 @@ if existing_tuic:
     tuic_port = existing_tuic.get('listen_port') or int(os.environ['TUIC_PORT'])
     tuic_addrs = [{'server': pub_ip, 'server_port': tuic_port}]
     if action_mode in ('change_existing_only', 'change_and_fill'):
+        tuic_t = existing_tuic.get('tag') or ''
+        if not (tuic_t.startswith('tuic-') and len(tuic_t) == 9):
+            tuic_t = f"tuic-{gen_suffix()}"
         tuic_payload = {
             'id': existing_tuic['id'],
             'type': 'tuic',
-            'tag': existing_tuic.get('tag') or f"tuic-{gen_suffix()}",
+            'tag': tuic_t,
             'tls_id': new_tls_id,
             'listen': '::',
             'listen_port': tuic_port,
@@ -4111,7 +4114,7 @@ if existing_tuic:
             'addrs': tuic_addrs
         }
         api('POST', 'save', {'object': 'inbounds', 'action': 'edit', 'data': json.dumps(tuic_payload)})
-        print(f"\033[32m[✓] TUIC 节点 [{existing_tuic.get('tag')}] 已成功更新 (TLS_ID: {new_tls_id}, 拥塞控制: {cc}, 多域名: {pub_ip}:{tuic_port})\033[0m")
+        print(f"\033[32m[✓] TUIC 节点 [{tuic_t}] 已成功更新 (TLS_ID: {new_tls_id}, 拥塞控制: {cc}, 多域名: {pub_ip}:{tuic_port})\033[0m")
 else:
     if action_mode in ('create_both', 'change_and_fill'):
         tuic_port = int(os.environ['TUIC_PORT'])
@@ -4135,10 +4138,13 @@ if existing_hy2:
     hy2_port = existing_hy2.get('listen_port') or int(os.environ['HY2_PORT'])
     hy2_addrs = [{'server': pub_ip, 'server_port': hy2_port}]
     if action_mode in ('change_existing_only', 'change_and_fill'):
+        hy2_t = existing_hy2.get('tag') or ''
+        if not (hy2_t.startswith('hysteria2-') and len(hy2_t) == 14):
+            hy2_t = f"hysteria2-{gen_suffix()}"
         hy2_payload = {
             'id': existing_hy2['id'],
             'type': 'hysteria2',
-            'tag': existing_hy2.get('tag') or f"hysteria2-{gen_suffix()}",
+            'tag': hy2_t,
             'tls_id': new_tls_id,
             'listen': '::',
             'listen_port': hy2_port,
@@ -4146,7 +4152,7 @@ if existing_hy2:
             'addrs': hy2_addrs
         }
         api('POST', 'save', {'object': 'inbounds', 'action': 'edit', 'data': json.dumps(hy2_payload)})
-        print(f"\033[32m[✓] Hysteria2 节点 [{existing_hy2.get('tag')}] 已成功更新 (TLS_ID: {new_tls_id}, 忽略客户端带宽: 开启, 多域名: {pub_ip}:{hy2_port})\033[0m")
+        print(f"\033[32m[✓] Hysteria2 节点 [{hy2_t}] 已成功更新 (TLS_ID: {new_tls_id}, 忽略客户端带宽: 开启, 多域名: {pub_ip}:{hy2_port})\033[0m")
 else:
     if action_mode in ('create_both', 'change_and_fill'):
         hy2_port = int(os.environ['HY2_PORT'])

@@ -530,14 +530,18 @@ for ib in inbounds:
         kept_inbounds.append(ib)
 
 users = [{'name': 'default', 'uuid': str(uuid.uuid4())}]
+vmess_tag = f"vmess-argo-{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}"
 if vmess_nodes:
     old_users = vmess_nodes[0].get('users')
     if old_users and isinstance(old_users, list) and len(old_users) > 0:
         users = old_users
+    old_tag = vmess_nodes[0].get('tag', '')
+    if old_tag.startswith('vmess-argo-') and len(old_tag) == len('vmess-argo-') + 4:
+        vmess_tag = old_tag
 
 primary_vmess = {
     'type': 'vmess',
-    'tag': 'vmess-argo',
+    'tag': vmess_tag,
     'listen': '127.0.0.1',
     'listen_port': node_port,
     'users': users,
@@ -551,15 +555,24 @@ primary_vmess = {
 }
 kept_inbounds.append(primary_vmess)
 
-# 2. 检查并确保 vless-reality 基础节点存在
-has_reality = any(ib.get('type') == 'vless' and (ib.get('tag') == 'vless-reality' or 'reality' in str(ib.get('tls', {}))) for ib in kept_inbounds)
+# 2. 检查并确保 vless-reality 基础节点存在，且规范带有 4 位随机后缀
+has_reality = False
+for ib in kept_inbounds:
+    if ib.get('type') == 'vless' and (ib.get('tag') == 'vless-reality' or str(ib.get('tag', '')).startswith('vless-reality-') or 'reality' in str(ib.get('tls', {}))):
+        has_reality = True
+        cur_t = str(ib.get('tag', ''))
+        if not (cur_t.startswith('vless-reality-') and len(cur_t) == len('vless-reality-') + 4):
+            ib['tag'] = f"vless-reality-{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}"
+        break
+
 if not has_reality:
     reality_port = random.randint(20000, 45000)
     priv_k, pub_k = gen_x25519()
     sid = os.urandom(4).hex()
+    reality_tag = f"vless-reality-{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}"
     reality_inbound = {
         'type': 'vless',
-        'tag': 'vless-reality',
+        'tag': reality_tag,
         'listen': '::',
         'listen_port': reality_port,
         'users': [{'name': 'default', 'uuid': str(uuid.uuid4()), 'flow': 'xtls-rprx-vision'}],
@@ -974,14 +987,18 @@ for ib in inbounds:
         kept_inbounds.append(ib)
 
 users = [{'name': 'default', 'uuid': str(uuid.uuid4())}]
+vmess_tag = f"vmess-argo-{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}"
 if vmess_nodes:
     old_users = vmess_nodes[0].get('users')
     if old_users and isinstance(old_users, list) and len(old_users) > 0:
         users = old_users
+    old_tag = vmess_nodes[0].get('tag', '')
+    if old_tag.startswith('vmess-argo-') and len(old_tag) == len('vmess-argo-') + 4:
+        vmess_tag = old_tag
 
 primary_vmess = {
     'type': 'vmess',
-    'tag': 'vmess-argo',
+    'tag': vmess_tag,
     'listen': '127.0.0.1',
     'listen_port': node_port,
     'users': users,
@@ -995,15 +1012,24 @@ primary_vmess = {
 }
 kept_inbounds.append(primary_vmess)
 
-# 2. 检查并确保 vless-reality 基础节点存在
-has_reality = any(ib.get('type') == 'vless' and (ib.get('tag') == 'vless-reality' or 'reality' in str(ib.get('tls', {}))) for ib in kept_inbounds)
+# 2. 检查并确保 vless-reality 基础节点存在，且规范带有 4 位随机后缀
+has_reality = False
+for ib in kept_inbounds:
+    if ib.get('type') == 'vless' and (ib.get('tag') == 'vless-reality' or str(ib.get('tag', '')).startswith('vless-reality-') or 'reality' in str(ib.get('tls', {}))):
+        has_reality = True
+        cur_t = str(ib.get('tag', ''))
+        if not (cur_t.startswith('vless-reality-') and len(cur_t) == len('vless-reality-') + 4):
+            ib['tag'] = f"vless-reality-{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}"
+        break
+
 if not has_reality:
     reality_port = random.randint(20000, 45000)
     priv_k, pub_k = gen_x25519()
     sid = os.urandom(4).hex()
+    reality_tag = f"vless-reality-{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}"
     reality_inbound = {
         'type': 'vless',
-        'tag': 'vless-reality',
+        'tag': reality_tag,
         'listen': '::',
         'listen_port': reality_port,
         'users': [{'name': 'default', 'uuid': str(uuid.uuid4()), 'flow': 'xtls-rprx-vision'}],
