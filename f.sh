@@ -2267,6 +2267,11 @@ if not reality_tid:
             break
 
 reality_port = int(os.environ['REALITY_PORT'])
+if reality_id:
+    for r in inbound_rows:
+        if (r.get('id') == reality_id or r.get('tag') == reality_tag) and r.get('listen_port'):
+            reality_port = int(r['listen_port'])
+            break
 pub_host = os.environ.get('PUBLIC_IP') or domain
 
 reality_payload = {
@@ -3581,36 +3586,66 @@ apply_tuic_hy2_to_singbox() {
   if [[ "$is_insecure" == "true" && -n "$pip" ]]; then
     default_server="$pip"
   fi
+  local node_server="$default_server"
+  [[ -z "$node_server" ]] && node_server="$pip"
 
-  read -rp "  请输入客户端连接节点地址 (域名或IP) [默认 ${default_server}]: " node_server
-  node_server=$(echo "$node_server" | tr -d ' \r\n')
-  [[ -z "$node_server" ]] && node_server="$default_server"
+  # 自动探测已有的 TUIC 与 Hysteria2 端口与凭据（若已存在则严格继承；不存在则自动分配随机高位端口，免除询问）
+  local exist_tuic_p exist_hy2_p exist_tuic_uuid exist_tuic_pwd exist_hy2_pwd
+  if [[ -f "$sb_conf" ]]; then
+    local probed_th
+    probed_th=$(python3 -c "
+import json
+try:
+    with open('$sb_conf') as f: c = json.load(f)
+    t_p = ''
+    h_p = ''
+    t_uid = ''
+    t_pass = ''
+    h_pass = ''
+    for ib in c.get('inbounds', []):
+        if not isinstance(ib, dict): continue
+        if ib.get('type') == 'tuic' and not t_p:
+            t_p = str(ib.get('listen_port', ''))
+            users = ib.get('users', [])
+            if users and isinstance(users[0], dict):
+                t_uid = users[0].get('uuid', '')
+                t_pass = users[0].get('password', '')
+        elif ib.get('type') == 'hysteria2' and not h_p:
+            h_p = str(ib.get('listen_port', ''))
+            users = ib.get('users', [])
+            if users and isinstance(users[0], dict):
+                h_pass = users[0].get('password', '')
+    print(f'{t_p}|{h_p}|{t_uid}|{t_pass}|{h_pass}')
+except Exception:
+    print('||||')
+" 2>/dev/null || echo "||||")
+    exist_tuic_p=$(echo "$probed_th" | cut -d'|' -f1)
+    exist_hy2_p=$(echo "$probed_th" | cut -d'|' -f2)
+    exist_tuic_uuid=$(echo "$probed_th" | cut -d'|' -f3)
+    exist_tuic_pwd=$(echo "$probed_th" | cut -d'|' -f4)
+    exist_hy2_pwd=$(echo "$probed_th" | cut -d'|' -f5)
+  fi
 
-  local tuic_port="8443"
-  read -rp "  请输入 TUIC 监听端口 [默认 8443]: " in_tp
-  in_tp=$(echo "$in_tp" | tr -d ' \r\n')
-  [[ -n "$in_tp" ]] && tuic_port="$in_tp"
+  local tuic_port="$exist_tuic_p"
+  [[ -z "$tuic_port" ]] && tuic_port=$(rand_local_port)
 
-  local hy2_port="443"
-  read -rp "  请输入 Hysteria2 监听端口 [默认 443]: " in_hp
-  in_hp=$(echo "$in_hp" | tr -d ' \r\n')
-  [[ -n "$in_hp" ]] && hy2_port="$in_hp"
+  local hy2_port="$exist_hy2_p"
+  [[ -z "$hy2_port" ]] && hy2_port=$(rand_local_port)
+  while [[ "$hy2_port" == "$tuic_port" ]]; do
+    hy2_port=$(rand_local_port)
+  done
 
-  local tuic_uuid
-  tuic_uuid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || true)
-  [[ -z "$tuic_uuid" ]] && tuic_uuid="a1b2c3d4-e5f6-7a8b-9c0d-ef1234567890"
+  local tuic_uuid="$exist_tuic_uuid"
+  [[ -z "$tuic_uuid" ]] && tuic_uuid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "a1b2c3d4-e5f6-7a8b-9c0d-ef1234567890")
 
-  local tuic_pass hy2_pass
-  tuic_pass=$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n' | cut -c1-8)
-  hy2_pass=$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n' | cut -c1-8)
+  local tuic_pass="$exist_tuic_pwd"
+  [[ -z "$tuic_pass" ]] && tuic_pass=$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n' | cut -c1-8)
 
-  read -rp "  请输入 TUIC 密码 [直接回车使用随机: ${tuic_pass}]: " in_tpass
-  in_tpass=$(echo "$in_tpass" | tr -d ' \r\n')
-  [[ -n "$in_tpass" ]] && tuic_pass="$in_tpass"
+  local hy2_pass="$exist_hy2_pwd"
+  [[ -z "$hy2_pass" ]] && hy2_pass=$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n' | cut -c1-8)
 
-  read -rp "  请输入 Hysteria2 密码 [直接回车使用随机: ${hy2_pass}]: " in_hpass
-  in_hpass=$(echo "$in_hpass" | tr -d ' \r\n')
-  [[ -n "$in_hpass" ]] && hy2_pass="$in_hpass"
+  echo -e "  [+] TUIC 监听端口: ${Y}${tuic_port}${N} (自动分配随机高位端口)"
+  echo -e "  [+] Hysteria2 监听端口: ${Y}${hy2_port}${N} (自动分配随机高位端口)"
 
   cp -f "$sb_conf" "${sb_conf}.bak"
   SB_CONF="$sb_conf" \
