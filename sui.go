@@ -992,6 +992,13 @@ func saveBranchBinding(workDir string, binding branchBinding) {
 	}
 }
 
+func saveAllBranchBindings(workDir string, list []branchBinding) {
+	data, err := json.MarshalIndent(list, "", "  ")
+	if err == nil {
+		_ = os.WriteFile(branchBindingsPath(workDir), data, 0600)
+	}
+}
+
 func removeBranchBinding(workDir string, templateID int, host string, slot int) {
 	list := loadBranchBindings(workDir)
 	var updated []branchBinding

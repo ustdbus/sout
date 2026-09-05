@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/url"
 	"os"
@@ -136,6 +137,66 @@ func initDefaultSingBoxConfig(path string) error {
 	return os.WriteFile(path, data, 0644)
 }
 
+func (sb *SingBox) healCloudflareQuickTunnel(cfg map[string]any) bool {
+	hasTryCF := false
+	var oldDomain string
+	inboundsRaw, _ := cfg["inbounds"].([]any)
+	for _, ib := range inboundsRaw {
+		if ibMap, ok := ib.(map[string]any); ok {
+			if trMap, ok := ibMap["transport"].(map[string]any); ok {
+				if hdrs, ok := trMap["headers"].(map[string]any); ok {
+					if h, ok := hdrs["Host"].(string); ok && strings.HasSuffix(h, ".trycloudflare.com") {
+						hasTryCF = true
+						oldDomain = h
+						break
+					}
+				}
+			}
+		}
+	}
+	if !hasTryCF {
+		return false
+	}
+
+	out, err := exec.Command("sh", "-c", "journalctl -u cloudflared -b -n 50 --no-pager 2>/dev/null | grep -oE 'https://[a-zA-Z0-9-]+\\.trycloudflare\\.com' | tail -1 | sed 's|https://||' | tr -d ' \\r\\n'").Output()
+	if err != nil || len(out) == 0 {
+		return false
+	}
+	latestDomain := strings.TrimSpace(string(out))
+	if latestDomain == "" || latestDomain == oldDomain {
+		return false
+	}
+
+	log.Printf("[singbox] 检测到 Cloudflare 临时隧道域名由 %s 漂移为 %s，正在自动校准...", oldDomain, latestDomain)
+
+	for _, ib := range inboundsRaw {
+		if ibMap, ok := ib.(map[string]any); ok {
+			if trMap, ok := ibMap["transport"].(map[string]any); ok {
+				if hdrs, ok := trMap["headers"].(map[string]any); ok {
+					if h, ok := hdrs["Host"].(string); ok && strings.HasSuffix(h, ".trycloudflare.com") {
+						hdrs["Host"] = latestDomain
+					}
+				}
+			}
+		}
+	}
+
+	rawAddrsMap := sb.loadRawInboundAddrs()
+	for _, items := range rawAddrsMap {
+		for _, it := range items {
+			if tlsObj, ok := it["tls"].(map[string]any); ok && tlsObj != nil {
+				if sn, ok := tlsObj["server_name"].(string); ok && strings.HasSuffix(sn, ".trycloudflare.com") {
+					tlsObj["server_name"] = latestDomain
+				}
+			}
+		}
+	}
+	b, _ := json.MarshalIndent(rawAddrsMap, "", "  ")
+	_ = os.WriteFile(sb.addrsFilePath(), b, 0644)
+
+	return true
+}
+
 func (sb *SingBox) loadConfig() (map[string]any, error) {
 	data, err := os.ReadFile(sb.configPath)
 	if err != nil {
@@ -144,6 +205,9 @@ func (sb *SingBox) loadConfig() (map[string]any, error) {
 	var cfg map[string]any
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("解析 sing-box 配置 JSON 失败: %w", err)
+	}
+	if sb.healCloudflareQuickTunnel(cfg) {
+		_ = sb.saveConfig(cfg)
 	}
 	return cfg, nil
 }
@@ -749,7 +813,7 @@ func (sb *SingBox) CloneToTunnels(templateID int, hosts []string, tunnels []*Tun
 	for _, host := range hosts {
 		var targetTunnel *Tunnel
 		for _, t := range tunnels {
-			if t.Node.HostName == host {
+			if t.Node.HostName == host || sanitizeTag(t.Node.HostName) == sanitizeTag(host) || strings.HasPrefix(t.Node.HostName, host) || strings.HasPrefix(host, t.Node.HostName) {
 				targetTunnel = t
 				break
 			}
@@ -761,7 +825,13 @@ func (sb *SingBox) CloneToTunnels(templateID int, hosts []string, tunnels []*Tun
 		if targetTunnel != nil {
 			slot = targetTunnel.Slot
 			region = targetTunnel.TargetRegion
+			if region == "" {
+				region = targetTunnel.Node.CountryCode
+			}
 			poolType = targetTunnel.TargetPoolType
+			if poolType == "" {
+				poolType = targetTunnel.IPType
+			}
 		}
 
 		// 持久化保存分流绑定记录，重启或隧道切换时自动自愈
@@ -899,9 +969,52 @@ func (sb *SingBox) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) err
 		return err
 	}
 
-	oldTag := "sout" + sanitizeTag(oldHost)
-	newTag := "sout" + sanitizeTag(target.Node.HostName)
+	oldHostTag := sanitizeTag(oldHost)
+	newHostTag := sanitizeTag(target.Node.HostName)
+	oldTag := "sout" + oldHostTag
+	newTag := "sout" + newHostTag
 
+	// 1. 同步更新持久化绑定记录
+	bindings := loadBranchBindings(sb.workDir)
+	for i := range bindings {
+		if bindings[i].Host == oldHost || sanitizeTag(bindings[i].Host) == oldHostTag || (target.Slot > 0 && bindings[i].Slot == target.Slot) {
+			bindings[i].Host = target.Node.HostName
+			bindings[i].Slot = target.Slot
+			reg := target.TargetRegion
+			if reg == "" {
+				reg = target.Node.CountryCode
+			}
+			if reg != "" {
+				bindings[i].Region = reg
+			}
+			pt := target.TargetPoolType
+			if pt == "" {
+				pt = target.IPType
+			}
+			if pt != "" {
+				bindings[i].PoolType = pt
+			}
+		}
+	}
+	saveAllBranchBindings(sb.workDir, bindings)
+
+	// 2. 更新 inbounds 中的旧客户端用户名
+	inboundsRaw, _ := cfg["inbounds"].([]any)
+	for _, ib := range inboundsRaw {
+		if ibMap, ok := ib.(map[string]any); ok {
+			usersRaw, _ := ibMap["users"].([]any)
+			for _, u := range usersRaw {
+				if uMap, ok := u.(map[string]any); ok {
+					name, _ := uMap["name"].(string)
+					if strings.Contains(name, oldHostTag) {
+						uMap["name"] = strings.Replace(name, oldHostTag, newHostTag, 1)
+					}
+				}
+			}
+		}
+	}
+
+	// 3. 更新 route.rules
 	routeRaw, _ := cfg["route"].(map[string]any)
 	if routeRaw != nil {
 		rulesRaw, _ := routeRaw["rules"].([]any)
@@ -909,6 +1022,13 @@ func (sb *SingBox) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) err
 			if rMap, ok := r.(map[string]any); ok {
 				if rMap["outbound"] == oldTag {
 					rMap["outbound"] = newTag
+				}
+				if authUsers, ok := rMap["auth_user"].([]any); ok {
+					for idx, au := range authUsers {
+						if auStr, ok := au.(string); ok && strings.Contains(auStr, oldHostTag) {
+							authUsers[idx] = strings.Replace(auStr, oldHostTag, newHostTag, 1)
+						}
+					}
 				}
 			}
 		}
