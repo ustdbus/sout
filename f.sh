@@ -3717,6 +3717,7 @@ cleaned.append({
     "tls": {
         "enabled": True,
         "server_name": os.environ['CERT_DOM'],
+        "alpn": ["h3"],
         "certificate_path": os.environ['CERT_FILE'],
         "key_path": os.environ['KEY_FILE']
     }
@@ -3735,6 +3736,7 @@ cleaned.append({
     "tls": {
         "enabled": True,
         "server_name": os.environ['CERT_DOM'],
+        "alpn": ["h3"],
         "certificate_path": os.environ['CERT_FILE'],
         "key_path": os.environ['KEY_FILE']
     }
@@ -4171,7 +4173,8 @@ if target_tls:
             'enabled': True,
             'certificate_path': cert_file,
             'key_path': key_file,
-            'server_name': cert_domain
+            'server_name': cert_domain,
+            'alpn': ['h3']
         },
         'client': {
             'insecure': is_insecure,
@@ -4198,7 +4201,8 @@ else:
             'enabled': True,
             'certificate_path': cert_file,
             'key_path': key_file,
-            'server_name': cert_domain
+            'server_name': cert_domain,
+            'alpn': ['h3']
         },
         'client': {
             'insecure': is_insecure,

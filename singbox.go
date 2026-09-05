@@ -1283,6 +1283,9 @@ func (sb *SingBox) CreateInbound(spec NewInboundSpec, tunnels []*Tunnel) (*Creat
 		if spec.KeyFile != "" {
 			tlsMap["key_path"] = spec.KeyFile
 		}
+		if spec.Protocol == "tuic" || spec.Protocol == "hysteria2" {
+			tlsMap["alpn"] = []string{"h3"}
+		}
 		newIb["tls"] = tlsMap
 	}
 
@@ -1508,6 +1511,12 @@ func (sb *SingBox) UpdateNodeConfig(id int, listen string, listenPort int, addrs
 		tlsMap["enabled"] = tlsEnabled
 		if sni != "" {
 			tlsMap["server_name"] = sni
+		}
+		proto, _ := ibMap["type"].(string)
+		if proto == "tuic" || proto == "hysteria2" {
+			if _, hasALPN := tlsMap["alpn"]; !hasALPN {
+				tlsMap["alpn"] = []string{"h3"}
+			}
 		}
 		ibMap["tls"] = tlsMap
 	}
