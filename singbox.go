@@ -1420,12 +1420,26 @@ func (sb *SingBox) NodeDetail(id int) (*NodeDetailInfo, error) {
 		addrs = []NodeAddrItem{}
 	}
 
-	// 若未记录 addrs，但 transport 明确有域名 Host 且为 127.0.0.1 隧道节点，自动补充回显
-	if len(addrs) == 0 && sni != "" && listen == "127.0.0.1" {
-		addrs = append(addrs, NodeAddrItem{
-			Server:     sni,
-			ServerPort: 443,
-		})
+	// 若未记录 addrs，自动根据节点类型回显连接地址
+	if len(addrs) == 0 {
+		if sni != "" && listen == "127.0.0.1" {
+			addrs = append(addrs, NodeAddrItem{
+				Server:     sni,
+				ServerPort: 443,
+			})
+		} else if port > 0 {
+			// 直连公网节点（TUIC, Hysteria2, Reality 等）：自动识别母机公网 IP 并回显
+			pubHost := hostPublicIP()
+			if pubHost == "" && sni != "" && net.ParseIP(sni) == nil {
+				pubHost = sni
+			}
+			if pubHost != "" {
+				addrs = append(addrs, NodeAddrItem{
+					Server:     pubHost,
+					ServerPort: port,
+				})
+			}
+		}
 	}
 
 	// 若 addrs 包含 443/8443 端口或域名，且未判定为 TLS，自动联动为开启客户端 TLS

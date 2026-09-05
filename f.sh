@@ -3657,6 +3657,8 @@ except Exception:
   TUIC_UUID="$tuic_uuid" \
   TUIC_PASS="$tuic_pass" \
   HY2_PASS="$hy2_pass" \
+  NODE_SERVER="$node_server" \
+  IS_INSECURE="$is_insecure" \
   python3 <<'PYEOF'
 import json, os, random, string
 
@@ -3741,6 +3743,41 @@ cleaned.append({
 conf['inbounds'] = cleaned
 with open(p, 'w') as f:
     json.dump(conf, f, indent=2)
+
+addrs_path = '/var/lib/sout/singbox_inbound_addrs.json'
+try:
+    with open(addrs_path, 'r') as af:
+        addrs_data = json.load(af)
+except Exception:
+    addrs_data = {}
+
+srv_host = os.environ.get('NODE_SERVER') or os.environ.get('CERT_DOM') or ''
+cert_dom = os.environ.get('CERT_DOM', '')
+addrs_data[tuic_tag] = [{
+    'server': srv_host,
+    'server_port': tuic_p,
+    'tls': {
+        'enabled': True,
+        'insecure': os.environ.get('IS_INSECURE') == 'true',
+        'server_name': cert_dom
+    }
+}]
+addrs_data[hy2_tag] = [{
+    'server': srv_host,
+    'server_port': hy2_p,
+    'tls': {
+        'enabled': True,
+        'insecure': os.environ.get('IS_INSECURE') == 'true',
+        'server_name': cert_dom
+    }
+}]
+
+try:
+    os.makedirs(os.path.dirname(addrs_path), exist_ok=True)
+    with open(addrs_path, 'w') as af:
+        json.dump(addrs_data, af, indent=2)
+except Exception:
+    pass
 PYEOF
 
   if command -v sing-box >/dev/null 2>&1 || [[ -x /usr/local/bin/sing-box ]]; then
