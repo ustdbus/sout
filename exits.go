@@ -203,8 +203,11 @@ func (m *Manager) ExitsOf() ExitsView {
 	baseNodeMap := map[string]*GroupedNode{}
 	var baseOrder []string
 
-	// 识别基础原生入站并去重保序
+	// 识别基础原生入站并去重保序 (仅基础原生母节点生成独立卡片)
 	for _, ib := range list {
+		if !ib.IsBase {
+			continue
+		}
 		baseTag := getBaseTag(ib.Tag)
 		if _, exists := baseNodeMap[baseTag]; !exists {
 			node := &GroupedNode{
@@ -227,9 +230,9 @@ func (m *Manager) ExitsOf() ExitsView {
 		}
 		var links []string
 		if sui, ok := p.(*SUI); ok {
-			links = sui.InboundBranchLinks(ib.ID, ib.ClientID, ib.Tag, publicHost)
+			links = sui.InboundBranchLinks(ib.ID, ib.ClientID, ib.Remark, publicHost)
 		} else if sb, ok := p.(*SingBox); ok {
-			links = sb.InboundBranchLinks(ib.ID, ib.ClientID, ib.Tag, publicHost)
+			links = sb.InboundBranchLinks(ib.ID, ib.ClientID, ib.Remark, publicHost)
 		} else if p != nil {
 			if l, err := p.InboundLinks([]int{targetID}, publicHost); err == nil {
 				links = l
@@ -285,6 +288,14 @@ func (m *Manager) ExitsOf() ExitsView {
 		targetBaseName := getBaseTag(ib.Tag)
 		if node, ok := baseNodeMap[targetBaseName]; ok {
 			node.Branches = append(node.Branches, branch)
+		} else {
+			// 兜底方案：根据 ib.ID 精确匹配母节点的 BaseID
+			for _, node := range baseNodeMap {
+				if node.BaseID == ib.ID {
+					node.Branches = append(node.Branches, branch)
+					break
+				}
+			}
 		}
 	}
 

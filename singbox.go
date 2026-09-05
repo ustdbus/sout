@@ -252,7 +252,7 @@ func (sb *SingBox) Inbounds(live map[string]bool) ([]Inbound, error) {
 				if live != nil && boundHost != "" {
 					boundUp = live[sanitizeTag(boundHost)]
 				}
-				branchRemark := fmt.Sprintf("%s [出口: %s]", remark, boundHost)
+				cRemark := boundHost
 				bindings := loadBranchBindings(sb.workDir)
 				for _, b := range bindings {
 					if b.Host != "" && strings.Contains(userName, sanitizeTag(b.Host)) {
@@ -261,20 +261,21 @@ func (sb *SingBox) Inbounds(live map[string]bool) ([]Inbound, error) {
 							if b.PoolType == "datacenter" {
 								pName = "机房"
 							}
-							branchRemark = fmt.Sprintf("%s [%s%s]", remark, countryNameCN(b.Region, ""), pName)
+							cRemark = fmt.Sprintf("%s%s", countryNameCN(b.Region, ""), pName)
 						}
 						break
 					}
 				}
+				branchTag := fmt.Sprintf("%s (%s)", tag, cRemark)
 
 				result = append(result, Inbound{
 					ID:       baseID,
 					ClientID: baseID + (cIdx + 1),
 					Port:     port,
 					Protocol: proto,
-					Remark:   branchRemark,
+					Remark:   userName,
 					Enable:   true,
-					Tag:      userName,
+					Tag:      branchTag,
 					BoundTo:  boundHost,
 					BoundUp:  boundUp,
 					IsBase:   false,
@@ -314,7 +315,7 @@ func (sb *SingBox) InboundBranchLinks(baseID int, clientID int, clientTag string
 	addrs := addrsMap[tag]
 
 	usersRaw, _ := ibMap["users"].([]any)
-	isBaseBranch := (clientID == 0) || !strings.HasPrefix(clientTag, "soutu")
+	isBaseBranch := (clientID == 0)
 
 	for cIdx, uRaw := range usersRaw {
 		uMap, ok := uRaw.(map[string]any)
@@ -331,10 +332,10 @@ func (sb *SingBox) InboundBranchLinks(baseID int, clientID int, clientTag string
 				match = true
 			}
 		} else {
-			// 家宽分流分支：精准匹配用户名或 clientID
-			if clientTag != "" && uName == clientTag {
+			// 家宽分流分支：精准匹配 clientID 或用户名
+			if clientID > 0 && curClientID == clientID {
 				match = true
-			} else if clientID > 0 && curClientID == clientID {
+			} else if clientTag != "" && (uName == clientTag || strings.Contains(clientTag, uName)) {
 				match = true
 			}
 		}
