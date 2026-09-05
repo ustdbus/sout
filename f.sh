@@ -590,7 +590,7 @@ show_info() {
     echo -e "  隧道服务:    ${cf_st} (本地回源: 127.0.0.1:${c_tun_p})"
     echo -e "  管理面板:    ${B}https://${c_dom}/${c_sout_p}/${N}"
     echo -e "  访问口令:    ${Y}${pw}${N}"
-    if [[ "$cur_backend" != "sing-box" ]]; then
+    if [[ "$cur_backend" != "sing-box" && -f /usr/local/s-ui/db/s-ui.db ]]; then
       echo -e "  s-ui 面板:   ${B}https://${c_dom}/${c_sui_p}/${N}"
       echo -e "  s-ui 用户名: ${Y}${sui_u}${N}"
       echo -e "  s-ui 密  码: ${D}[由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]${N}"
@@ -649,7 +649,7 @@ show_info() {
       fi
     fi
   fi
-  [[ "$cur_backend" != "sing-box" ]] && echo -e "  s-ui 唤起命令: ${C}s-ui${N}"
+  [[ "$cur_backend" != "sing-box" && -f /usr/local/s-ui/db/s-ui.db ]] && echo -e "  s-ui 唤起命令: ${C}s-ui${N}"
   echo -e "  sout 唤起命令: ${C}sout${N}"
   echo
 }
@@ -2016,9 +2016,7 @@ else:
                     t_srv = t_obj.get('server', {})
                     if 'reality' in t_srv:
                         r_conf = dict(t_srv.get('reality', {}))
-                        c_reality = t_obj.get('client', {}).get('reality', {})
-                        if c_reality.get('public_key'):
-                            r_conf['public_key'] = c_reality['public_key']
+                        r_conf.pop('public_key', None)
                         s_ib['tls'] = {
                             'enabled': True,
                             'server_name': t_srv.get('server_name', 'apple.com'),
@@ -2432,21 +2430,25 @@ METAEOF
   echo -e "      访问口令:  ${Y}$(cat "${WORK_DIR}/password" 2>/dev/null || echo "未设置")${N}"
   echo -e "      唤起命令:  sout"
   echo
-  echo -e "  [2] s-ui 节点与分流管理面板"
-  echo -e "      访问地址:  ${B}https://${domain}/${sui_path}/${N}"
-  echo -e "      管理账号:  ${Y}${sui_admin_user}${N}"
-  if [[ -n "$in_sui_pass" && "$in_sui_is_random" == "1" ]]; then
-    echo -e "      管理密码:  ${G}${in_sui_pass}${N}"
-    echo -e "      ${Y}⚠️ 安全提示: 该随机密码仅在安装完成时显示一次，请务必妥善保存！${N}"
-    echo -e "                 ${D}(若遗忘密码，可随时在终端输入 s-ui 进行重置修改)${N}"
-  elif [[ -n "$in_sui_pass" && "$in_sui_is_random" != "1" ]]; then
-    echo -e "      管理密码:  ${D}[已按您输入的自定义密码生效，若遗忘密码，可随时在终端输入 s-ui 进行重置修改]${N}"
+  if [[ "$has_sui" == "true" ]]; then
+    echo -e "  [2] s-ui 节点与分流管理面板"
+    echo -e "      访问地址:  ${B}https://${domain}/${sui_path}/${N}"
+    echo -e "      管理账号:  ${Y}${sui_admin_user}${N}"
+    if [[ -n "$in_sui_pass" && "$in_sui_is_random" == "1" ]]; then
+      echo -e "      管理密码:  ${G}${in_sui_pass}${N}"
+      echo -e "      ${Y}⚠️ 安全提示: 该随机密码仅在安装完成时显示一次，请务必妥善保存！${N}"
+      echo -e "                 ${D}(若遗忘密码，可随时在终端输入 s-ui 进行重置修改)${N}"
+    elif [[ -n "$in_sui_pass" && "$in_sui_is_random" != "1" ]]; then
+      echo -e "      管理密码:  ${D}[已按您输入的自定义密码生效，若遗忘密码，可随时在终端输入 s-ui 进行重置修改]${N}"
+    else
+      echo -e "      管理密码:  ${D}[由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]${N}"
+    fi
+    echo -e "      唤起命令:  s-ui"
+    echo
+    echo -e "  [3] sout 订阅地址:  ${B}https://${domain}/${sout_path}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")${N}"
   else
-    echo -e "      管理密码:  ${D}[由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]${N}"
+    echo -e "  [2] sout 订阅地址:  ${B}https://${domain}/${sout_path}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")${N}"
   fi
-  echo -e "      唤起命令:  s-ui"
-  echo
-  echo -e "  [3] sout 订阅地址:  ${B}https://${domain}/${sout_path}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")${N}"
   echo -e "${G}================================================================${N}"
   echo
 }

@@ -712,19 +712,16 @@ EOF
   echo "      访问地址:  https://${domain}/${sout_p}/"
   echo "      访问口令:  ${pw}"
   echo
-  if [[ "$cur_backend" == "sing-box" ]]; then
-    echo "  [2] sing-box 原生内核"
-    echo "      运行后端:  sing-box 原生内核"
-    echo "      核心配置:  /etc/sing-box/config.json"
-    echo "      运行状态:  $(systemctl is-active sing-box 2>/dev/null || rc-service sing-box status 2>/dev/null || echo 'active')"
-  else
+  if [[ -f /usr/local/s-ui/db/s-ui.db && "$cur_backend" != "sing-box" ]]; then
     echo "  [2] s-ui 节点与分流管理面板"
     echo "      访问地址:  https://${domain}/${sui_p}/"
     echo "      管理账号:  ${sui_u}"
     echo "      管理密码:  [由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]"
+    echo
+    echo "  [3] sout 订阅地址:  https://${domain}/${sout_p}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")"
+  else
+    echo "  [2] sout 订阅地址:  https://${domain}/${sout_p}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")"
   fi
-  echo
-  echo "  [3] sout 订阅地址:  https://${domain}/${sout_p}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")"
   echo "================================================================"
   echo
 }

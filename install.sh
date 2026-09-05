@@ -701,7 +701,11 @@ echo "================================================================"
 echo "[1/6] 检查系统依赖..."
 MGR=$(detect_pkg_mgr)
 needed=()
-for cmd in curl tar ip ss python3 sqlite3; do
+base_cmds=(curl tar ip ss python3)
+if check_sui; then
+  base_cmds+=(sqlite3)
+fi
+for cmd in "${base_cmds[@]}"; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     needed+=("$cmd")
   fi
