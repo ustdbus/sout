@@ -2,7 +2,14 @@ package main
 
 import (
 	"net/http"
+	"strings"
 )
+
+var indexHTML string
+
+func init() {
+	indexHTML = strings.Replace(indexHTMLTemplate, "/* QRCODE_JS */", qrcodeMinJS, 1)
+}
 
 func handleIndex(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
@@ -16,7 +23,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(indexHTML))
 }
 
-const indexHTML = `<!DOCTYPE html>
+const indexHTMLTemplate = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -157,7 +164,7 @@ option{background:#161b22;color:var(--text);padding:8px}
   <span class="spacer"></span>
   <button id="exportAll">
     <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
-    导出全部链接
+    导出订阅链接
   </button>
   <button class="icon" id="settingsBtn" title="设置">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -407,17 +414,51 @@ option{background:#161b22;color:var(--text);padding:8px}
   </div>
 </div>
 
-<!-- Modal 4: 导出全部链接 -->
+<!-- Modal 4: 导出订阅链接 -->
 <div class="modal" id="exportModal">
-  <div class="sheet">
+  <div class="sheet" style="max-width:440px">
     <div class="head">
-      <h2>全部节点链接</h2>
+      <h2>导出订阅</h2>
       <span class="spacer"></span>
-      <button class="primary" id="copyAllLinksBtn">全部复制</button>
       <button class="icon" data-close="exportModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
-    <div class="body">
-      <textarea id="allLinksBox" readonly spellcheck="false"></textarea>
+    <div style="display:flex;border-bottom:1px solid var(--line);background:var(--card)">
+      <button class="sub-tab-btn active" id="tabSubQrBtn" style="flex:1;padding:11px;background:transparent;border:0;border-bottom:2px solid var(--accent);color:var(--text);font-weight:600;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        二维码
+      </button>
+      <button class="sub-tab-btn" id="tabSubUrlBtn" style="flex:1;padding:11px;background:transparent;border:0;border-bottom:2px solid transparent;color:var(--dim);font-weight:600;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        链接
+      </button>
+    </div>
+    <div class="body" style="padding:22px 20px;text-align:center">
+      <!-- 左边：二维码视图 -->
+      <div id="subQrSection" style="display:flex;flex-direction:column;align-items:center">
+        <div style="display:inline-block;background:#30363d;color:#c9d1d9;font-size:11px;padding:3px 12px;border-radius:12px;margin-bottom:16px;font-weight:500">订阅</div>
+        <div style="background:#fff;padding:14px;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.4);display:inline-flex;align-items:center;justify-content:center">
+          <div id="subQrBox" style="width:200px;height:200px;display:flex;align-items:center;justify-content:center"></div>
+        </div>
+        <div style="margin-top:14px;color:var(--dim);font-size:12px">支持小火箭 / Clash / v2rayN 等客户端直接扫码导入</div>
+      </div>
+
+      <!-- 右边：链接视图 -->
+      <div id="subUrlSection" style="display:none;text-align:left">
+        <label class="f" style="margin-bottom:12px">
+          <span>当前订阅链接 (包含母机直连与分流全部节点)</span>
+          <textarea id="subUrlInput" readonly spellcheck="false" rows="3" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;resize:none;word-break:break-all;margin-top:6px"></textarea>
+        </label>
+        <div style="display:flex;gap:10px;margin-top:14px">
+          <button class="primary" id="copySubUrlBtn" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            复制订阅链接
+          </button>
+          <button id="openSubTabBtn" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            新窗口打开
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -545,6 +586,7 @@ option{background:#161b22;color:var(--text);padding:8px}
 
 <div class="toast" id="toast"></div>
 
+<script>/* QRCODE_JS */</script>
 <script>
 const $ = s => document.querySelector(s);
 const ICON = {
@@ -1217,15 +1259,86 @@ $('#saveCredBtn').onclick = async e => {
   e.target.disabled = false;
 };
 
+let curSubURL = '';
+
+function switchSubTab(tab) {
+  if (tab === 'qr') {
+    $('#tabSubQrBtn').classList.add('active');
+    $('#tabSubQrBtn').style.borderBottomColor = 'var(--accent)';
+    $('#tabSubQrBtn').style.color = 'var(--text)';
+
+    $('#tabSubUrlBtn').classList.remove('active');
+    $('#tabSubUrlBtn').style.borderBottomColor = 'transparent';
+    $('#tabSubUrlBtn').style.color = 'var(--dim)';
+
+    $('#subQrSection').style.display = 'flex';
+    $('#subUrlSection').style.display = 'none';
+  } else {
+    $('#tabSubUrlBtn').classList.add('active');
+    $('#tabSubUrlBtn').style.borderBottomColor = 'var(--accent)';
+    $('#tabSubUrlBtn').style.color = 'var(--text)';
+
+    $('#tabSubQrBtn').classList.remove('active');
+    $('#tabSubQrBtn').style.borderBottomColor = 'transparent';
+    $('#tabSubQrBtn').style.color = 'var(--dim)';
+
+    $('#subQrSection').style.display = 'none';
+    $('#subUrlSection').style.display = 'block';
+  }
+}
+
+$('#tabSubQrBtn').onclick = () => switchSubTab('qr');
+$('#tabSubUrlBtn').onclick = () => switchSubTab('url');
+
+function renderSubQr(text) {
+  const box = $('#subQrBox');
+  box.innerHTML = '';
+  try {
+    if(typeof QRCode !== 'undefined') {
+      new QRCode(box, {
+        text: text,
+        width: 200,
+        height: 200,
+        colorDark: '#000000',
+        colorLight: '#ffffff',
+        correctLevel: (typeof QRCode.CorrectLevel !== 'undefined') ? QRCode.CorrectLevel.M : 0
+      });
+    } else {
+      box.innerHTML = '<div style="color:var(--dim);font-size:12px">正在加载二维码组件...</div>';
+    }
+  } catch(e) {
+    box.innerHTML = '<div style="color:var(--bad);padding:20px;font-size:12px">生成二维码失败: ' + e.message + '</div>';
+  }
+}
+
 $('#exportAll').onclick = async () => {
   try {
     const s = await api('/api/settings');
-    const subURL = new URL('sub=' + encodeURIComponent(s.password || ''), location.href);
-    window.open(subURL, '_blank');
-    closeModal('exportModal');
+    let baseURL = location.href;
+    if (s.panel_url && s.panel_url.trim()) {
+      let pUrl = s.panel_url.trim().replace(/\/+$/, '');
+      let bPath = (s.base_path || '').replace(/^\/+/, '').replace(/\/+$/, '');
+      if (bPath) pUrl += '/' + bPath + '/';
+      else pUrl += '/';
+      baseURL = pUrl;
+    }
+    curSubURL = new URL('sub=' + encodeURIComponent(s.password || ''), baseURL).href;
+
+    $('#subUrlInput').value = curSubURL;
+    switchSubTab('qr');
+    renderSubQr(curSubURL);
+    openModal('exportModal');
   } catch(e) { toast(e.message, true); }
 };
-$('#copyAllLinksBtn').onclick = () => copy($('#allLinksBox').value);
+
+$('#copySubUrlBtn').onclick = () => {
+  copy(curSubURL);
+  toast('已复制订阅链接');
+};
+
+$('#openSubTabBtn').onclick = () => {
+  if (curSubURL) window.open(curSubURL, '_blank');
+};
 
 $('#stopAllExitsBtn').onclick = async () => {
   if(!confirm('确定删除全部出口？')) return;
