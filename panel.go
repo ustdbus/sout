@@ -190,10 +190,12 @@ func openPanel() (Panel, error) {
 	// 自动探测：先看是否存在 s-ui，再看 sing-box
 	if s, err := DetectSUI(panelState.workDir); err == nil {
 		panelState.current = s
+		_ = savePanelMode(panelState.workDir, "s-ui")
 		return s, nil
 	}
 	if sb, err := DetectSingBox(panelState.workDir); err == nil {
 		panelState.current = sb
+		_ = savePanelMode(panelState.workDir, "sing-box")
 		return sb, nil
 	}
 

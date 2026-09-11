@@ -230,7 +230,7 @@ func (m *Manager) ExitsOf() ExitsView {
 		}
 		var links []string
 		if sui, ok := p.(*SUI); ok {
-			links = sui.InboundBranchLinks(ib.ID, ib.ClientID, ib.Remark, publicHost)
+			links = sui.InboundBranchLinks(ib.ID, ib.ClientID, ib.Tag, publicHost)
 		} else if sb, ok := p.(*SingBox); ok {
 			links = sb.InboundBranchLinks(ib.ID, ib.ClientID, ib.Remark, publicHost)
 		} else if p != nil {

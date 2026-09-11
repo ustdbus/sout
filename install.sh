@@ -827,6 +827,8 @@ SBEU
     systemctl enable sing-box >/dev/null 2>&1 || true
     systemctl restart sing-box >/dev/null 2>&1 || true
   fi
+elif [[ "$backend_kind" == "s-ui" ]] || check_sui; then
+  echo -n "s-ui" > "${WORK_DIR}/panel_mode"
 fi
 
 seed_settings

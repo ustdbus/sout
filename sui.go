@@ -2022,6 +2022,46 @@ func parseSUIClientConfig(configRaw json.RawMessage) map[string]map[string]any {
 	return cfg
 }
 
+func extractNodeSubRemark(uri string, baseTag string) string {
+	rawRemark := ""
+	if strings.HasPrefix(uri, "vmess://") {
+		b64Part := strings.TrimPrefix(uri, "vmess://")
+		if idx := strings.Index(b64Part, "#"); idx != -1 {
+			b64Part = b64Part[:idx]
+		}
+		for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.RawURLEncoding} {
+			if b, err := enc.DecodeString(b64Part); err == nil && len(b) > 0 {
+				var vm map[string]any
+				if json.Unmarshal(b, &vm) == nil {
+					if ps, ok := vm["ps"].(string); ok {
+						rawRemark = ps
+						break
+					}
+				}
+			}
+		}
+	} else if idx := strings.Index(uri, "#"); idx != -1 {
+		rawRemark, _ = url.PathUnescape(uri[idx+1:])
+	}
+
+	if rawRemark == "" {
+		return ""
+	}
+
+	if strings.HasPrefix(rawRemark, "默认用户-") {
+		rawRemark = strings.TrimPrefix(rawRemark, "默认用户-")
+	}
+
+	cleanBase := getBaseTag(baseTag)
+	if idx := strings.Index(rawRemark, cleanBase); idx != -1 {
+		sub := strings.TrimSpace(rawRemark[idx+len(cleanBase):])
+		sub = strings.TrimLeft(sub, "-_ :：")
+		return sub
+	}
+
+	return ""
+}
+
 func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, publicHost string) []string {
 	inbounds, err := s.apiInbounds(inboundID)
 	if err != nil || len(inbounds) == 0 {
@@ -2035,7 +2075,7 @@ func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, 
 
 	var matchedURIs []string
 
-	// 1. 查询指定 client 或关联 client
+	// 1. 查询指定 client 或关联 client (必须通过单 client API 获取包含 links 的完整数据)
 	var client map[string]any
 	if clientID > 0 {
 		clients, _ := s.apiClients(clientID)
@@ -2049,6 +2089,12 @@ func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, 
 				if inbList, ok := c["inbounds"].([]any); ok {
 					for _, item := range inbList {
 						if num, ok := item.(float64); ok && int(num) == inboundID {
+							if idVal, ok := c["id"].(float64); ok && idVal > 0 {
+								if full, _ := s.apiClients(int(idVal)); len(full) > 0 {
+									client = full[0]
+									break
+								}
+							}
 							client = c
 							break
 						}
@@ -2083,9 +2129,13 @@ func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, 
 		for _, c := range allClients {
 			name, _ := c["name"].(string)
 			if !isSplitUser(name) {
-				if lRaw, ok := c["links"].([]any); ok && len(lRaw) > 0 {
-					tmpl = c
-					break
+				if idVal, ok := c["id"].(float64); ok && idVal > 0 {
+					if full, _ := s.apiClients(int(idVal)); len(full) > 0 {
+						if lRaw, ok := full[0]["links"].([]any); ok && len(lRaw) > 0 {
+							tmpl = full[0]
+							break
+						}
+					}
 				}
 			}
 		}
@@ -2110,7 +2160,7 @@ func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, 
 		}
 	}
 
-	// 4. 格式化链接与备注
+	// 4. 格式化链接与备注（保留优选 IP 自定义备注，绝不以 client 用户名污染节点名称）
 	if len(matchedURIs) > 0 {
 		var finalLinks []string
 		tagToUse := branchTag
@@ -2118,7 +2168,12 @@ func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, 
 			tagToUse = inbTag
 		}
 		for _, uri := range matchedURIs {
-			finalLinks = append(finalLinks, formatNodeURI(uri, tagToUse))
+			nodeTag := tagToUse
+			subRemark := extractNodeSubRemark(uri, inbTag)
+			if subRemark != "" && !strings.Contains(nodeTag, subRemark) {
+				nodeTag = fmt.Sprintf("%s - %s", nodeTag, subRemark)
+			}
+			finalLinks = append(finalLinks, formatNodeURI(uri, nodeTag))
 		}
 		return finalLinks
 	}

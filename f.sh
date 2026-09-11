@@ -524,6 +524,7 @@ show_info() {
     elif [[ -f /etc/sing-box/config.json ]] || command -v sing-box >/dev/null 2>&1; then
       cur_backend="sing-box"
     fi
+    [[ -n "$cur_backend" ]] && echo -n "$cur_backend" > "${WORK_DIR}/panel_mode" 2>/dev/null || true
   fi
 
   if [[ "$cur_backend" == "sing-box" ]]; then
@@ -3873,6 +3874,7 @@ create_tuic_hy2_nodes() {
     if [[ -f /usr/local/s-ui/db/s-ui.db ]]; then cur_backend="s-ui"
     elif [[ -f /etc/sing-box/config.json ]]; then cur_backend="sing-box"
     fi
+    [[ -n "$cur_backend" ]] && echo -n "$cur_backend" > "${WORK_DIR}/panel_mode" 2>/dev/null || true
   fi
 
   local sui_db="/usr/local/s-ui/db/s-ui.db"
