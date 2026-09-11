@@ -2022,45 +2022,6 @@ func parseSUIClientConfig(configRaw json.RawMessage) map[string]map[string]any {
 	return cfg
 }
 
-func extractNodeSubRemark(uri string, baseTag string) string {
-	rawRemark := ""
-	if strings.HasPrefix(uri, "vmess://") {
-		b64Part := strings.TrimPrefix(uri, "vmess://")
-		if idx := strings.Index(b64Part, "#"); idx != -1 {
-			b64Part = b64Part[:idx]
-		}
-		for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.RawURLEncoding} {
-			if b, err := enc.DecodeString(b64Part); err == nil && len(b) > 0 {
-				var vm map[string]any
-				if json.Unmarshal(b, &vm) == nil {
-					if ps, ok := vm["ps"].(string); ok {
-						rawRemark = ps
-						break
-					}
-				}
-			}
-		}
-	} else if idx := strings.Index(uri, "#"); idx != -1 {
-		rawRemark, _ = url.PathUnescape(uri[idx+1:])
-	}
-
-	if rawRemark == "" {
-		return ""
-	}
-
-	if strings.HasPrefix(rawRemark, "默认用户-") {
-		rawRemark = strings.TrimPrefix(rawRemark, "默认用户-")
-	}
-
-	cleanBase := getBaseTag(baseTag)
-	if idx := strings.Index(rawRemark, cleanBase); idx != -1 {
-		sub := strings.TrimSpace(rawRemark[idx+len(cleanBase):])
-		sub = strings.TrimLeft(sub, "-_ :：")
-		return sub
-	}
-
-	return ""
-}
 
 func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, publicHost string) []string {
 	inbounds, err := s.apiInbounds(inboundID)
@@ -2160,7 +2121,7 @@ func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, 
 		}
 	}
 
-	// 4. 格式化链接与备注（保留优选 IP 自定义备注，绝不以 client 用户名污染节点名称）
+	// 4. 格式化链接与备注（保持节点导出名称纯净，不在客户端节点名称中拼接优选地址备注）
 	if len(matchedURIs) > 0 {
 		var finalLinks []string
 		tagToUse := branchTag
@@ -2168,12 +2129,7 @@ func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, 
 			tagToUse = inbTag
 		}
 		for _, uri := range matchedURIs {
-			nodeTag := tagToUse
-			subRemark := extractNodeSubRemark(uri, inbTag)
-			if subRemark != "" && !strings.Contains(nodeTag, subRemark) {
-				nodeTag = fmt.Sprintf("%s - %s", nodeTag, subRemark)
-			}
-			finalLinks = append(finalLinks, formatNodeURI(uri, nodeTag))
+			finalLinks = append(finalLinks, formatNodeURI(uri, tagToUse))
 		}
 		return finalLinks
 	}
