@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
@@ -27,6 +28,7 @@ type SingBox struct {
 	configPath string
 	workDir    string
 	mu         sync.Mutex
+	restartMu  sync.Mutex
 }
 
 var _ Panel = (*SingBox)(nil)
@@ -218,6 +220,13 @@ func (sb *SingBox) saveConfig(cfg map[string]any) error {
 		return fmt.Errorf("序列化配置失败: %w", err)
 	}
 
+	// 1. 若配置与现有主配置文件内容一致，直接跳过语法检查和重启
+	if oldData, err := os.ReadFile(sb.configPath); err == nil {
+		if bytes.Equal(bytes.TrimSpace(oldData), bytes.TrimSpace(data)) {
+			return nil
+		}
+	}
+
 	// 临时写入以验证
 	tmpFile := sb.configPath + ".tmp"
 	if err := os.WriteFile(tmpFile, data, 0644); err != nil {
@@ -237,11 +246,15 @@ func (sb *SingBox) saveConfig(cfg map[string]any) error {
 		return fmt.Errorf("替换主配置文件失败: %w", err)
 	}
 
-	sb.restartService()
+	// 异步触发重启，防止在主互斥锁内长时间阻塞所有 HTTP 请求
+	go sb.restartService()
 	return nil
 }
 
 func (sb *SingBox) restartService() {
+	sb.restartMu.Lock()
+	defer sb.restartMu.Unlock()
+
 	if hasCmd("systemctl") && dirExists("/run/systemd/system") {
 		_ = exec.Command("systemctl", "restart", "sing-box").Run()
 	} else if hasCmd("rc-service") {
@@ -1513,6 +1526,9 @@ func (sb *SingBox) UpdateNodeConfig(id int, listen string, listenPort int, addrs
 
 	ibMap, _ := inboundsRaw[idx].(map[string]any)
 	tag, _ := ibMap["tag"].(string)
+
+	origIbJSON, _ := json.Marshal(ibMap)
+
 	if listen != "" {
 		ibMap["listen"] = listen
 	}
@@ -1552,6 +1568,9 @@ func (sb *SingBox) UpdateNodeConfig(id int, listen string, listenPort int, addrs
 		}
 	}
 
+	newIbJSON, _ := json.Marshal(ibMap)
+	serverChanged := !bytes.Equal(origIbJSON, newIbJSON)
+
 	// 持久化保存包含客户端 TLS 的完整 addrs 元数据
 	rawAddrsMap := sb.loadRawInboundAddrs()
 	var newRawItems []map[string]any
@@ -1587,6 +1606,12 @@ func (sb *SingBox) UpdateNodeConfig(id int, listen string, listenPort int, addrs
 	_ = os.WriteFile(sb.addrsFilePath(), b, 0644)
 
 	invalidateInbounds()
+
+	// 若服务端核心配置无任何实质改动（纯优选域名/IP/备注更新），跳过 sing-box check 与重启
+	if !serverChanged {
+		return nil
+	}
+
 	return sb.saveConfig(cfg)
 }
 

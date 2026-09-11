@@ -494,38 +494,18 @@ get_or_create_sui_token() {
 }
 
 show_info() {
-  local st la port bp pw pip purl full_url ssl_en ssl_dom scheme c_en c_dom c_sout_p c_sui_p c_sub_p c_mode
-  st=$(svc_status)
-  la=$(web_listen_addr)
-  port=$(web_port)
-  bp=$(web_basepath)
-  pw=$(web_password)
-  purl=$(web_panel_url)
-  ssl_en=$(web_ssl_enabled)
-  ssl_dom=$(web_ssl_domain)
+  local st c_en pw cur_ver cur_backend
   c_en=$(is_caddy_enabled)
-  # 隧道模式下不需要探测公网 IP，减少不必要的网络请求（对小内存机更友好）
-  pip=""
-  if [[ "$c_en" != "true" ]]; then
-    pip=$(public_ip)
-  fi
+  pw=$(web_password)
+  st=$(svc_status)
 
-  scheme="http"
-  [[ "$ssl_en" == "true" ]] && scheme="https"
-
-  bp="/${bp#/}"
-  [[ "$bp" != */ ]] && bp="${bp}/"
-  if [[ -n "$purl" ]]; then
-    purl="${purl%/}"
-    full_url="${purl}${bp}"
-  fi
-
-  local cur_ver=""
-  if command -v sout-server >/dev/null 2>&1; then
-    cur_ver=$(sout-server -version 2>/dev/null | awk '{print $2}' | tr -d ' \r\n')
-  fi
-  if [[ -z "$cur_ver" && -f "${WORK_DIR}/version" ]]; then
+  # 1. 优先从轻量静态文件读取版本，避免每次唤起重型 Go 二进制
+  if [[ -f "${WORK_DIR}/version" ]]; then
     cur_ver=$(cat "${WORK_DIR}/version" 2>/dev/null | tr -d ' \r\n')
+  fi
+  if [[ -z "$cur_ver" ]] && command -v sout-server >/dev/null 2>&1; then
+    cur_ver=$(sout-server -version 2>/dev/null | awk '{print $2}' | tr -d ' \r\n')
+    [[ -n "$cur_ver" ]] && echo "$cur_ver" > "${WORK_DIR}/version" 2>/dev/null || true
   fi
   [[ -z "$cur_ver" ]] && cur_ver="dev"
 
@@ -537,7 +517,6 @@ show_info() {
     echo -e "  服务状态:    ${R}已停止 (${st})${N}"
   fi
 
-  local cur_backend
   cur_backend=$(cat "${WORK_DIR}/panel_mode" 2>/dev/null || echo "")
   if [[ -z "$cur_backend" ]]; then
     if [[ -f /usr/local/s-ui/db/s-ui.db ]] || [[ -f /usr/local/s-ui/s-ui ]] || command -v sui >/dev/null 2>&1; then
@@ -548,8 +527,14 @@ show_info() {
   fi
 
   if [[ "$cur_backend" == "sing-box" ]]; then
-    local sb_ver
-    sb_ver=$(/usr/local/bin/sing-box version 2>/dev/null | head -1 | awk '{print $3}' || echo "原生内核")
+    local sb_ver=""
+    if [[ -f "${WORK_DIR}/singbox_version" ]]; then
+      sb_ver=$(cat "${WORK_DIR}/singbox_version" 2>/dev/null | tr -d ' \r\n')
+    fi
+    if [[ -z "$sb_ver" ]]; then
+      sb_ver=$(/usr/local/bin/sing-box version 2>/dev/null | head -1 | awk '{print $3}' || echo "原生内核")
+      [[ -n "$sb_ver" && "$sb_ver" != "原生内核" ]] && echo "$sb_ver" > "${WORK_DIR}/singbox_version" 2>/dev/null || true
+    fi
     echo -e "  后端对接:    ${G}sing-box (${sb_ver}) 原生内核已就绪${N}"
   elif [[ "$cur_backend" == "s-ui" ]]; then
     echo -e "  后端对接:    ${G}s-ui (Sing-Box) 已就绪${N}"
@@ -557,18 +542,22 @@ show_info() {
     echo -e "  后端对接:    ${R}未检测到后端 (s-ui / sing-box)${N}"
   fi
 
-  local sui_u
-  sui_u=$(get_sui_user)
-
   if [[ "$c_en" == "true" ]]; then
-    c_mode=$(grep -oE '"mode"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4 || echo "tunnel")
-    c_dom=$(grep -oE '"domain"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4 || echo "")
-    c_sout_p=$(grep -oE '"sout_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4 || echo "sout")
-    c_sui_p=$(grep -oE '"sui_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4 || echo "sui")
-    c_sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4 || echo "sub")
-    local c_tun_p
-    c_tun_p=$(grep -oE '"tunnel_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ' || echo "8081")
-    [[ -z "$c_tun_p" ]] && c_tun_p="8081"
+    local c_mode="tunnel" c_dom="" c_sout_p="sout" c_sui_p="sui" c_sub_p="sub" c_tun_p="8081"
+    if [[ -f "$CADDY_META" ]]; then
+      c_mode=$(grep -oE '"mode"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+      [[ -z "$c_mode" ]] && c_mode="tunnel"
+      c_dom=$(grep -oE '"domain"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+      c_sout_p=$(grep -oE '"sout_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+      [[ -z "$c_sout_p" ]] && c_sout_p="sout"
+      c_sui_p=$(grep -oE '"sui_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+      [[ -z "$c_sui_p" ]] && c_sui_p="sui"
+      c_sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+      [[ -z "$c_sub_p" ]] && c_sub_p="sub"
+      local tp
+      tp=$(grep -oE '"tunnel_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
+      [[ -n "$tp" ]] && c_tun_p="$tp"
+    fi
 
     local cf_st="未运行"
     if [[ $(systemctl is-active cloudflared 2>/dev/null || echo "") == "active" ]]; then
@@ -591,6 +580,8 @@ show_info() {
     echo -e "  管理面板:    ${B}https://${c_dom}/${c_sout_p}/${N}"
     echo -e "  访问口令:    ${Y}${pw}${N}"
     if [[ "$cur_backend" != "sing-box" && -f /usr/local/s-ui/db/s-ui.db ]]; then
+      local sui_u
+      sui_u=$(get_sui_user)
       echo -e "  s-ui 面板:   ${B}https://${c_dom}/${c_sui_p}/${N}"
       echo -e "  s-ui 用户名: ${Y}${sui_u}${N}"
       echo -e "  s-ui 密  码: ${D}[由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]${N}"
@@ -599,6 +590,25 @@ show_info() {
     fi
     echo -e "  订阅链接:    ${B}https://${c_dom}/${c_sout_p}/sub=${pw}${N}"
   else
+    local la port bp purl full_url ssl_en ssl_dom scheme pip
+    la=$(web_listen_addr)
+    port=$(web_port)
+    bp=$(web_basepath)
+    purl=$(web_panel_url)
+    ssl_en=$(web_ssl_enabled)
+    ssl_dom=$(web_ssl_domain)
+    pip=$(public_ip)
+
+    scheme="http"
+    [[ "$ssl_en" == "true" ]] && scheme="https"
+
+    bp="/${bp#/}"
+    [[ "$bp" != */ ]] && bp="${bp}/"
+    if [[ -n "$purl" ]]; then
+      purl="${purl%/}"
+      full_url="${purl}${bp}"
+    fi
+
     if [[ "$ssl_en" == "true" ]]; then
       echo -e "  SSL 加密:    ${G}已开启 (HTTPS)${N}"
     else
@@ -1331,6 +1341,7 @@ update_singbox_kernel() {
     rm -f /usr/local/bin/sing-box
     return 1
   fi
+  /usr/local/bin/sing-box version 2>/dev/null | head -1 | awk '{print $3}' > "${WORK_DIR}/singbox_version" 2>/dev/null || true
   echo -e "  ${G}[✓] sing-box 已成功更新到最新稳定版: $(/usr/local/bin/sing-box version 2>/dev/null | head -1)${N}"
   systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true
   systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || true
