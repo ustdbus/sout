@@ -261,6 +261,10 @@ apply_sysctl_optimization() {
     rmem_max=8388608
     wmem_max=8388608
     udp_mem="8192 16384 32768"
+  elif [[ $mem_total_mb -le 256 ]]; then
+    rmem_max=2097152
+    wmem_max=2097152
+    udp_mem="2048 4096 8192"
   fi
 
   # 3. 尝试加载 BBR 模块
@@ -290,6 +294,44 @@ net.ipv4.tcp_congestion_control = bbr
 
   # 5. 生效参数（容器无权修改时静默忽略）
   sysctl -p /etc/sysctl.d/99-sout.conf >/dev/null 2>&1 || sysctl -p >/dev/null 2>&1 || true
+
+  # 6. 低内存 VPS/容器防爆保护
+  optimize_low_memory "$mem_total_mb"
+}
+
+optimize_low_memory() {
+  local mem_mb="${1:-512}"
+  if [[ $mem_mb -le 384 ]]; then
+    echo "      检测到轻量低内存环境 (${mem_mb} MB)，正在配置系统级内存防爆与垃圾回收策略..."
+    # 1. 限制 journald 运行时内存
+    if [[ -d /run/systemd/system ]]; then
+      mkdir -p /etc/systemd/journald.conf.d 2>/dev/null || true
+      cat > /etc/systemd/journald.conf.d/00-mem-limit.conf <<'EOF'
+[Journal]
+RuntimeMaxUse=8M
+SystemMaxUse=8M
+MaxRetentionSec=3day
+EOF
+      systemctl restart systemd-journald >/dev/null 2>&1 || true
+
+      # 2. 为各核心 Go 服务注入内存保护限制 (防止堆无节制增长引起颠簸)
+      for svc in sing-box caddy cloudflared sout s-ui; do
+        mkdir -p "/etc/systemd/system/${svc}.service.d" 2>/dev/null || true
+        cat > "/etc/systemd/system/${svc}.service.d/override.conf" <<'EOF'
+[Service]
+Environment="GOMEMLIMIT=25MiB"
+Environment="GOGC=50"
+EOF
+      done
+      systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+
+    # 3. 调低 swappiness（从默认 100 降为 30），防止过早向虚拟 Swap 剧烈换页
+    sysctl -w vm.swappiness=30 >/dev/null 2>&1 || true
+
+    # 4. 清理 /tmp 内存文件系统历史残留的 tar.gz 与二进制
+    rm -f /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/fanout /tmp/f.sh 2>/dev/null || true
+  fi
 }
 
 get_tcp_congestion() {
@@ -1460,6 +1502,7 @@ sys.exit(0 if latest > cur else 1)
   fi
 
   echo "$tag_name" > "${WORK_DIR}/version" 2>/dev/null || true
+  rm -rf "$tmp_dir" /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/fanout /tmp/f.sh 2>/dev/null || true
 
   echo
   echo -e "  ${B}[+] 正在重启服务并加载最新版本配置...${N}"

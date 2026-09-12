@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,9 +20,36 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v3.2.0"
+var version = "v3.2.1"
+
+func initLowMemoryProtection() {
+	if os.Getenv("GOMEMLIMIT") == "" {
+		data, err := os.ReadFile("/proc/meminfo")
+		if err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				if strings.HasPrefix(line, "MemTotal:") {
+					fields := strings.Fields(line)
+					if len(fields) >= 2 {
+						if kb, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
+							// 内存 <= 384MB 的超轻量/小内存实例 (例如 128MB/256MB VPS/容器)
+							if kb <= 384*1024 {
+								debug.SetMemoryLimit(25 * 1024 * 1024)
+								if os.Getenv("GOGC") == "" {
+									debug.SetGCPercent(50)
+								}
+								log.Printf("检测到低内存环境 (总物理内存 %d MB)，已自动启用 25MB 内存保护限制与激进 GC", kb/1024)
+							}
+						}
+					}
+					break
+				}
+			}
+		}
+	}
+}
 
 func main() {
+	initLowMemoryProtection()
 	var (
 		webPort  = flag.Int("web", 8899, "Web 管理端口")
 		maxSlots = flag.Int("max", 20, "最多同时运行的隧道数")
