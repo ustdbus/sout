@@ -314,13 +314,20 @@ MaxRetentionSec=3day
 EOF
       systemctl restart systemd-journald >/dev/null 2>&1 || true
 
-      # 2. 为各核心 Go 服务注入内存保护限制 (防止堆无节制增长引起颠簸)
-      for svc in sing-box caddy cloudflared sout s-ui; do
+      # 2. 为各核心 Go 服务注入合理的内存保护限制 (为代理转发留出充足缓冲区，避免GC中断转发限速)
+      mkdir -p /etc/systemd/system/sing-box.service.d 2>/dev/null || true
+      cat > /etc/systemd/system/sing-box.service.d/override.conf <<'EOF'
+[Service]
+Environment="GOMEMLIMIT=45MiB"
+Environment="GOGC=100"
+EOF
+
+      for svc in caddy cloudflared sout s-ui; do
         mkdir -p "/etc/systemd/system/${svc}.service.d" 2>/dev/null || true
         cat > "/etc/systemd/system/${svc}.service.d/override.conf" <<'EOF'
 [Service]
-Environment="GOMEMLIMIT=25MiB"
-Environment="GOGC=50"
+Environment="GOMEMLIMIT=35MiB"
+Environment="GOGC=100"
 EOF
       done
       systemctl daemon-reload >/dev/null 2>&1 || true

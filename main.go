@@ -20,7 +20,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v3.2.1"
+var version = "v3.2.2"
 
 func initLowMemoryProtection() {
 	if os.Getenv("GOMEMLIMIT") == "" {
@@ -33,11 +33,11 @@ func initLowMemoryProtection() {
 						if kb, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
 							// 内存 <= 384MB 的超轻量/小内存实例 (例如 128MB/256MB VPS/容器)
 							if kb <= 384*1024 {
-								debug.SetMemoryLimit(25 * 1024 * 1024)
+								debug.SetMemoryLimit(30 * 1024 * 1024)
 								if os.Getenv("GOGC") == "" {
-									debug.SetGCPercent(50)
+									debug.SetGCPercent(100)
 								}
-								log.Printf("检测到低内存环境 (总物理内存 %d MB)，已自动启用 25MB 内存保护限制与激进 GC", kb/1024)
+								log.Printf("检测到低内存环境 (总物理内存 %d MB)，已自动启用 30MB 内存保护限制", kb/1024)
 							}
 						}
 					}
