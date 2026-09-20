@@ -599,17 +599,27 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 		defaultHost = "127.0.0.1"
 	}
 
-	sni := defaultHost
-	allowInsecure := "0"
+	serverSNI := defaultHost
+	serverAllowInsecure := "0"
 	var realityPBK, realitySID string
 	isReality := false
+	var serverALPN string
 
 	if tlsMap, ok := ibMap["tls"].(map[string]any); ok {
 		if sn, ok := tlsMap["server_name"].(string); ok && sn != "" {
-			sni = sn
+			serverSNI = sn
 		}
 		if insec, _ := tlsMap["insecure"].(bool); insec {
-			allowInsecure = "1"
+			serverAllowInsecure = "1"
+		}
+		if alpnArr, ok := tlsMap["alpn"].([]any); ok && len(alpnArr) > 0 {
+			var alist []string
+			for _, a := range alpnArr {
+				if as, ok := a.(string); ok {
+					alist = append(alist, as)
+				}
+			}
+			serverALPN = strings.Join(alist, ",")
 		}
 		if rMap, ok := tlsMap["reality"].(map[string]any); ok {
 			if en, _ := rMap["enabled"].(bool); en {
@@ -647,7 +657,10 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 
 	transportType := "tcp"
 	wsPath := ""
-	wsHost := sni
+	wsHost := serverSNI
+	maxEarlyData := 0
+	earlyDataHeaderName := ""
+
 	if trMap, ok := ibMap["transport"].(map[string]any); ok {
 		if tp, ok := trMap["type"].(string); ok {
 			transportType = tp
@@ -660,10 +673,29 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 				wsHost = h
 			}
 		}
+		if edName, ok := trMap["early_data_header_name"].(string); ok {
+			earlyDataHeaderName = edName
+		}
+		if edMax, ok := trMap["max_early_data"].(float64); ok {
+			maxEarlyData = int(edMax)
+		} else if edMaxInt, ok := trMap["max_early_data"].(int); ok {
+			maxEarlyData = edMaxInt
+		}
+	}
+
+	finalWsPath := wsPath
+	if transportType == "ws" && wsPath != "" {
+		if maxEarlyData > 0 && (earlyDataHeaderName == "Sec-WebSocket-Protocol" || earlyDataHeaderName == "") {
+			sep := "?"
+			if strings.Contains(finalWsPath, "?") {
+				sep = "&"
+			}
+			finalWsPath = fmt.Sprintf("%s%sed=%d", finalWsPath, sep, maxEarlyData)
+		}
 	}
 
 	if proto == "vmess" && wsHost != "" && net.ParseIP(wsHost) == nil {
-		sni = wsHost
+		serverSNI = wsHost
 	}
 
 	if len(addrs) == 0 {
@@ -695,10 +727,77 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 
 		remark := baseRemark
 
+		// 判定该节点是否启用 TLS 以及提取 SNI/uTLS/ALPN
+		itemSNI := serverSNI
+		itemInsecure := serverAllowInsecure
+		itemFP := ""
+		itemALPN := serverALPN
+		itemHasTLS := false
+
+		if isReality {
+			itemHasTLS = true
+			itemFP = "chrome"
+		} else if tlsMap, ok := ibMap["tls"].(map[string]any); ok {
+			if en, _ := tlsMap["enabled"].(bool); en {
+				itemHasTLS = true
+			}
+			if utlsMap, ok := tlsMap["utls"].(map[string]any); ok {
+				if fpVal, ok := utlsMap["fingerprint"].(string); ok && fpVal != "" {
+					itemFP = fpVal
+				}
+			}
+		}
+
+		// 合并 item.TLS 中的属性（Argo 隧道 / CDN 优选）
+		if item.TLS != nil {
+			if en, ok := item.TLS["enabled"].(bool); ok && en {
+				itemHasTLS = true
+			}
+			if sName, ok := item.TLS["server_name"].(string); ok && sName != "" {
+				itemSNI = sName
+			}
+			if insec, ok := item.TLS["insecure"].(bool); ok && insec {
+				itemInsecure = "1"
+			}
+			if alpnArr, ok := item.TLS["alpn"].([]any); ok && len(alpnArr) > 0 {
+				var alist []string
+				for _, a := range alpnArr {
+					if as, ok := a.(string); ok {
+						alist = append(alist, as)
+					}
+				}
+				itemALPN = strings.Join(alist, ",")
+			}
+			if utlsMap, ok := item.TLS["utls"].(map[string]any); ok {
+				if fpVal, ok := utlsMap["fingerprint"].(string); ok && fpVal != "" {
+					itemFP = fpVal
+				}
+			}
+		}
+
+		// 端口是 443 时默认开启 TLS
+		if connectPort == 443 {
+			itemHasTLS = true
+		}
+
+		// 若开启了 TLS（或 Reality），且 itemFP 为空，默认对齐 s-ui 规范，赋予 "chrome"
+		if itemHasTLS && itemFP == "" {
+			itemFP = "chrome"
+		}
+
+		// SNI 兜底
+		if itemSNI == "" || itemSNI == "127.0.0.1" || itemSNI == "0.0.0.0" {
+			if wsHost != "" && net.ParseIP(wsHost) == nil {
+				itemSNI = wsHost
+			} else if net.ParseIP(connectHost) == nil {
+				itemSNI = connectHost
+			}
+		}
+
 		switch strings.ToLower(proto) {
 		case "vmess":
 			vmessTLS := "tls"
-			if connectPort == 80 {
+			if !itemHasTLS || connectPort == 80 {
 				vmessTLS = ""
 			}
 			vmessObj := map[string]any{
@@ -711,9 +810,15 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 				"net":  transportType,
 				"type": "none",
 				"host": wsHost,
-				"path": wsPath,
+				"path": finalWsPath,
 				"tls":  vmessTLS,
-				"sni":  sni,
+				"sni":  itemSNI,
+			}
+			if vmessTLS == "tls" && itemFP != "" {
+				vmessObj["fp"] = itemFP
+			}
+			if itemALPN != "" {
+				vmessObj["alpn"] = itemALPN
 			}
 			b, _ := json.Marshal(vmessObj)
 			links = append(links, "vmess://"+base64.StdEncoding.EncodeToString(b))
@@ -725,8 +830,8 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 
 			if isReality {
 				v.Set("security", "reality")
-				v.Set("sni", sni)
-				v.Set("fp", "chrome")
+				v.Set("sni", itemSNI)
+				v.Set("fp", itemFP)
 				if realityPBK != "" {
 					v.Set("pbk", realityPBK)
 				}
@@ -736,20 +841,27 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 				if flowStr != "" {
 					v.Set("flow", flowStr)
 				}
-			} else {
-				if connectPort == 443 || sni != "" {
-					v.Set("security", "tls")
-					v.Set("sni", sni)
-					if allowInsecure == "1" {
-						v.Set("allowInsecure", "1")
-					}
-				} else {
-					v.Set("security", "none")
+			} else if itemHasTLS {
+				v.Set("security", "tls")
+				v.Set("sni", itemSNI)
+				if itemFP != "" {
+					v.Set("fp", itemFP)
 				}
+				if itemALPN != "" {
+					v.Set("alpn", itemALPN)
+				}
+				if itemInsecure == "1" {
+					v.Set("allowInsecure", "1")
+				}
+				if flowStr != "" && transportType == "tcp" {
+					v.Set("flow", flowStr)
+				}
+			} else {
+				v.Set("security", "none")
 			}
 
-			if transportType == "ws" && wsPath != "" {
-				v.Set("path", wsPath)
+			if transportType == "ws" && finalWsPath != "" {
+				v.Set("path", finalWsPath)
 				if wsHost != "" {
 					v.Set("host", wsHost)
 				}
@@ -759,13 +871,45 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 				uuidStr, connectHost, connectPort, v.Encode(), url.PathEscape(remark))
 			links = append(links, link)
 
+		case "trojan":
+			v := url.Values{}
+			if itemHasTLS {
+				v.Set("security", "tls")
+				v.Set("sni", itemSNI)
+				if itemFP != "" {
+					v.Set("fp", itemFP)
+				}
+				if itemALPN != "" {
+					v.Set("alpn", itemALPN)
+				}
+				if itemInsecure == "1" {
+					v.Set("allowInsecure", "1")
+				}
+			} else {
+				v.Set("security", "none")
+			}
+			v.Set("type", transportType)
+			if transportType == "ws" && finalWsPath != "" {
+				v.Set("path", finalWsPath)
+				if wsHost != "" {
+					v.Set("host", wsHost)
+				}
+			}
+			link := fmt.Sprintf("trojan://%s@%s:%d?%s#%s",
+				passStr, connectHost, connectPort, v.Encode(), url.PathEscape(remark))
+			links = append(links, link)
+
 		case "tuic":
 			authPart := uuidStr
 			if passStr != "" && passStr != uuidStr {
 				authPart += ":" + passStr
 			}
-			link := fmt.Sprintf("tuic://%s@%s:%d?congestion_control=bbr&alpn=h3&sni=%s&allow_insecure=%s#%s",
-				authPart, connectHost, connectPort, url.PathEscape(sni), allowInsecure, url.PathEscape(remark))
+			tuicALPN := "h3"
+			if itemALPN != "" {
+				tuicALPN = itemALPN
+			}
+			link := fmt.Sprintf("tuic://%s@%s:%d?congestion_control=bbr&alpn=%s&sni=%s&allow_insecure=%s#%s",
+				authPart, connectHost, connectPort, tuicALPN, url.PathEscape(itemSNI), itemInsecure, url.PathEscape(remark))
 			links = append(links, link)
 
 		case "hysteria2", "hy2":
@@ -774,7 +918,7 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 				authPart = uuidStr
 			}
 			link := fmt.Sprintf("hysteria2://%s@%s:%d?sni=%s&insecure=%s#%s",
-				authPart, connectHost, connectPort, url.PathEscape(sni), allowInsecure, url.PathEscape(remark))
+				authPart, connectHost, connectPort, url.PathEscape(itemSNI), itemInsecure, url.PathEscape(remark))
 			links = append(links, link)
 
 		case "shadowsocks", "ss":

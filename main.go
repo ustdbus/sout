@@ -20,7 +20,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v3.2.2"
+var version = "v3.2.3"
 
 func initLowMemoryProtection() {
 	if os.Getenv("GOMEMLIMIT") == "" {

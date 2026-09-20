@@ -84,9 +84,10 @@ func sanitizeTag(name string) string {
 }
 
 type NodeAddrItem struct {
-	Server     string `json:"server"`
-	ServerPort int    `json:"server_port"`
-	Remark     string `json:"remark,omitempty"`
+	Server     string         `json:"server"`
+	ServerPort int            `json:"server_port"`
+	Remark     string         `json:"remark,omitempty"`
+	TLS        map[string]any `json:"tls,omitempty"`
 }
 
 type NodeDetailInfo struct {
