@@ -2518,10 +2518,9 @@ with open(path, 'w') as f:
 METAEOF
   chmod 600 "$CADDY_META"
 
-  # 仅当 sout 服务未运行时才启动它；若已在运行，绝不重启，避免中断后台已绑定的出口隧道与出口 IP
-  if ! systemctl is-active --quiet sout 2>/dev/null && ! rc-service sout status 2>/dev/null; then
-    systemctl start sout 2>/dev/null || rc-service sout start 2>/dev/null || service sout start 2>/dev/null || true
-  fi
+  # 必须重启 sout 服务以应用新的内部端口 (127.0.0.1:${sout_port}) 和访问路径 (/${sout_path}/)
+  systemctl restart sout 2>/dev/null || rc-service sout restart 2>/dev/null || service sout restart 2>/dev/null || true
+  sleep 1
 
   # 7. 统一调用终端菜单中的 Caddy 探测并分流，确保 Caddyfile 规则与隧道回源完全一致
   reload_caddy_proxy >/dev/null 2>&1 || true
@@ -2860,9 +2859,13 @@ except Exception:
   fi
   sout_p=$(grep -oE '"sout_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   [[ -z "$sout_p" ]] && sout_p="sout"
-  if [[ "$sout_needs_restart" -eq 1 ]]; then
-    echo -e "  [+] 检测到 sout 监听地址不是 127.0.0.1，已自动修正并重启服务..."
-    systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || true
+  local sout_port_listening=0
+  if (ss -tulpn 2>/dev/null || netstat -tulpn 2>/dev/null) | grep -q ":${sout_port} "; then
+    sout_port_listening=1
+  fi
+  if [[ "$sout_needs_restart" -eq 1 || "$sout_port_listening" -eq 0 ]]; then
+    echo -e "  [+] 检测到 sout 端口或配置需同步，正在重启服务..."
+    systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || rc-service sout restart 2>/dev/null || true
   fi
 
   # 2. 动态探测并自动纠偏 s-ui 面板配置 (确保监听 127.0.0.1 并更新 webURI/subURI)

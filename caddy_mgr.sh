@@ -749,9 +749,9 @@ PY
 }
 EOF
   echo "$sout_p" > "${WORK_DIR}/basepath"
-  if ! systemctl is-active --quiet sout 2>/dev/null && ! systemctl is-active --quiet fanout 2>/dev/null; then
-    systemctl start sout 2>/dev/null || systemctl start fanout 2>/dev/null || true
-  fi
+  # 必须重启 sout 服务以应用新的内部端口 (127.0.0.1:${sout_port}) 和访问路径 (/${sout_p}/)
+  systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || rc-service sout restart 2>/dev/null || service sout restart 2>/dev/null || true
+  sleep 1
 
   # 保存 meta
   local meta_mode="tunnel"
@@ -885,9 +885,13 @@ except Exception:
   fi
   sout_p=$(grep -oE '"sout_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   [[ -z "$sout_p" ]] && sout_p="sout"
-  if [[ "$sout_needs_restart" -eq 1 ]]; then
-    echo -e "  [+] 检测到 sout 监听地址不是 127.0.0.1，已自动修正并重启服务..."
-    systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || true
+  local sout_port_listening=0
+  if (ss -tulpn 2>/dev/null || netstat -tulpn 2>/dev/null) | grep -q ":${sout_port} "; then
+    sout_port_listening=1
+  fi
+  if [[ "$sout_needs_restart" -eq 1 || "$sout_port_listening" -eq 0 ]]; then
+    echo -e "  [+] 检测到 sout 端口或配置需同步，正在重启服务..."
+    systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || rc-service sout restart 2>/dev/null || true
   fi
 
   # 2. 动态探测并自动纠偏后端配置
