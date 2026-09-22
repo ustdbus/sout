@@ -2795,7 +2795,7 @@ reload_caddy_proxy() {
   echo
   echo -e "  ${B}[+] 正在扫描并重新识别各组件 (隧道/sout/s-ui/节点) 最新路径与端口...${N}"
 
-  local domain tunnel_port sout_p sui_p sub_p ws_p sout_port sui_port node_port meta_mode
+  local domain tunnel_port sout_p sui_p sub_p ws_p sout_port sui_port sub_port node_port meta_mode has_sui="false"
   meta_mode=$(grep -oE '"mode"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   domain=$(grep -oE '"domain"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   tunnel_port=$(grep -oE '"tunnel_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
@@ -2874,9 +2874,12 @@ except Exception:
   [[ -z "$sui_p" ]] && sui_p="sui"
   sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   [[ -z "$sub_p" ]] && sub_p="sub"
+  sub_port=$(grep -oE '"sub_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
+  [[ -z "$sub_port" ]] && sub_port="2097"
 
   local sui_needs_restart=0
   if [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
+    has_sui="true"
     local sui_info
     sui_info=$(python3 -c "
 import sqlite3
@@ -2894,6 +2897,9 @@ w_listen = r3[0] if r3 and r3[0] else ''
 cur.execute(\"SELECT value FROM settings WHERE key='subListen'\")
 r4 = cur.fetchone()
 s_listen = r4[0] if r4 and r4[0] else ''
+cur.execute(\"SELECT value FROM settings WHERE key='subPort'\")
+r5 = cur.fetchone()
+sp_val = r5[0] if r5 and r5[0] else '2097'
 
 target_web_uri = 'https://${domain}/' + path.strip('/') + '/'
 target_sub_uri = 'https://${domain}/${sub_p}/'
@@ -2913,15 +2919,17 @@ if changed:
     con.commit()
 con.close()
 path = path.strip('/')
-print(f'{port}|{path}|{changed}')
+print(f'{port}|{path}|{changed}|{sp_val}')
 " 2>/dev/null || true)
     if [[ -n "$sui_info" ]]; then
-      local probed_port probed_path probed_changed
+      local probed_port probed_path probed_changed probed_sub_port
       probed_port=$(echo "$sui_info" | cut -d'|' -f1)
       probed_path=$(echo "$sui_info" | cut -d'|' -f2)
       probed_changed=$(echo "$sui_info" | cut -d'|' -f3)
+      probed_sub_port=$(echo "$sui_info" | cut -d'|' -f4)
       [[ -n "$probed_port" ]] && sui_port="$probed_port"
       [[ -n "$probed_path" ]] && sui_p="$probed_path"
+      [[ -n "$probed_sub_port" ]] && sub_port="$probed_sub_port"
       if [[ "$probed_changed" == "True" ]]; then
         sui_needs_restart=1
       fi
@@ -3149,6 +3157,32 @@ PYEOF
   fi
 
   # 4. 重新生成纯净 Caddyfile (精确绑定当前检测到的隧道回源端口，并追加 SSL 域名自动续期块)
+  local sui_caddy_rules=""
+  local sub_caddy_rules=""
+  if [[ "$has_sui" == "true" ]]; then
+    sui_caddy_rules="    redir /${sui_p} /${sui_p}/ 308
+
+    # 2. s-ui 节点管理面板
+    handle /${sui_p}* {
+        reverse_proxy 127.0.0.1:${sui_port}
+    }"
+
+    sub_caddy_rules="    redir /${sub_p} /${sub_p}/ 308
+
+    # 3. s-ui 节点订阅接口 (直接反代至 s-ui 独立订阅服务)
+    handle /${sub_p}* {
+        reverse_proxy 127.0.0.1:${sub_port}
+    }"
+  else
+    sub_caddy_rules="    redir /${sub_p} /${sub_p}/ 308
+
+    # 3. sout 节点订阅接口 (重写并转发至 sout 自身的 /sub 订阅端点)
+    handle /${sub_p}* {
+        rewrite * /${sout_p}/sub
+        reverse_proxy 127.0.0.1:${sout_port}
+    }"
+  fi
+
   mkdir -p /etc/caddy
   cat > /etc/caddy/Caddyfile <<EOF
 {
@@ -3158,22 +3192,11 @@ PYEOF
 
 http://127.0.0.1:${tunnel_port}, http://:${tunnel_port} {
     redir /${sout_p} /${sout_p}/ 308
-    redir /${sui_p} /${sui_p}/ 308
-    redir /${sub_p} /${sub_p}/ 308
+${sui_caddy_rules}
+${sub_caddy_rules}
 
     # 1. sout 动态家宽管理面板
     handle /${sout_p}* {
-        reverse_proxy 127.0.0.1:${sout_port}
-    }
-
-    # 2. s-ui 节点管理面板
-    handle /${sui_p}* {
-        reverse_proxy 127.0.0.1:${sui_port}
-    }
-
-    # 3. sout 订阅接口（重写到 sout 面板的 /sub）
-    handle /${sub_p}* {
-        rewrite * /${sout_p}/sub{uri}
         reverse_proxy 127.0.0.1:${sout_port}
     }
 
@@ -3225,6 +3248,7 @@ d['sout_port'] = int('${sout_port}')
 d['sout_path'] = '${sout_p}'
 d['sui_port'] = int('${sui_port}')
 d['sui_path'] = '${sui_p}'
+d['sub_port'] = int('${sub_port}')
 d['sub_path'] = '${sub_p}'
 d['ws_path'] = '${ws_p}'
 d['node_port'] = int('${node_port}')
