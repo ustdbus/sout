@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -421,4 +422,54 @@ proxies:
 		t.Errorf("expected config not empty")
 	}
 }
+
+func TestEmbeddedEngine_WireGuardTunnel(t *testing.T) {
+	engine, err := newEmbeddedEngine("127.0.0.1")
+	if err != nil {
+		t.Fatalf("newEmbeddedEngine failed: %v", err)
+	}
+	defer engine.close()
+
+	wgJSON := `{
+  "type": "wireguard",
+  "tag": "WARP-WG-Test",
+  "server": "engage.cloudflareclient.com",
+  "server_port": 2408,
+  "local_address": ["172.16.0.2/32"],
+  "private_key": "SNqz5V1HYy2ZEKxFXdiA7t+L8vhK23riLWxuJG6v7m8=",
+  "peer_public_key": "bmXOC+F1FxEMF9dyiK2H5/1SUtzHZsVoW++jnWgmtEs=",
+  "reserved": [0, 0, 0],
+  "mtu": 1280
+}`
+
+	tunnel := &Tunnel{
+		Slot:        99,
+		Port:        29999,
+		Kind:        "custom",
+		CustomProto: "wireguard",
+		Cred:        SocksCred{User: "testuser", Pass: "testpass"},
+		Node: Node{
+			HostName: "test-warp-node",
+			IP:       "engage.cloudflareclient.com",
+			Port:     2408,
+			Protocol: "wireguard",
+			Config:   wgJSON,
+		},
+	}
+
+	err = engine.addTunnel(tunnel)
+	if err != nil {
+		t.Fatalf("engine.addTunnel(wireguard) failed: %v", err)
+	}
+
+	if !engine.hasTunnel(99) {
+		t.Errorf("expected engine.hasTunnel(99) = true")
+	}
+
+	engine.removeTunnel(tunnel)
+	if engine.hasTunnel(99) {
+		t.Errorf("expected engine.hasTunnel(99) = false after remove")
+	}
+}
+
 
