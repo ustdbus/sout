@@ -30,6 +30,7 @@ type persistedTunnel struct {
 	CustomPort     int    `json:"custom_port,omitempty"`
 	CustomUser     string `json:"custom_user,omitempty"`
 	CustomPass     string `json:"custom_pass,omitempty"`
+	CustomProto    string `json:"custom_proto,omitempty"`
 	SourceID       string `json:"source_id,omitempty"`
 	IP             string `json:"ip,omitempty"`
 	ExitIP         string `json:"exit_ip,omitempty"`
@@ -69,6 +70,7 @@ func (m *Manager) saveState() error {
 			CustomPort:     t.CustomPort,
 			CustomUser:     t.CustomUser,
 			CustomPass:     t.CustomPass,
+			CustomProto:    t.CustomProto,
 			SourceID:       t.Node.SourceID,
 			IP:             t.Node.IP,
 			ExitIP:         t.ExitIP,
@@ -141,6 +143,13 @@ func (m *Manager) restoreState() (int, error) {
 			}
 			cred = gen
 		}
+		proto := p.CustomProto
+		if proto == "" && node.Protocol != "" {
+			proto = node.Protocol
+		}
+		if node.Protocol == "" && proto != "" {
+			node.Protocol = proto
+		}
 		t := &Tunnel{
 			Slot:           p.Slot,
 			Port:           p.Port,
@@ -158,6 +167,7 @@ func (m *Manager) restoreState() (int, error) {
 			CustomPort:     p.CustomPort,
 			CustomUser:     p.CustomUser,
 			CustomPass:     p.CustomPass,
+			CustomProto:    proto,
 		}
 		m.mu.Lock()
 		m.tunnels[p.Slot] = t
