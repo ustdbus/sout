@@ -129,6 +129,17 @@ func (m *Manager) Start(node Node) (*Tunnel, error) {
 		Since:          time.Now(),
 		Cred:           cred,
 	}
+	if node.Kind == "custom" || (node.Protocol != "" && node.Protocol != "openvpn") {
+		t.Kind = "custom"
+		t.CustomHost = node.IP
+		if t.CustomHost == "" {
+			t.CustomHost = node.HostName
+		}
+		t.CustomPort = node.Port
+		t.CustomUser = node.User
+		t.CustomPass = node.Pass
+		t.CustomProto = node.Protocol
+	}
 	if t.Kind == "" {
 		t.Kind = "vpngate"
 	}

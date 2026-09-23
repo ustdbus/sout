@@ -395,18 +395,21 @@ option{background:#161b22;color:var(--text);padding:8px}
 <div class="modal" id="credModal">
   <div class="sheet">
     <div class="head">
-      <h2>SOCKS5 出口凭据与配置</h2>
+      <h2>内部桥接 SOCKS5 凭据与端口</h2>
       <span class="spacer"></span>
       <button class="icon" data-close="credModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
     <div class="body">
+      <div style="color:var(--dim);font-size:12px;margin-bottom:12px;line-height:1.5">
+        ℹ️ 此端口是 sout 在 VPS 本地（127.0.0.1）监听的内部 SOCKS5 桥接隧道，供 s-ui / sing-box 入站节点做分流路由对接。流量在 VPS 出口处将以对应的真实协议（WireGuard、HTTPS、HTTP 或 OpenVPN）发送到远端。
+      </div>
       <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#0d1117;padding:10px;border-radius:6px;border:1px solid var(--line);word-break:break-all;margin-bottom:12px" id="credURL"></div>
       <label class="f"><span>用户名</span><input id="crUser" type="text" placeholder="输入用户名"></label>
       <label class="f"><span>密码</span><input id="crPass" type="text" placeholder="输入密码"></label>
-      <label class="f"><span>SOCKS5 端口</span><input id="crPort" type="text" inputmode="numeric" placeholder="如 43440"></label>
+      <label class="f"><span>内部桥接端口</span><input id="crPort" type="text" inputmode="numeric" placeholder="如 43440"></label>
     </div>
     <div class="foot">
-      <button id="copyCredBtn">复制连接串</button>
+      <button id="copyCredBtn">复制内部连接串</button>
       <span class="spacer"></span>
       <button data-close="credModal">取消</button>
       <button class="primary" id="saveCredBtn">保存修改</button>
@@ -698,6 +701,22 @@ function renderExits(){
     const kindBadge = e.kind === 'custom'
       ? '<span class="source-tag" style="background:#1f6feb;color:#fff" title="' + esc(srcName) + '">' + esc(srcName) + '</span>'
       : '<span class="source-tag" style="background:#238636;color:#fff">VPN Gate</span>';
+
+    // 真实远端出站协议徽标
+    let protoBadge = '';
+    const p = (e.protocol || (e.kind === 'custom' ? 'socks5' : 'openvpn')).toLowerCase();
+    if(p === 'wireguard'){
+      protoBadge = '<span class="source-tag" style="background:#0969da;color:#fff;font-weight:600" title="公网出站协议: WireGuard UDP 隧道">⚡ WireGuard</span>';
+    } else if(p === 'https'){
+      protoBadge = '<span class="source-tag" style="background:#2ea043;color:#fff;font-weight:600" title="公网出站协议: HTTPS CONNECT 安全代理">🔒 HTTPS</span>';
+    } else if(p === 'http'){
+      protoBadge = '<span class="source-tag" style="background:#d29922;color:#0d1117;font-weight:600" title="公网出站协议: HTTP 代理">🌐 HTTP</span>';
+    } else if(p === 'openvpn'){
+      protoBadge = '<span class="source-tag" style="background:#8957e5;color:#fff;font-weight:600" title="公网出站协议: OpenVPN 隧道">🛡️ OpenVPN</span>';
+    } else {
+      protoBadge = '<span class="source-tag" style="background:#388bfd;color:#fff;font-weight:600" title="公网出站协议: SOCKS5 代理">🧦 SOCKS5</span>';
+    }
+
     const poolBadge = e.ip_type === 'datacenter'
       ? '<span class="pool-tag datacenter">🏢 机房</span>'
       : '<span class="pool-tag residential">🏠 家宽</span>';
@@ -709,12 +728,12 @@ function renderExits(){
     return '<div class="exit-row">'
       + '<span class="dot ' + e.status + '" title="' + e.status + '"></span>'
       + '<span class="exit-ip">' + esc(label) + '</span>'
-      + '<div style="display:flex;gap:4px;align-items:center;flex-shrink:0">' + kindBadge + poolBadge + '</div>'
+      + '<div style="display:flex;gap:4px;align-items:center;flex-shrink:0">' + kindBadge + protoBadge + poolBadge + '</div>'
       + '<div class="exit-meta">'
       +   '<span class="exit-place-text" title="' + esc(fullMeta) + '">' + esc(place) + ' · ' + esc(hostClean) + '</span>'
       +   pingBadge
       +   speedBadge
-      +   '<button class="chip-btn" data-cred="' + e.slot + '" title="查看/修改 SOCKS5 凭据">' + ICON.lock + ' SOCKS5 :' + e.port + '</button>'
+      +   '<button class="chip-btn" data-cred="' + e.slot + '" title="VPS 本地 127.0.0.1 的 SOCKS5 内部桥接端口 :' + e.port + ' (用于对接 s-ui/sing-box 分流)。点击查看/修改认证凭据">' + ICON.lock + ' 内部桥接 :' + e.port + '</button>'
       + '</div>'
       + '<div class="branch-acts">'
       +   swapBtn
@@ -945,8 +964,10 @@ document.addEventListener('click', async e => {
       $('#hasExitsBox').style.display = 'block';
       $('#noExitsBox').style.display = 'none';
       $('#confirmChooseExitBtn').disabled = false;
-      sel.innerHTML = upExits.map(x =>
-        '<option value="' + esc(x.host) + '">' + esc((x.country || x.region) + ' (' + (x.exit_ip || x.host) + ' · SOCKS5:' + x.port + ')') + '</option>').join('');
+      sel.innerHTML = upExits.map(x => {
+        const pUpper = (x.protocol || (x.kind === 'custom' ? 'SOCKS5' : 'OpenVPN')).toUpperCase();
+        return '<option value="' + esc(x.host) + '">' + esc((x.country || x.region) + ' [' + pUpper + '] (' + (x.exit_ip || x.host) + ' · 内部端口:' + x.port + ')') + '</option>';
+      }).join('');
     }
     openModal('chooseExitModal');
   }

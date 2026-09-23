@@ -37,6 +37,7 @@ type Exit struct {
 	IPType     string        `json:"ip_type,omitempty"` // "residential" | "datacenter"
 	ISP        string        `json:"isp,omitempty"`
 	SourceName string        `json:"source_name,omitempty"`
+	Protocol   string        `json:"protocol,omitempty"` // "wireguard" | "https" | "http" | "openvpn" | "socks5"
 }
 
 // NodeBranch 是某个节点下的一个分流分支（如直连分支、日本家宽分支等）
@@ -156,17 +157,58 @@ func (m *Manager) ExitsOf() ExitsView {
 		if ipType == "" {
 			ipType = "residential"
 		}
+		hostLower := strings.ToLower(t.Node.HostName)
+		rmkLower := strings.ToLower(t.Node.Remark)
+		kind := t.Kind
+		if kind == "" {
+			if t.CustomProto != "" || t.CustomHost != "" || (t.Node.Protocol != "" && t.Node.Protocol != "openvpn") ||
+				strings.Contains(hostLower, "totallyacdn.com") || strings.Contains(hostLower, "cloudflareclient.com") ||
+				strings.Contains(hostLower, "opera") || strings.HasPrefix(hostLower, "cs-") {
+				kind = "custom"
+			} else {
+				kind = "vpngate"
+			}
+		}
+
+		proto := "openvpn"
+		if kind == "custom" {
+			if t.CustomProto != "" {
+				proto = t.CustomProto
+			} else if t.Node.Protocol != "" {
+				proto = t.Node.Protocol
+			} else if strings.Contains(hostLower, "cloudflareclient.com") || strings.HasPrefix(hostLower, "cs-wg-") {
+				proto = "wireguard"
+			} else if strings.Contains(hostLower, "totallyacdn.com") || strings.HasSuffix(hostLower, "-443") {
+				proto = "https"
+			} else if strings.Contains(hostLower, "opera") {
+				proto = "http"
+			} else {
+				proto = "socks5"
+			}
+		} else {
+			proto = "openvpn"
+		}
+
 		sourceName := "VPN Gate"
-		if t.Kind == "custom" {
-			sourceName = "自定义 S5"
+		if kind == "custom" {
+			sourceName = "自定义订阅"
 			if t.Node.SourceID != "" && globalCustomStore != nil {
 				globalCustomStore.mu.RLock()
 				if s, ok := globalCustomStore.Sources[t.Node.SourceID]; ok && s.Name != "" {
 					sourceName = s.Name
 				}
 				globalCustomStore.mu.RUnlock()
-			} else if t.Node.Remark != "" && t.Node.Remark != t.Node.IP {
-				sourceName = t.Node.Remark
+			}
+			if sourceName == "自定义订阅" {
+				if strings.Contains(rmkLower, "windscribe") || strings.Contains(hostLower, "windscribe") || strings.Contains(hostLower, "totallyacdn.com") {
+					sourceName = "Windscribe"
+				} else if strings.Contains(rmkLower, "warp") || strings.Contains(rmkLower, "cloudflare") || strings.Contains(hostLower, "warp") || strings.Contains(hostLower, "cloudflareclient.com") {
+					sourceName = "WARP"
+				} else if strings.Contains(rmkLower, "opera") || strings.Contains(hostLower, "opera") {
+					sourceName = "Opera"
+				} else if t.Node.Remark != "" && t.Node.Remark != t.Node.IP {
+					sourceName = t.Node.Remark
+				}
 			}
 		}
 		view.Exits = append(view.Exits, Exit{
@@ -175,10 +217,11 @@ func (m *Manager) ExitsOf() ExitsView {
 			Ping: t.Node.Ping, SpeedMbps: t.Node.SpeedMbps,
 			ExitIP: t.ExitIP, Status: t.Status, Err: t.Err, Since: t.Since,
 			SocksUser: cred.User, SocksPass: cred.Pass,
-			Kind:       t.Kind,
+			Kind:       kind,
 			IPType:     ipType,
 			ISP:        t.ISP,
 			SourceName: sourceName,
+			Protocol:   proto,
 		})
 	}
 
