@@ -549,7 +549,7 @@ func TestWireGuardTunnel_SwitchPortAndCred(t *testing.T) {
 	}
 	defer engine.close()
 
-	link := "wireguard://privkey@127.0.0.1:2408?publickey=bmXOC%2BF1FxEMF9dyiK2H5%2F1SUtzHZsVoW%2B%2BjnWgmtEs%3D&address=172.16.0.2%2F32&mtu=1280#WARP-WG"
+	link := "wireguard://SNqz5V1HYy2ZEKxFXdiA7t%2BL8vhK23riLWxuJG6v7m8%3D@127.0.0.1:2408?publickey=bmXOC%2BF1FxEMF9dyiK2H5%2F1SUtzHZsVoW%2B%2BjnWgmtEs%3D&address=172.16.0.2%2F32&mtu=1280#WARP-WG"
 	node, err := parseWireGuardURL(link)
 	if err != nil {
 		t.Fatalf("parseWireGuardURL failed: %v", err)
