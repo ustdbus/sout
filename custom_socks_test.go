@@ -164,7 +164,6 @@ func TestParseSubscriptionContentEdgeCases(t *testing.T) {
 	}
 
 	// 3. Base64 编码的链接列表
-	rawLinks := "http://u:p@1.1.1.1:8080#WS-日本1\nsocks5://2.2.2.2:1080#测试节点\n"
 	b64 := "aHR0cDovL3U6cEAxLjEuMS4xOjgwODAjV1Mt5pel5pysMQpzb2NrczU6Ly8yLjIuMi4yOjEwODAj5rWL6K+V6IqC54K5Cg=="
 	b64Nodes, err := ParseSubscriptionContent(b64)
 	if err != nil {
