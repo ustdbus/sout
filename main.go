@@ -1188,6 +1188,10 @@ func apiCustomSocksAdd(m *Manager) http.HandlerFunc {
 			remark = h
 		}
 		var cfgJSON string
+		var exitIP string
+		var ping int
+		var ipType string
+		var isp string
 		if proto == "wireguard" {
 			if req.RawURL != "" && strings.HasPrefix(req.RawURL, "wireguard://") {
 				if wgNode, err := parseWireGuardURL(req.RawURL); err == nil && wgNode != nil {
