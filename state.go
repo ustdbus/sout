@@ -118,6 +118,15 @@ func (m *Manager) restoreState() (int, error) {
 				kind = "vpngate"
 			}
 		}
+		if kind == "custom" {
+			p.IPType = "datacenter"
+			p.TargetPoolType = "datacenter"
+		} else {
+			p.IPType = "residential"
+			p.TargetPoolType = "residential"
+		}
+
+
 		node, ok := known[p.HostName]
 		if !ok {
 			node = Node{

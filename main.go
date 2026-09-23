@@ -20,7 +20,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v3.2.11"
+var version = "v3.3.0"
 
 func initLowMemoryProtection() {
 	if os.Getenv("GOMEMLIMIT") == "" {
@@ -260,10 +260,14 @@ func apiStart(m *Manager) http.HandlerFunc {
 			globalCustomStore.mu.RLock()
 			for _, cn := range globalCustomStore.Nodes {
 				if cn.HostName == host || cn.ID == host || cn.Host == host {
-					ipType := cn.IPType
-					if ipType == "" {
-						ipType = "residential"
+					ipType := "datacenter"
+					if cn.IPType != "" {
+						ipType = cn.IPType
 					}
+					if ipType != "datacenter" {
+						ipType = "datacenter"
+					}
+
 					cCode := cn.CountryCode
 					if cCode == "" {
 						cCode = "CUSTOM"
@@ -1814,13 +1818,13 @@ func apiCustomSourceList(m *Manager) http.HandlerFunc {
 						}
 					}
 				}
-				if resCount == 0 && dchCount == 0 && (s.ResidentialCount > 0 || s.DatacenterCount > 0) {
-					resCount = s.ResidentialCount
-					dchCount = s.DatacenterCount
-				} else {
-					s.ResidentialCount = resCount
-					s.DatacenterCount = dchCount
+				if resCount == 0 && dchCount == 0 && s.Count > 0 {
+					dchCount = s.Count
 				}
+				resCount = 0 // 第三方商业源均为机房，无家宽
+				s.ResidentialCount = 0
+				s.DatacenterCount = dchCount
+
 				sType := "socks5"
 				if strings.Contains(s.ID, "warp") || strings.Contains(strings.ToLower(s.Name), "warp") {
 					sType = "warp"

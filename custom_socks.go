@@ -114,10 +114,8 @@ func DetectIPType(ip string) (ipType, isp, country, countryCode string) {
 		return "datacenter", "", "", ""
 	}
 
-	ipType = "residential"
-	if data.Hosting {
-		ipType = "datacenter"
-	}
+	ipType = "datacenter"
+
 
 	info := IPInfo{
 		IPType:      ipType,
@@ -209,10 +207,7 @@ func BatchDetectIPInfo(nodes []*CustomNode) {
 			if item.Status != "success" {
 				continue
 			}
-			ipType := "residential"
-			if item.Hosting {
-				ipType = "datacenter"
-			}
+			ipType := "datacenter"
 			for _, n := range nodeIdxMap[item.Query] {
 				n.IPType = ipType
 				n.ISP = item.ISP
@@ -227,8 +222,8 @@ func BatchDetectIPInfo(nodes []*CustomNode) {
 	}
 
 	for _, n := range nodes {
-		if n.IPType == "" {
-			n.IPType = "residential"
+		if n.IPType == "" || n.IPType != "residential" {
+			n.IPType = "datacenter"
 		}
 	}
 }
@@ -249,6 +244,15 @@ func initCustomStore(dir string) *CustomStore {
 		Nodes:   make(map[string]*CustomNode),
 	}
 	cs.load()
+
+	// 存量校正：除 VPN Gate 之外的所有第三方源节点统一归为 datacenter 机房
+	for _, n := range cs.Nodes {
+		n.IPType = "datacenter"
+	}
+	for _, s := range cs.Sources {
+		s.ResidentialCount = 0
+		s.DatacenterCount = s.Count
+	}
 
 	// 确保主流订阅源（WARP, Windscribe, Opera, Proton）默认存在，用户填入链接即可使用
 	presets := []struct {
@@ -1055,10 +1059,8 @@ func parseClashYamlNodes(content string) []CustomNode {
 		} else {
 			nodeID = makeCustomNodeID(proto, server, port, user, name)
 		}
-		ipType := "residential"
-		if proto == "wireguard" {
-			ipType = "datacenter"
-		}
+		ipType := "datacenter"
+
 		nodes = append(nodes, CustomNode{
 			ID:          nodeID,
 			HostName:    nodeID,
@@ -1239,7 +1241,7 @@ func ParseSubscriptionContent(content string) ([]CustomNode, error) {
 						Country:     country,
 						CountryCode: countryCode,
 						Remark:      tag,
-						IPType:      "residential",
+						IPType:      "datacenter",
 						Config:      string(blob),
 					})
 				}
@@ -1318,7 +1320,7 @@ func ParseSubscriptionContent(content string) ([]CustomNode, error) {
 			Country:     country,
 			CountryCode: countryCode,
 			Remark:      remark,
-			IPType:      "residential",
+			IPType:      "datacenter",
 		})
 	}
 

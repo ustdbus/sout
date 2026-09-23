@@ -45,10 +45,14 @@ func (m *Manager) getAllCandidateNodesLocked(poolType string) []Node {
 					continue
 				}
 			}
-			ipType := node.IPType
-			if ipType == "" {
-				ipType = "residential"
+			ipType := "datacenter"
+			if node.IPType != "" {
+				ipType = node.IPType
 			}
+			if ipType != "datacenter" {
+				ipType = "datacenter"
+			}
+
 			if poolType == "" || poolType == "all" || poolType == ipType {
 				cCode := node.CountryCode
 				if cCode == "" {

@@ -153,10 +153,6 @@ func (m *Manager) ExitsOf() ExitsView {
 		byHost[sTag] = i
 		hostToTunnel[sTag] = t
 		cred := t.credential()
-		ipType := t.IPType
-		if ipType == "" {
-			ipType = "residential"
-		}
 		hostLower := strings.ToLower(t.Node.HostName)
 		rmkLower := strings.ToLower(t.Node.Remark)
 		kind := t.Kind
@@ -169,6 +165,15 @@ func (m *Manager) ExitsOf() ExitsView {
 				kind = "vpngate"
 			}
 		}
+		ipType := t.IPType
+		if kind == "custom" {
+			ipType = "datacenter"
+			t.IPType = "datacenter"
+		} else if ipType == "" || kind == "vpngate" {
+			ipType = "residential"
+			t.IPType = "residential"
+		}
+
 
 		proto := "openvpn"
 		if kind == "custom" {

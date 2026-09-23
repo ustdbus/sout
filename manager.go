@@ -203,9 +203,12 @@ func (m *Manager) Start(node Node) (*Tunnel, error) {
 	if t.Kind == "" {
 		t.Kind = "vpngate"
 	}
-	if t.IPType == "" {
+	if t.Kind == "custom" {
+		t.IPType = "datacenter"
+	} else if t.IPType == "" {
 		t.IPType = "residential"
 	}
+
 	if t.TargetPoolType == "" {
 		t.TargetPoolType = t.IPType
 	}
@@ -641,10 +644,8 @@ func (m *Manager) AddCustomExit(node CustomNode) (*Tunnel, error) {
 	if node.CountryCode == "" {
 		node.CountryCode = "CUSTOM"
 	}
-	ipType := node.IPType
-	if ipType == "" {
-		ipType = "residential"
-	}
+	ipType := "datacenter"
+
 	t := &Tunnel{
 		Slot:           slot,
 		Port:           port,
