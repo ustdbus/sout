@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // persistedTunnel 是落盘在 state.json 中的持久化隧道结构
@@ -109,6 +110,14 @@ func (m *Manager) restoreState() (int, error) {
 	}
 
 	for _, p := range st.Tunnels {
+		kind := p.Kind
+		if kind == "" {
+			if strings.HasPrefix(p.HostName, "cs-") || p.CustomProto != "" {
+				kind = "custom"
+			} else {
+				kind = "vpngate"
+			}
+		}
 		node, ok := known[p.HostName]
 		if !ok {
 			node = Node{
@@ -119,8 +128,15 @@ func (m *Manager) restoreState() (int, error) {
 				Ping:        p.Ping,
 				SpeedMbps:   p.SpeedMbps,
 				SourceID:    p.SourceID,
+				Kind:        kind,
+				Protocol:    p.CustomProto,
+				IPType:      p.IPType,
+				ISP:         p.ISP,
 			}
 		} else {
+			if node.Kind == "" {
+				node.Kind = kind
+			}
 			if node.IP == "" && p.IP != "" {
 				node.IP = p.IP
 			}
@@ -133,6 +149,18 @@ func (m *Manager) restoreState() (int, error) {
 			if node.SourceID == "" && p.SourceID != "" {
 				node.SourceID = p.SourceID
 			}
+			if node.Protocol == "" && p.CustomProto != "" {
+				node.Protocol = p.CustomProto
+			}
+			if node.IPType == "" && p.IPType != "" {
+				node.IPType = p.IPType
+			}
+			if node.ISP == "" && p.ISP != "" {
+				node.ISP = p.ISP
+			}
+		}
+		if p.Kind == "" {
+			p.Kind = kind
 		}
 		node.Config = p.Config
 		cred := SocksCred{User: p.SocksUser, Pass: p.SocksPass}

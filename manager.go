@@ -212,7 +212,16 @@ func (m *Manager) tryCandidates(t *Tunnel, notify bool) bool {
 		}
 		oldHost := t.Node.HostName
 		t.Node = node
-		t.Kind = node.Kind
+		if node.Kind != "" {
+			t.Kind = node.Kind
+		}
+		if t.Kind == "" {
+			if strings.HasPrefix(node.HostName, "cs-") || node.Protocol != "" {
+				t.Kind = "custom"
+			} else {
+				t.Kind = "vpngate"
+			}
+		}
 		if t.Kind == "custom" {
 			t.CustomHost = node.IP
 			t.CustomPort = node.Port
@@ -323,12 +332,37 @@ func (m *Manager) candidatesFor(t *Tunnel) []Node {
 	isBuiltinVPNGate := targetSourceID == "builtin-vpngate" || targetRegion == "SRC:builtin-vpngate" || (first.Kind == "vpngate" && targetSourceID == "")
 	isSpecificCustomSrc := targetSourceID != "" && targetSourceID != "builtin-vpngate"
 
+	expectedKind := t.Kind
+	if expectedKind == "" {
+		expectedKind = first.Kind
+	}
+	if expectedKind == "" {
+		if strings.HasPrefix(first.HostName, "cs-") || first.Protocol != "" {
+			expectedKind = "custom"
+		} else {
+			expectedKind = "vpngate"
+		}
+	}
+
 	// 1. 同源 / 同国家地区 严格候选查找
 	for _, n := range allNodes {
 		if len(out) >= maxTries {
 			break
 		}
 		if used[n.HostName] {
+			continue
+		}
+
+		// 节点类型（vpngate vs custom）必须严格一致，绝对不可互相混淆
+		candidateKind := n.Kind
+		if candidateKind == "" {
+			if strings.HasPrefix(n.HostName, "cs-") || n.Protocol != "" {
+				candidateKind = "custom"
+			} else {
+				candidateKind = "vpngate"
+			}
+		}
+		if candidateKind != expectedKind {
 			continue
 		}
 
@@ -365,6 +399,17 @@ func (m *Manager) candidatesFor(t *Tunnel) []Node {
 				break
 			}
 			if used[n.HostName] {
+				continue
+			}
+			candidateKind := n.Kind
+			if candidateKind == "" {
+				if strings.HasPrefix(n.HostName, "cs-") || n.Protocol != "" {
+					candidateKind = "custom"
+				} else {
+					candidateKind = "vpngate"
+				}
+			}
+			if candidateKind != expectedKind {
 				continue
 			}
 			if poolType != "all" && n.IPType != "" && n.IPType != poolType {

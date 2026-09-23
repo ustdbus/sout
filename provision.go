@@ -74,6 +74,7 @@ func (m *Manager) getAllCandidateNodesLocked(poolType string) []Node {
 					Protocol:    node.Protocol,
 					Remark:      node.Remark,
 					SourceID:    node.SourceID,
+					Config:      node.Config,
 				})
 			}
 		}
@@ -157,6 +158,7 @@ func (m *Manager) runProvision(job *Job, picks []Node, region, poolType string, 
 				IPType:      node.IPType,
 				ISP:         node.ISP,
 				SourceID:    node.SourceID,
+				Config:      node.Config,
 			}
 			t, err = m.AddCustomExit(cNode)
 		} else {
@@ -229,6 +231,39 @@ func (m *Manager) waitUp(t *Tunnel) {
 	}
 }
 
+func classifyNodeCategory(n Node) string {
+	remLower := strings.ToLower(n.Remark)
+	hostLower := strings.ToLower(n.IP)
+	protoLower := strings.ToLower(n.Protocol)
+	if n.Kind == "vpngate" || strings.Contains(n.SourceID, "vpngate") {
+		return "vpngate"
+	}
+	if strings.Contains(remLower, "warp") || strings.Contains(hostLower, "cloudflare") || protoLower == "wireguard" {
+		return "warp"
+	}
+	if strings.Contains(remLower, "ws-") || strings.Contains(remLower, "windscribe") || strings.Contains(hostLower, "totallyacdn") {
+		return "windscribe"
+	}
+	if strings.Contains(remLower, "opera") || strings.Contains(hostLower, "opera") {
+		return "opera"
+	}
+	if strings.Contains(remLower, "proton") || strings.Contains(hostLower, "proton") {
+		return "proton"
+	}
+	return "custom"
+}
+
+func matchNodeSubRegion(n Node, sub string) bool {
+	if sub == "" || strings.EqualFold(sub, "ALL") {
+		return true
+	}
+	subLower := strings.ToLower(sub)
+	remLower := strings.ToLower(n.Remark)
+	cLower := strings.ToLower(n.Country)
+	ccLower := strings.ToLower(n.CountryCode)
+	return strings.Contains(remLower, subLower) || strings.Contains(cLower, subLower) || strings.EqualFold(ccLower, subLower)
+}
+
 // pickNodes 挑选 count 个未被占用的节点，按速度与质量降序选取
 func (m *Manager) pickNodes(region, poolType string, count int) ([]Node, error) {
 	candidateNodes := m.GetAllCandidateNodes(poolType)
@@ -248,13 +283,18 @@ func (m *Manager) pickNodes(region, poolType string, count int) ([]Node, error) 
 		if used[n.HostName] {
 			continue
 		}
-		if region == "SRC:builtin-vpngate" {
-			if n.Kind == "custom" || (n.SourceID != "" && n.SourceID != "builtin-vpngate") {
+		if strings.HasPrefix(region, "SRC:") {
+			parts := strings.Split(region, ":")
+			targetCat := parts[1]
+			subFilter := ""
+			if len(parts) >= 3 {
+				subFilter = parts[2]
+			}
+			nodeCat := classifyNodeCategory(n)
+			if !strings.EqualFold(targetCat, nodeCat) && n.SourceID != targetCat {
 				continue
 			}
-		} else if strings.HasPrefix(region, "SRC:") {
-			srcID := strings.TrimPrefix(region, "SRC:")
-			if n.SourceID != srcID {
+			if !matchNodeSubRegion(n, subFilter) {
 				continue
 			}
 		} else if region != "" && !strings.EqualFold(region, "ALL") && !strings.EqualFold(n.CountryCode, region) {
@@ -278,9 +318,10 @@ type RegionStat struct {
 	Available int     `json:"available"`
 	BestPing  int     `json:"best_ping"`
 	BestSpeed float64 `json:"best_speed_mbps"`
+	Category  string  `json:"category"` // "vpngate" | "warp" | "windscribe" | "opera" | "proton" | "custom"
 }
 
-// Regions 返回当前指定节点池下所有可用地区的聚合统计，按可用数降序
+// Regions 返回当前指定节点池下所有可用地区的聚合统计，按 5 大专属源分类输出
 func (m *Manager) Regions(poolType string) []RegionStat {
 	candidateNodes := m.GetAllCandidateNodes(poolType)
 
@@ -291,132 +332,196 @@ func (m *Manager) Regions(poolType string) []RegionStat {
 	}
 	m.mu.RUnlock()
 
-	// 1. 按具体国家/地区聚合 (忽略占位的 CUSTOM)
-	byCode := map[string]*RegionStat{}
+	var result []RegionStat
+
+	// --- 1. VPN Gate 分类 ---
+	vpngateNodes := make([]Node, 0)
 	for _, n := range candidateNodes {
-		if used[n.HostName] || n.CountryCode == "" || n.CountryCode == "CUSTOM" {
-			continue
-		}
-		s := byCode[n.CountryCode]
-		if s == nil {
-			s = &RegionStat{Code: n.CountryCode, Name: n.Country, BestPing: n.Ping}
-			byCode[n.CountryCode] = s
-		}
-		s.Available++
-		if n.SpeedMbps > s.BestSpeed {
-			s.BestSpeed = n.SpeedMbps
-		}
-		if n.Ping > 0 && (s.BestPing == 0 || n.Ping < s.BestPing) {
-			s.BestPing = n.Ping
+		if !used[n.HostName] && classifyNodeCategory(n) == "vpngate" {
+			vpngateNodes = append(vpngateNodes, n)
 		}
 	}
-
-	out := make([]RegionStat, 0, len(byCode))
-	for _, s := range byCode {
-		out = append(out, *s)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Available != out[j].Available {
-			return out[i].Available > out[j].Available
+	if len(vpngateNodes) > 0 {
+		bestSpeed := 0.0
+		for _, n := range vpngateNodes {
+			if n.SpeedMbps > bestSpeed {
+				bestSpeed = n.SpeedMbps
+			}
 		}
-		return out[i].Code < out[j].Code
-	})
-
-	var sourceStats []RegionStat
-
-	// 2. 按用户添加的自定义源生成专属选项卡片（如 hookzof、proxifly 等）
-	if globalCustomStore != nil {
-		globalCustomStore.mu.RLock()
-		for _, src := range globalCustomStore.Sources {
-			if !src.Enabled {
+		result = append(result, RegionStat{
+			Code:      "SRC:vpngate:ALL",
+			Name:      "全球最高速 (VPN Gate)",
+			Available: len(vpngateNodes),
+			BestSpeed: bestSpeed,
+			Category:  "vpngate",
+		})
+		vgByCode := map[string]*RegionStat{}
+		for _, n := range vpngateNodes {
+			if n.CountryCode == "" {
 				continue
 			}
-			srcAvail := 0
-			bestPing := 0
-			bestSpeed := 0.0
-			for _, n := range candidateNodes {
-				if used[n.HostName] || n.SourceID != src.ID {
-					continue
+			s := vgByCode[n.CountryCode]
+			if s == nil {
+				s = &RegionStat{
+					Code:      "SRC:vpngate:" + n.CountryCode,
+					Name:      fmt.Sprintf("%s %s", n.CountryCode, n.Country),
+					BestPing:  n.Ping,
+					Category:  "vpngate",
 				}
-				srcAvail++
-				if n.SpeedMbps > bestSpeed {
-					bestSpeed = n.SpeedMbps
-				}
-				if n.Ping > 0 && (bestPing == 0 || n.Ping < bestPing) {
-					bestPing = n.Ping
-				}
+				vgByCode[n.CountryCode] = s
 			}
-			if srcAvail > 0 {
-				srcStat := RegionStat{
-					Code:      "SRC:" + src.ID,
-					Name:      src.Name,
-					Available: srcAvail,
-					BestPing:  bestPing,
-					BestSpeed: bestSpeed,
-				}
-				sourceStats = append(sourceStats, srcStat)
+			s.Available++
+			if n.SpeedMbps > s.BestSpeed {
+				s.BestSpeed = n.SpeedMbps
+			}
+			if n.Ping > 0 && (s.BestPing == 0 || n.Ping < s.BestPing) {
+				s.BestPing = n.Ping
 			}
 		}
-		globalCustomStore.mu.RUnlock()
+		var vgList []RegionStat
+		for _, s := range vgByCode {
+			vgList = append(vgList, *s)
+		}
+		sort.Slice(vgList, func(i, j int) bool { return vgList[i].Available > vgList[j].Available })
+		result = append(result, vgList...)
 	}
 
-	// 3. 官方内置源：VPN Gate 官方全球家宽源
-	vpngateAvail := 0
-	vpngateBestPing := 0
-	vpngateBestSpeed := 0.0
+	// --- 2. WARP 分类 ---
+	warpNodes := make([]Node, 0)
 	for _, n := range candidateNodes {
-		if used[n.HostName] || n.Kind == "custom" || (n.SourceID != "" && n.SourceID != "builtin-vpngate") {
-			continue
-		}
-		vpngateAvail++
-		if n.SpeedMbps > vpngateBestSpeed {
-			vpngateBestSpeed = n.SpeedMbps
-		}
-		if n.Ping > 0 && (vpngateBestPing == 0 || n.Ping < vpngateBestPing) {
-			vpngateBestPing = n.Ping
+		if !used[n.HostName] && classifyNodeCategory(n) == "warp" {
+			warpNodes = append(warpNodes, n)
 		}
 	}
-	if vpngateAvail > 0 {
-		srcStat := RegionStat{
-			Code:      "SRC:builtin-vpngate",
-			Name:      "VPN Gate (官方源)",
-			Available: vpngateAvail,
-			BestPing:  vpngateBestPing,
-			BestSpeed: vpngateBestSpeed,
+	if len(warpNodes) > 0 {
+		bestSpeed := 0.0
+		for _, n := range warpNodes {
+			if n.SpeedMbps > bestSpeed {
+				bestSpeed = n.SpeedMbps
+			}
 		}
-		sourceStats = append([]RegionStat{srcStat}, sourceStats...)
+		result = append(result, RegionStat{
+			Code:      "SRC:warp:ALL",
+			Name:      "⚡ 全球就近出站 (Anycast)",
+			Available: len(warpNodes),
+			BestSpeed: bestSpeed,
+			Category:  "warp",
+		})
 	}
 
-	// 4. 计算全局「不限地区 (ALL)」真实可用总数与最高速度
-	allAvail := 0
-	allBestPing := 0
-	allBestSpeed := 0.0
+	// --- 3. Windscribe 分类 (支持城市/大区精确专属页面) ---
+	wsNodes := make([]Node, 0)
 	for _, n := range candidateNodes {
-		if used[n.HostName] {
-			continue
-		}
-		allAvail++
-		if n.SpeedMbps > allBestSpeed {
-			allBestSpeed = n.SpeedMbps
-		}
-		if n.Ping > 0 && (allBestPing == 0 || n.Ping < allBestPing) {
-			allBestPing = n.Ping
+		if !used[n.HostName] && classifyNodeCategory(n) == "windscribe" {
+			wsNodes = append(wsNodes, n)
 		}
 	}
-	allStat := RegionStat{
-		Code:          "ALL",
-		Name:          "不限地区",
-		Available:     allAvail,
-		BestPing:      allBestPing,
-		BestSpeed:     allBestSpeed,
+	if len(wsNodes) > 0 {
+		result = append(result, RegionStat{
+			Code:      "SRC:windscribe:ALL",
+			Name:      "🌐 全部 Windscribe 节点",
+			Available: len(wsNodes),
+			Category:  "windscribe",
+		})
+		wsSubs := []struct {
+			Filter string
+			Name   string
+		}{
+			{Filter: "美国东部", Name: "🇺🇸 美国东部 (纽约/迈阿密等)"},
+			{Filter: "美国西部", Name: "🇺🇸 美国西部 (洛杉矶/西雅图等)"},
+			{Filter: "加拿大", Name: "🇨🇦 加拿大 (多伦多等)"},
+			{Filter: "英国", Name: "🇬🇧 英国 (伦敦等)"},
+			{Filter: "德国", Name: "🇩🇪 德国 (法兰克福等)"},
+			{Filter: "法国", Name: "🇫🇷 法国 (巴黎等)"},
+			{Filter: "瑞士", Name: "🇨🇭 瑞士 (苏黎世等)"},
+			{Filter: "荷兰", Name: "🇳🇱 荷兰 (阿姆斯特丹等)"},
+			{Filter: "挪威", Name: "🇳🇴 挪威 (奥斯陆等)"},
+			{Filter: "罗马尼亚", Name: "🇷🇴 罗马尼亚 (布加勒斯特等)"},
+			{Filter: "香港", Name: "🇭🇰 香港 (Victoria等)"},
+		}
+		for _, sub := range wsSubs {
+			cnt := 0
+			bestSpd := 0.0
+			for _, n := range wsNodes {
+				if matchNodeSubRegion(n, sub.Filter) {
+					cnt++
+					if n.SpeedMbps > bestSpd {
+						bestSpd = n.SpeedMbps
+					}
+				}
+			}
+			if cnt > 0 {
+				result = append(result, RegionStat{
+					Code:      "SRC:windscribe:" + sub.Filter,
+					Name:      sub.Name,
+					Available: cnt,
+					BestSpeed: bestSpd,
+					Category:  "windscribe",
+				})
+			}
+		}
 	}
 
-	var result []RegionStat
-	if allAvail > 0 {
-		result = append(result, allStat)
+	// --- 4. Opera 分类 (支持美洲/欧洲/亚洲等大区城市) ---
+	operaNodes := make([]Node, 0)
+	for _, n := range candidateNodes {
+		if !used[n.HostName] && classifyNodeCategory(n) == "opera" {
+			operaNodes = append(operaNodes, n)
+		}
 	}
-	result = append(result, sourceStats...)
-	result = append(result, out...)
+	if len(operaNodes) > 0 {
+		result = append(result, RegionStat{
+			Code:      "SRC:opera:ALL",
+			Name:      "🌐 全部 Opera 节点",
+			Available: len(operaNodes),
+			Category:  "opera",
+		})
+		operaSubs := []struct {
+			Filter string
+			Name   string
+		}{
+			{Filter: "美洲", Name: "🌎 美洲大区 (Americas)"},
+			{Filter: "欧洲", Name: "🌍 欧洲大区 (Europe)"},
+			{Filter: "亚洲", Name: "🌏 亚洲大区 (Asia)"},
+		}
+		for _, sub := range operaSubs {
+			cnt := 0
+			bestSpd := 0.0
+			for _, n := range operaNodes {
+				if matchNodeSubRegion(n, sub.Filter) {
+					cnt++
+					if n.SpeedMbps > bestSpd {
+						bestSpd = n.SpeedMbps
+					}
+				}
+			}
+			if cnt > 0 {
+				result = append(result, RegionStat{
+					Code:      "SRC:opera:" + sub.Filter,
+					Name:      sub.Name,
+					Available: cnt,
+					BestSpeed: bestSpd,
+					Category:  "opera",
+				})
+			}
+		}
+	}
+
+	// --- 5. Proton 分类 ---
+	protonNodes := make([]Node, 0)
+	for _, n := range candidateNodes {
+		if !used[n.HostName] && classifyNodeCategory(n) == "proton" {
+			protonNodes = append(protonNodes, n)
+		}
+	}
+	if len(protonNodes) > 0 {
+		result = append(result, RegionStat{
+			Code:      "SRC:proton:ALL",
+			Name:      "🌐 全部 Proton 节点",
+			Available: len(protonNodes),
+			Category:  "proton",
+		})
+	}
 	return result
 }
 

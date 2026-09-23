@@ -20,7 +20,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v3.2.8"
+var version = "v3.2.9"
 
 func initLowMemoryProtection() {
 	if os.Getenv("GOMEMLIMIT") == "" {
@@ -168,6 +168,7 @@ func main() {
 	mux.HandleFunc("/api/custom/source/settings", apiCustomSourceUpdateSettings)
 	mux.HandleFunc("/api/custom/source/refresh", apiCustomSourceRefresh(mgr))
 	mux.HandleFunc("/api/custom/source/import", apiCustomSourceImport(mgr))
+	mux.HandleFunc("/api/custom/warp/generate", apiCustomWARPGenerate(mgr))
 
 	mux.HandleFunc("/sub", handleSub(mgr))
 	mux.HandleFunc("/sub/", handleSub(mgr))
@@ -254,6 +255,52 @@ func apiStart(m *Manager) http.HandlerFunc {
 				writeJSON(w, http.StatusOK, t)
 				return
 			}
+		}
+		if globalCustomStore != nil {
+			globalCustomStore.mu.RLock()
+			for _, cn := range globalCustomStore.Nodes {
+				if cn.HostName == host || cn.ID == host || cn.Host == host {
+					ipType := cn.IPType
+					if ipType == "" {
+						ipType = "residential"
+					}
+					cCode := cn.CountryCode
+					if cCode == "" {
+						cCode = "CUSTOM"
+					}
+					cName := cn.Country
+					if cName == "" {
+						cName = "自定义节点"
+					}
+					node := Node{
+						HostName:    cn.HostName,
+						IP:          cn.Host,
+						Country:     cName,
+						CountryCode: cCode,
+						Ping:        cn.Ping,
+						SpeedMbps:   cn.SpeedMbps,
+						IPType:      ipType,
+						ISP:         cn.ISP,
+						Kind:        "custom",
+						Port:        cn.Port,
+						User:        cn.User,
+						Pass:        cn.Pass,
+						Protocol:    cn.Protocol,
+						Remark:      cn.Remark,
+						SourceID:    cn.SourceID,
+						Config:      cn.Config,
+					}
+					globalCustomStore.mu.RUnlock()
+					t, err := m.Start(node)
+					if err != nil {
+						writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+						return
+					}
+					writeJSON(w, http.StatusOK, t)
+					return
+				}
+			}
+			globalCustomStore.mu.RUnlock()
 		}
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "节点不存在，可能列表已过期"})
 	}
@@ -1548,9 +1595,11 @@ func apiCustomSourceUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID              string `json:"id"`
-		AutoUpdate      bool   `json:"auto_update"`
-		UpdateIntervalM int    `json:"update_interval_m"`
+		ID              string  `json:"id"`
+		Name            *string `json:"name"`
+		URL             *string `json:"url"`
+		AutoUpdate      *bool   `json:"auto_update"`
+		UpdateIntervalM *int    `json:"update_interval_m"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求参数无效"})
@@ -1567,15 +1616,86 @@ func apiCustomSourceUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "未找到该源"})
 		return
 	}
-	src.AutoUpdate = req.AutoUpdate
-	if req.UpdateIntervalM > 0 {
-		src.UpdateIntervalM = req.UpdateIntervalM
+	if req.AutoUpdate != nil {
+		src.AutoUpdate = *req.AutoUpdate
+	}
+	if req.UpdateIntervalM != nil && *req.UpdateIntervalM > 0 {
+		src.UpdateIntervalM = *req.UpdateIntervalM
+	}
+	if req.Name != nil && strings.TrimSpace(*req.Name) != "" {
+		src.Name = strings.TrimSpace(*req.Name)
+	}
+
+	urlChanged := false
+	newURL := ""
+	if req.URL != nil {
+		trimmed := strings.TrimSpace(*req.URL)
+		if trimmed != src.URL {
+			urlChanged = true
+			newURL = trimmed
+		}
 	}
 	globalCustomStore.mu.Unlock()
-	_ = globalCustomStore.save()
+
+	if urlChanged {
+		if newURL == "" {
+			globalCustomStore.mu.Lock()
+			src.URL = ""
+			src.Count = 0
+			src.ResidentialCount = 0
+			src.DatacenterCount = 0
+			src.Enabled = false
+			for k, n := range globalCustomStore.Nodes {
+				if n.SourceID == req.ID {
+					delete(globalCustomStore.Nodes, k)
+				}
+			}
+			globalCustomStore.mu.Unlock()
+			_ = globalCustomStore.save()
+		} else {
+			nodes, err := FetchSourceNodes(newURL, 15*time.Second)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("拉取新订阅失败: %v", err)})
+				return
+			}
+			resCount := 0
+			dchCount := 0
+			for _, n := range nodes {
+				if n.IPType == "datacenter" {
+					dchCount++
+				} else {
+					resCount++
+				}
+			}
+			globalCustomStore.mu.Lock()
+			src.URL = newURL
+			src.Count = len(nodes)
+			src.ResidentialCount = resCount
+			src.DatacenterCount = dchCount
+			src.Enabled = true
+			src.UpdatedAt = time.Now()
+			for k, n := range globalCustomStore.Nodes {
+				if n.SourceID == req.ID {
+					delete(globalCustomStore.Nodes, k)
+				}
+			}
+			for _, n := range nodes {
+				nodeCopy := n
+				nodeCopy.SourceID = req.ID
+				key := fmt.Sprintf("%s:%s", req.ID, nodeCopy.ID)
+				globalCustomStore.Nodes[key] = &nodeCopy
+			}
+			globalCustomStore.mu.Unlock()
+			_ = globalCustomStore.save()
+		}
+	} else {
+		_ = globalCustomStore.save()
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":                true,
+		"url":               src.URL,
+		"count":             src.Count,
 		"auto_update":       src.AutoUpdate,
 		"update_interval_m": src.UpdateIntervalM,
 	})
@@ -1595,26 +1715,79 @@ func apiCustomSourceList(m *Manager) http.HandlerFunc {
 			DatacenterCount  int       `json:"datacenter_count"`
 			UpdatedAt        time.Time `json:"updated_at"`
 			IsBuiltin        bool      `json:"is_builtin"`
+			IsPreset         bool      `json:"is_preset"`
 			Type             string    `json:"type"`
 		}
 
 		nodes, fetched := m.Nodes()
-		list := []SourceItem{
-			{
-				ID:               "builtin-vpngate",
-				Name:             "VPN Gate 官方全球家宽源",
-				URL:              "https://www.vpngate.net/api/iphone/",
-				Count:            len(nodes),
-				Enabled:          true,
-				AutoUpdate:       true,
-				UpdateIntervalM:  60,
-				ResidentialCount: len(nodes),
-				DatacenterCount:  0,
-				UpdatedAt:        fetched,
-				IsBuiltin:        true,
-				Type:             "vpngate",
+		vpngateItem := SourceItem{
+			ID:               "builtin-vpngate",
+			Name:             "VPN Gate 官方全球家宽源",
+			URL:              "https://www.vpngate.net/api/iphone/",
+			Count:            len(nodes),
+			Enabled:          true,
+			AutoUpdate:       true,
+			UpdateIntervalM:  60,
+			ResidentialCount: len(nodes),
+			DatacenterCount:  0,
+			UpdatedAt:        fetched,
+			IsBuiltin:        true,
+			IsPreset:         true,
+			Type:             "vpngate",
+		}
+
+		presetMap := map[string]*SourceItem{
+			"warp": {
+				ID:              "preset-warp",
+				Name:            "WARP",
+				URL:             "",
+				Count:           0,
+				Enabled:         false,
+				AutoUpdate:      true,
+				UpdateIntervalM: 60,
+				IsBuiltin:       false,
+				IsPreset:        true,
+				Type:            "warp",
+			},
+			"windscribe": {
+				ID:              "preset-windscribe",
+				Name:            "Windscribe",
+				URL:             "",
+				Count:           0,
+				Enabled:         false,
+				AutoUpdate:      true,
+				UpdateIntervalM: 60,
+				IsBuiltin:       false,
+				IsPreset:        true,
+				Type:            "socks5",
+			},
+			"opera": {
+				ID:              "preset-opera",
+				Name:            "Opera",
+				URL:             "",
+				Count:           0,
+				Enabled:         false,
+				AutoUpdate:      true,
+				UpdateIntervalM: 60,
+				IsBuiltin:       false,
+				IsPreset:        true,
+				Type:            "socks5",
+			},
+			"proton": {
+				ID:              "preset-proton",
+				Name:            "Proton",
+				URL:             "",
+				Count:           0,
+				Enabled:         false,
+				AutoUpdate:      true,
+				UpdateIntervalM: 60,
+				IsBuiltin:       false,
+				IsPreset:        true,
+				Type:            "socks5",
 			},
 		}
+
+		var others []SourceItem
 
 		if globalCustomStore != nil {
 			globalCustomStore.mu.RLock()
@@ -1637,7 +1810,12 @@ func apiCustomSourceList(m *Manager) http.HandlerFunc {
 					s.ResidentialCount = resCount
 					s.DatacenterCount = dchCount
 				}
-				list = append(list, SourceItem{
+				sType := "socks5"
+				if strings.Contains(s.ID, "warp") || strings.Contains(strings.ToLower(s.Name), "warp") {
+					sType = "warp"
+				}
+
+				item := SourceItem{
 					ID:               s.ID,
 					Name:             s.Name,
 					URL:              s.URL,
@@ -1649,12 +1827,92 @@ func apiCustomSourceList(m *Manager) http.HandlerFunc {
 					DatacenterCount:  dchCount,
 					UpdatedAt:        s.UpdatedAt,
 					IsBuiltin:        false,
-					Type:             "socks5",
-				})
+					IsPreset:         false,
+					Type:             sType,
+				}
+
+				lowerName := strings.ToLower(s.Name)
+				lowerID := strings.ToLower(s.ID)
+				matched := ""
+				if strings.Contains(lowerID, "warp") || strings.Contains(lowerName, "warp") {
+					matched = "warp"
+				} else if strings.Contains(lowerID, "windscribe") || strings.Contains(lowerName, "windscribe") {
+					matched = "windscribe"
+				} else if strings.Contains(lowerID, "opera") || strings.Contains(lowerName, "opera") {
+					matched = "opera"
+				} else if strings.Contains(lowerID, "proton") || strings.Contains(lowerName, "proton") {
+					matched = "proton"
+				}
+
+				if matched != "" {
+					item.IsPreset = true
+					presetMap[matched] = &item
+				} else {
+					others = append(others, item)
+				}
 			}
 			globalCustomStore.mu.RUnlock()
 		}
+
+		// 固定顺序：VPN Gate、WARP、Windscribe、Opera、Proton，其余后置
+		list := []SourceItem{
+			vpngateItem,
+			*presetMap["warp"],
+			*presetMap["windscribe"],
+			*presetMap["opera"],
+			*presetMap["proton"],
+		}
+		list = append(list, others...)
 		writeJSON(w, http.StatusOK, list)
+	}
+}
+
+func apiCustomWARPGenerate(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
+			return
+		}
+		node, err := RegisterWARPAccount()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if globalCustomStore != nil {
+			globalCustomStore.mu.Lock()
+			src, ok := globalCustomStore.Sources["preset-warp"]
+			if !ok {
+				src = &CustomSource{
+					ID:              "preset-warp",
+					Name:            "WARP",
+					AutoUpdate:      true,
+					UpdateIntervalM: 60,
+				}
+				globalCustomStore.Sources["preset-warp"] = src
+			}
+			src.Count = 1
+			src.Enabled = true
+			src.DatacenterCount = 1
+			src.ResidentialCount = 0
+			src.UpdatedAt = time.Now()
+			src.URL = "本机原生创建 (Cloudflare 官方账号)"
+
+			for k, n := range globalCustomStore.Nodes {
+				if n.SourceID == "preset-warp" {
+					delete(globalCustomStore.Nodes, k)
+				}
+			}
+			nodeCopy := *node
+			key := fmt.Sprintf("preset-warp:%s", nodeCopy.ID)
+			globalCustomStore.Nodes[key] = &nodeCopy
+			globalCustomStore.mu.Unlock()
+			_ = globalCustomStore.save()
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":      true,
+			"message": "已成功在本地为 Cloudflare WARP 免费申请账号并创建原生 WireGuard 节点",
+			"node":    node,
+		})
 	}
 }
 
@@ -1670,6 +1928,40 @@ func apiCustomSourceDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	if id == "builtin-vpngate" {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "系统内置源不允许删除"})
+		return
+	}
+	isPresetSource := strings.HasPrefix(id, "preset-")
+	if !isPresetSource && globalCustomStore != nil {
+		globalCustomStore.mu.RLock()
+		if s, ok := globalCustomStore.Sources[id]; ok {
+			lower := strings.ToLower(s.Name + " " + s.ID)
+			if strings.Contains(lower, "warp") || strings.Contains(lower, "windscribe") || strings.Contains(lower, "opera") || strings.Contains(lower, "proton") {
+				isPresetSource = true
+			}
+		}
+		globalCustomStore.mu.RUnlock()
+	}
+
+	if isPresetSource {
+		if globalCustomStore != nil {
+			globalCustomStore.mu.Lock()
+			src, ok := globalCustomStore.Sources[id]
+			if ok {
+				src.URL = ""
+				src.Count = 0
+				src.Enabled = false
+				src.ResidentialCount = 0
+				src.DatacenterCount = 0
+			}
+			for k, n := range globalCustomStore.Nodes {
+				if n.SourceID == id {
+					delete(globalCustomStore.Nodes, k)
+				}
+			}
+			globalCustomStore.mu.Unlock()
+			_ = globalCustomStore.save()
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"ok": "预置源已重置清空"})
 		return
 	}
 	if globalCustomStore != nil {

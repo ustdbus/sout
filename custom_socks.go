@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/ecdh"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
@@ -247,6 +249,38 @@ func initCustomStore(dir string) *CustomStore {
 		Nodes:   make(map[string]*CustomNode),
 	}
 	cs.load()
+
+	// 确保主流订阅源（WARP, Windscribe, Opera, Proton）默认存在，用户填入链接即可使用
+	presets := []struct {
+		ID   string
+		Name string
+	}{
+		{ID: "preset-warp", Name: "WARP"},
+		{ID: "preset-windscribe", Name: "Windscribe"},
+		{ID: "preset-opera", Name: "Opera"},
+		{ID: "preset-proton", Name: "Proton"},
+	}
+	for _, p := range presets {
+		has := false
+		for _, s := range cs.Sources {
+			if strings.EqualFold(s.Name, p.Name) || s.ID == p.ID || strings.Contains(strings.ToLower(s.Name), strings.ToLower(p.Name)) {
+				has = true
+				break
+			}
+		}
+		if !has {
+			cs.Sources[p.ID] = &CustomSource{
+				ID:              p.ID,
+				Name:            p.Name,
+				URL:             "",
+				Count:           0,
+				Enabled:         false,
+				AutoUpdate:      true,
+				UpdateIntervalM: 60,
+			}
+		}
+	}
+
 	globalCustomStore = cs
 	return cs
 }
@@ -1308,5 +1342,136 @@ func FetchSourceNodes(sourceURL string, timeout time.Duration) ([]CustomNode, er
 	}
 
 	return ParseSubscriptionContent(string(raw))
+}
+
+// RegisterWARPAccount 原生调用 Cloudflare 官方 API 为本机申请免费 WARP (WireGuard) 账户并生成出口节点
+func RegisterWARPAccount() (*CustomNode, error) {
+	priv, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("生成 WireGuard 客户端私钥失败: %w", err)
+	}
+	privBytes := priv.Bytes()
+	pubBytes := priv.PublicKey().Bytes()
+	privB64 := base64.StdEncoding.EncodeToString(privBytes)
+	pubB64 := base64.StdEncoding.EncodeToString(pubBytes)
+
+	nowISO := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	payload := map[string]any{
+		"key":        pubB64,
+		"install_id": "",
+		"fcm_token":  "",
+		"tos":        nowISO,
+		"model":      "PC",
+		"type":       "Android",
+		"locale":     "en_US",
+	}
+	bodyBlob, _ := json.Marshal(payload)
+
+	req, err := http.NewRequest(http.MethodPost, "https://api.cloudflareclient.com/v0a2158/reg", strings.NewReader(string(bodyBlob)))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "okhttp/3.12.1")
+	req.Header.Set("Content-Type", "application/json; charset=UTF-8")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("请求 Cloudflare WARP 注册接口失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		rawErr, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("Cloudflare 注册响应异常 (HTTP %d): %s", resp.StatusCode, string(rawErr))
+	}
+
+	var res map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, fmt.Errorf("解析 Cloudflare 注册响应失败: %w", err)
+	}
+
+	rawCfg, ok := res["result"].(map[string]any)
+	if !ok {
+		rawCfg = res
+	}
+
+	peerPub := "bmXOC+F1FxEMF9dyiK2H5/1SUtzHZsVoW++jnWgmtEs="
+	configMap, _ := rawCfg["config"].(map[string]any)
+	if configMap != nil {
+		if peers, ok := configMap["peers"].([]any); ok && len(peers) > 0 {
+			if p0, ok := peers[0].(map[string]any); ok {
+				if pk, ok := p0["public_key"].(string); ok && pk != "" {
+					peerPub = pk
+				}
+			}
+		}
+	}
+
+	v4 := "172.16.0.2"
+	v6 := ""
+	if configMap != nil {
+		if iface, ok := configMap["interface"].(map[string]any); ok {
+			if addrs, ok := iface["addresses"].(map[string]any); ok {
+				if a4, ok := addrs["v4"].(string); ok && a4 != "" {
+					v4 = a4
+				}
+				if a6, ok := addrs["v6"].(string); ok && a6 != "" {
+					v6 = a6
+				}
+			}
+		}
+	}
+
+	var addresses []string
+	if v4 != "" {
+		if !strings.Contains(v4, "/") {
+			addresses = append(addresses, v4+"/32")
+		} else {
+			addresses = append(addresses, v4)
+		}
+	}
+	if v6 != "" {
+		if !strings.Contains(v6, "/") {
+			addresses = append(addresses, v6+"/128")
+		} else {
+			addresses = append(addresses, v6)
+		}
+	}
+	if len(addresses) == 0 {
+		addresses = []string{"172.16.0.2/32"}
+	}
+
+	server := "engage.cloudflareclient.com"
+	port := 2408
+	tag := "Cloudflare WARP (官方原生)"
+
+	cfgMap := map[string]any{
+		"type":            "wireguard",
+		"tag":             tag,
+		"server":          server,
+		"server_port":     port,
+		"private_key":     privB64,
+		"peer_public_key": peerPub,
+		"local_address":   addresses,
+		"mtu":             1280,
+	}
+	cfgBlob, _ := json.Marshal(cfgMap)
+
+	nodeID := makeCustomNodeID("wireguard", server, port, privB64, tag)
+	return &CustomNode{
+		ID:          nodeID,
+		HostName:    nodeID,
+		Host:        server,
+		Port:        port,
+		Protocol:    "wireguard",
+		Country:     "WARP",
+		CountryCode: "CF",
+		Remark:      tag,
+		IPType:      "datacenter",
+		ISP:         "Cloudflare, Inc.",
+		SourceID:    "preset-warp",
+		Config:      string(cfgBlob),
+	}, nil
 }
 

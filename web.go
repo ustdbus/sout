@@ -228,6 +228,13 @@ option{background:#161b22;color:var(--text);padding:8px}
         <button type="button" class="tab-pill" data-pool="residential">🏠 家宽池</button>
         <button type="button" class="tab-pill" data-pool="datacenter">🏢 机房池</button>
       </div>
+      <div style="display:flex;gap:6px;margin-bottom:12px;overflow-x:auto;padding-bottom:2px" id="sourceTabs">
+        <button type="button" class="tab-pill active" data-src="vpngate">VPN Gate</button>
+        <button type="button" class="tab-pill" data-src="warp">WARP</button>
+        <button type="button" class="tab-pill" data-src="windscribe">Windscribe</button>
+        <button type="button" class="tab-pill" data-src="opera">Opera</button>
+        <button type="button" class="tab-pill" data-src="proton">Proton</button>
+      </div>
       <label class="f">
         <span>选择目标国家/地区</span>
         <input type="search" id="rgFilter" placeholder="搜索地区，如 JP、美国、日本、韩国...">
@@ -1197,6 +1204,7 @@ $('#stepIncBtn').onclick = () => {
 };
 
 let currentPoolType = 'all';
+let currentSourceCategory = 'vpngate';
 
 $('#poolTabs').onclick = async e => {
   const btn = e.target.closest('[data-pool]');
@@ -1211,6 +1219,17 @@ $('#poolTabs').onclick = async e => {
   }
 };
 
+$('#sourceTabs').onclick = e => {
+  const btn = e.target.closest('[data-src]');
+  if(btn){
+    document.querySelectorAll('#sourceTabs .tab-pill').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentSourceCategory = btn.dataset.src;
+    selectedRegion = '';
+    renderRegionList();
+  }
+};
+
 $('#openNewExitModalBtn').onclick = async () => {
   exitCount = 1;
   $('#exitCountInput').value = exitCount;
@@ -1221,37 +1240,78 @@ $('#openNewExitModalBtn').onclick = async () => {
   openModal('newExitModal');
 };
 
+async function createWARPDirectly(){
+  const btn = $('#oneClickWarpBtn');
+  if(btn){ btn.disabled = true; btn.textContent = '正在向 Cloudflare 申请账号…'; }
+  try{
+    toast('正在调用 Cloudflare 官方 API 为本机申请免费 WARP 账号…');
+    const res = await api('/api/custom/warp/generate', {method:'POST'});
+    toast(res.message || 'WARP 账号创建成功！');
+    regionList = await api('/api/regions?type=' + encodeURIComponent(currentPoolType)) || [];
+    renderRegionList();
+  }catch(err){
+    toast('创建失败: ' + err.message, true);
+    if(btn){ btn.disabled = false; btn.textContent = '⚡ 立即一键申请并创建 WARP 账号'; }
+  }
+}
+
 function renderRegionList(){
   const kw = ($('#rgFilter').value || '').trim().toLowerCase();
-  const filtered = regionList.filter(r => !kw || r.code.toLowerCase().includes(kw) || r.name.toLowerCase().includes(kw));
+  const catRegions = regionList.filter(r => (r.category || 'vpngate') === currentSourceCategory);
+
+  // 1. 若为 WARP 且未创建账号，直接显示本机一键创建引导
+  if(currentSourceCategory === 'warp' && (!catRegions || !catRegions.length)){
+    $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:22px 14px;text-align:center;background:#12151a;border:1px dashed var(--line);border-radius:6px">'
+      + '<div style="font-weight:600;font-size:14px;color:var(--text);margin-bottom:6px">⚡ 本机尚未创建 Cloudflare WARP 出口账号</div>'
+      + '<div style="font-size:12px;color:var(--dim);margin-bottom:14px;line-height:1.5">WARP 采用 Anycast 就近路由原则，无需添加订阅链接。点击下方按钮直接从 Cloudflare 官方免费注册 WireGuard 凭据并生成出口节点。</div>'
+      + '<button class="primary" id="oneClickWarpBtn" style="padding:8px 18px">' + ICON.plus + ' 立即一键申请并创建 WARP 账号</button>'
+      + '</div>';
+    const b = $('#oneClickWarpBtn');
+    if(b) b.onclick = createWARPDirectly;
+    return;
+  }
+
+  // 2. 若当前分类下暂无节点，显示引导卡片
+  if(!catRegions || !catRegions.length){
+    const srcNames = {windscribe:'Windscribe', opera:'Opera', proton:'Proton', vpngate:'VPN Gate'};
+    const name = srcNames[currentSourceCategory] || '该源';
+    $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:22px 14px;text-align:center;background:#12151a;border:1px dashed var(--line);border-radius:6px">'
+      + '<div style="font-weight:600;font-size:13px;color:var(--text);margin-bottom:6px">当前「' + esc(name) + '」暂无可用节点</div>'
+      + '<div style="font-size:12px;color:var(--dim);margin-bottom:14px">请在主界面右上角「订阅源」中为 ' + esc(name) + ' 填入订阅链接并启用。</div>'
+      + '<button class="chip-btn" id="goCustomSourceBtn" style="padding:6px 14px;background:#238636;color:#fff">前往「订阅源」配置</button>'
+      + '</div>';
+    const g = $('#goCustomSourceBtn');
+    if(g) g.onclick = () => { closeModal('newExitModal'); $('#openCustomSourceModalBtn').click(); };
+    return;
+  }
+
+  const filtered = catRegions.filter(r => !kw || r.code.toLowerCase().includes(kw) || r.name.toLowerCase().includes(kw));
+  if(!filtered.length){
+    $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:16px;text-align:center;color:var(--dim);font-size:12px">未找到匹配的地区或城市</div>';
+    return;
+  }
+
+  // 默认选中当前分类的第一个卡片
+  if(!selectedRegion || !catRegions.some(r => r.code === selectedRegion)){
+    selectedRegion = filtered[0].code;
+  }
+
   $('#rgList').innerHTML = filtered.map(r => {
-    let title = '';
-    if(r.code === 'ALL'){
-      title = '🌐 ' + esc(r.name);
-    } else if(r.code.startsWith('SRC:')){
-      title = '📦 ' + esc(r.name);
-    } else {
-      title = esc(r.code) + ' ' + esc(r.name);
-    }
+    let speedStr = r.best_speed_mbps > 0 ? (r.best_speed_mbps.toFixed(0) + ' Mbps') : '可用';
     return '<button class="rg' + (selectedRegion === r.code ? ' sel' : '') + '" data-rgcode="' + esc(r.code) + '" title="' + esc(r.name) + '">'
-      + '<b class="rg-title">' + title + '</b>'
-      + '<em>' + r.available + ' 个可用 · ' + r.best_speed_mbps.toFixed(0) + ' Mbps</em>'
+      + '<b class="rg-title">' + esc(r.name) + '</b>'
+      + '<em>' + r.available + ' 个可用 · ' + esc(speedStr) + '</em>'
       + '</button>';
   }).join('');
 }
 $('#rgFilter').oninput = renderRegionList;
 
 $('#startProvisionBtn').onclick = async e => {
-  if(!selectedRegion){ toast('请选择目标地区', true); return; }
+  if(!selectedRegion){ toast('请选择目标地区或分类', true); return; }
   const count = Math.max(1, Math.min(20, parseInt($('#exitCountInput').value, 10) || 1));
   e.target.disabled = true;
-  let label = selectedRegion;
-  if(selectedRegion === 'ALL'){
-    label = '全球最高速';
-  } else if(selectedRegion.startsWith('SRC:')){
-    const match = regionList.find(r => r.code === selectedRegion);
-    label = match ? match.name : '自定义源';
-  }
+  const match = regionList.find(r => r.code === selectedRegion);
+  let label = match ? match.name : selectedRegion;
   try{
     await api('/api/provision?count=' + count + '&region=' + encodeURIComponent(selectedRegion) + '&type=' + encodeURIComponent(currentPoolType), {method:'POST'});
     toast('正在拉取 ' + count + ' 条「' + label + '」出口隧道...');
@@ -1697,54 +1757,68 @@ async function loadSourcesList(){
     }
     box.innerHTML = list.map(s => {
       const typeBadge = s.is_builtin
-        ? '<span style="background:#238636;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600">系统内置</span>'
-        : (s.type === 'batch'
-          ? '<span style="background:#8957e5;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600">本地批量</span>'
-          : '<span style="background:#1f6feb;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600">在线订阅</span>');
+        ? '<span style="background:#238636;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">系统内置</span>'
+        : (s.is_preset
+          ? '<span style="background:#0969da;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">预置主流源</span>'
+          : (s.type === 'batch'
+            ? '<span style="background:#8957e5;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">本地批量</span>'
+            : '<span style="background:#1f6feb;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">在线订阅</span>'));
       
+      const isConfigured = !!s.url || s.count > 0;
       const isEn = s.enabled !== false;
-      const statusBadge = isEn
-        ? '<span style="background:rgba(63,185,80,.15);color:#3fb950;border:1px solid rgba(63,185,80,.3);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600">已启用</span>'
-        : '<span style="background:rgba(248,81,73,.15);color:#f85149;border:1px solid rgba(248,81,73,.3);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600">已禁用</span>';
+      let statusBadge = '';
+      if(!isConfigured && !s.is_builtin){
+        statusBadge = '<span style="background:rgba(210,153,34,.15);color:#d29922;border:1px solid rgba(210,153,34,.3);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">待配置链接</span>';
+      } else {
+        statusBadge = isEn
+          ? '<span style="background:rgba(63,185,80,.15);color:#3fb950;border:1px solid rgba(63,185,80,.3);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">已启用</span>'
+          : '<span style="background:rgba(248,81,73,.15);color:#f85149;border:1px solid rgba(248,81,73,.3);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">已禁用</span>';
+      }
 
       const toggleBtn = isEn
         ? '<button class="chip-btn danger" data-toggle-src="' + esc(s.id) + '" title="点击禁用此源（节点将从家宽/机房池移除）">禁用</button>'
         : '<button class="chip-btn" style="background:#238636;color:#fff" data-toggle-src="' + esc(s.id) + '" title="点击启用此源（节点将加入家宽/机房池）">启用</button>';
 
-      const autoSelect = s.is_builtin ? '' : (
-        '<div style="display:inline-flex;align-items:center;gap:4px;margin-right:2px">'
-        + '<span style="font-size:11px;color:var(--dim)">自动更新:</span>'
-        + '<select class="source-auto-select" data-src-id="' + esc(s.id) + '" style="padding:2px 6px;font-size:11px;background:#0d1117;border:1px solid var(--line);border-radius:4px;color:var(--text);cursor:pointer">'
-        +   '<option value="0"' + (!s.auto_update ? ' selected' : '') + '>关闭</option>'
-        +   '<option value="30"' + (s.auto_update && s.update_interval_m === 30 ? ' selected' : '') + '>每 30 分钟</option>'
-        +   '<option value="60"' + (s.auto_update && (s.update_interval_m === 60 || !s.update_interval_m) ? ' selected' : '') + '>每 1 小时 (默认)</option>'
-        +   '<option value="120"' + (s.auto_update && s.update_interval_m === 120 ? ' selected' : '') + '>每 2 小时</option>'
-        +   '<option value="360"' + (s.auto_update && s.update_interval_m === 360 ? ' selected' : '') + '>每 6 小时</option>'
-        +   '<option value="720"' + (s.auto_update && s.update_interval_m === 720 ? ' selected' : '') + '>每 12 小时</option>'
-        +   '<option value="1440"' + (s.auto_update && s.update_interval_m === 1440 ? ' selected' : '') + '>每 24 小时</option>'
-        + '</select>'
-        + '</div>'
-      );
+      const isWarp = s.type === 'warp' || s.id === 'preset-warp';
 
-      const actBtns = s.is_builtin
-        ? ('<button class="chip-btn" data-refresh-src="' + esc(s.id) + '" title="立即刷新官方节点数据">' + ICON.redo + ' 刷新节点池</button>')
-        : (toggleBtn
-           + autoSelect
-           + '<button class="icon" data-refresh-src="' + esc(s.id) + '" title="立即手动拉取更新源节点">' + ICON.redo + '</button>'
-           + '<button class="icon danger" data-del-src="' + esc(s.id) + '" title="删除此源">' + ICON.trash + '</button>');
+      let actBtns = '';
+      if(s.is_builtin){
+        actBtns = '<button class="chip-btn" data-refresh-src="' + esc(s.id) + '" title="立即刷新官方节点数据">' + ICON.redo + ' 刷新节点池</button>';
+      } else if(isWarp){
+        actBtns = '<button class="chip-btn" style="background:#0969da;color:#fff;border-color:#0969da" data-gen-warp="1" title="调用 Cloudflare 官方 API 为本机直接免费申请 WireGuard 账号并生成节点">⚡ 申请/重建 WARP</button>'
+          + (s.count > 0 ? toggleBtn : '')
+          + (s.count > 0 ? ('<button class="icon danger" data-del-src="' + esc(s.id) + '" title="清空 WARP 账号与节点">' + ICON.trash + '</button>') : '');
+      } else {
+        const editBtn = '<button class="chip-btn" data-edit-url="' + esc(s.id) + '" data-name="' + esc(s.name) + '" data-url="' + esc(s.url || '') + '" title="填入或修改此源的订阅链接">' + (isConfigured ? '修改链接' : '配置链接') + '</button>';
+        const refreshBtn = isConfigured ? ('<button class="icon" data-refresh-src="' + esc(s.id) + '" title="立即拉取更新源节点">' + ICON.redo + '</button>') : '';
+        const delBtn = s.is_preset
+          ? (isConfigured ? ('<button class="icon danger" data-del-src="' + esc(s.id) + '" title="清空此预置源节点与链接">' + ICON.trash + '</button>') : '')
+          : ('<button class="icon danger" data-del-src="' + esc(s.id) + '" title="删除此源">' + ICON.trash + '</button>');
+        actBtns = editBtn + (isConfigured ? toggleBtn : '') + refreshBtn + delBtn;
+      }
 
       const timeStr = s.updated_at ? (' · 上次更新: ' + new Date(s.updated_at).toLocaleTimeString()) : '';
-      const nodeCounts = s.is_builtin
-        ? (s.count + ' 个节点 (全部为 🏠 家宽)' + timeStr)
-        : (s.count + ' 个节点 (🏠 家宽: ' + (s.residential_count || 0) + ' · 🏢 机房: ' + (s.datacenter_count || 0) + ')' + timeStr);
+      let nodeCounts = '';
+      if(s.is_builtin){
+        nodeCounts = s.count + ' 个节点 (全部为 🏠 家宽)' + timeStr;
+      } else if(!isConfigured){
+        nodeCounts = isWarp
+          ? '本机尚未创建 WARP 账号，点击右侧「申请 WARP」即可一键生成原生出口'
+          : '尚未配置订阅链接，请点击右侧「配置链接」填入';
+      } else {
+        nodeCounts = s.count + ' 个节点 (🏠 家宽: ' + (s.residential_count || 0) + ' · 🏢 机房: ' + (s.datacenter_count || 0) + ')' + timeStr;
+      }
 
-      return '<div style="background:#12151a;border:1px solid var(--line);border-radius:4px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:12px">'
+      const displayUrl = s.url ? s.url : (isWarp ? '本机原生 Cloudflare 账号' : '待填入订阅链接 (点击配置链接)');
+
+      return '<div style="background:#12151a;border:1px solid var(--line);border-radius:6px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px">'
         + '<div style="min-width:0;flex:1">'
-        +   '<div style="font-weight:600;font-size:13px;display:flex;align-items:center;gap:6px">' 
-        +     esc(s.name) + ' ' + typeBadge + ' ' + statusBadge
+        +   '<div style="font-weight:600;font-size:13px;display:flex;align-items:center;gap:6px;white-space:nowrap;overflow:hidden">' 
+        +     '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px" title="' + esc(s.name) + '">' + esc(s.name) + '</span>'
+        +     typeBadge + ' ' + statusBadge
         +   '</div>'
-        +   '<div style="font-size:11px;color:var(--dim);margin-top:2px">' + esc(nodeCounts) + '</div>'
-        +   '<div style="font-size:11px;color:var(--dim);margin-top:2px;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(s.url) + '">' + esc(s.url) + '</div>'
+        +   '<div style="font-size:11px;color:var(--dim);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(nodeCounts) + '</div>'
+        +   '<div style="font-size:11px;color:var(--dim);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(displayUrl) + '">' + esc(displayUrl) + '</div>'
         + '</div>'
         + '<div style="display:flex;gap:6px;align-items:center;flex-shrink:0">'
         +   actBtns
@@ -1774,6 +1848,43 @@ $('#sourcesContainer').onchange = async e => {
 };
 
 $('#sourcesContainer').onclick = async e => {
+  const genWarp = e.target.closest('[data-gen-warp]');
+  if(genWarp){
+    genWarp.disabled = true;
+    genWarp.textContent = '申请中…';
+    try{
+      toast('正在向 Cloudflare 官方免费申请原生 WARP WireGuard 账号…');
+      const res = await api('/api/custom/warp/generate', {method:'POST'});
+      toast(res.message || 'WARP 账号创建成功！');
+      loadSourcesList();
+      poll();
+    }catch(err){ toast('申请失败: ' + err.message, true); }
+    genWarp.disabled = false;
+    genWarp.textContent = '⚡ 申请/重建 WARP';
+    return;
+  }
+
+  const editUrl = e.target.closest('[data-edit-url]');
+  if(editUrl){
+    const id = editUrl.dataset.editUrl;
+    const name = editUrl.dataset.name;
+    const oldUrl = editUrl.dataset.url || '';
+    const newUrl = prompt('请输入「' + name + '」的订阅/节点链接 (留空则清空该源):', oldUrl);
+    if(newUrl === null) return;
+    try{
+      toast('正在更新并解析拉取节点…');
+      await api('/api/custom/source/settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({id: id, url: newUrl.trim()})
+      });
+      toast('「' + name + '」订阅更新成功！');
+      loadSourcesList();
+      poll();
+    }catch(err){ toast('配置失败: ' + err.message, true); }
+    return;
+  }
+
   const tog = e.target.closest('[data-toggle-src]');
   if(tog){
     const id = tog.dataset.toggleSrc;
@@ -1800,11 +1911,11 @@ $('#sourcesContainer').onclick = async e => {
 
   const del = e.target.closest('[data-del-src]');
   if(del){
-    if(!confirm('确定删除此源？')) return;
+    if(!confirm('确定重置或删除此源？')) return;
     const id = del.dataset.delSrc;
     try{
       await api('/api/custom/source/delete?id=' + encodeURIComponent(id), {method:'POST'});
-      toast('已删除该源');
+      toast('已操作完成');
       loadSourcesList();
     }catch(err){ toast(err.message, true); }
     return;
