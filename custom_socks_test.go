@@ -596,6 +596,69 @@ func TestWireGuardTunnel_SwitchPortAndCred(t *testing.T) {
 	}
 }
 
+func TestParseSubscriptionContent_SingBoxOutbounds(t *testing.T) {
+	// 1. 测试 sing-box socks 出站 JSON
+	s5JSON := `{
+		"type": "socks",
+		"tag": "my-residential-s5",
+		"server": "198.51.100.22",
+		"server_port": 10800,
+		"version": "5",
+		"username": "user88",
+		"password": "pwd88"
+	}`
+	nodes, err := ParseSubscriptionContent(s5JSON)
+	if err != nil {
+		t.Fatalf("ParseSubscriptionContent(s5JSON) failed: %v", err)
+	}
+	if len(nodes) != 1 || nodes[0].Protocol != "socks5" || nodes[0].Port != 10800 || nodes[0].User != "user88" {
+		t.Fatalf("unexpected nodes: %+v", nodes)
+	}
 
+	// 2. 测试 sing-box https (http with TLS) 出站 JSON
+	httpsJSON := `{
+		"type": "http",
+		"tag": "my-secure-http",
+		"server": "us-central.example.com",
+		"server_port": 443,
+		"tls": {"enabled": true},
+		"username": "u",
+		"password": "p"
+	}`
+	nodes2, err := ParseSubscriptionContent(httpsJSON)
+	if err != nil {
+		t.Fatalf("ParseSubscriptionContent(httpsJSON) failed: %v", err)
+	}
+	if len(nodes2) != 1 || nodes2[0].Protocol != "https" || nodes2[0].Port != 443 {
+		t.Fatalf("unexpected nodes2: %+v", nodes2)
+	}
 
-
+	// 3. 测试完整的 sing-box 配置对象 (含 outbounds 数组)
+	configJSON := `{
+		"outbounds": [
+			{
+				"type": "wireguard",
+				"tag": "warp-node",
+				"server": "engage.cloudflareclient.com",
+				"server_port": 2408,
+				"private_key": "privkey=="
+			},
+			{
+				"type": "socks",
+				"tag": "socks-node",
+				"server": "1.2.3.4",
+				"server_port": 1080
+			}
+		]
+	}`
+	nodes3, err := ParseSubscriptionContent(configJSON)
+	if err != nil {
+		t.Fatalf("ParseSubscriptionContent(configJSON) failed: %v", err)
+	}
+	if len(nodes3) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(nodes3))
+	}
+	if nodes3[0].Protocol != "wireguard" || nodes3[1].Protocol != "socks5" {
+		t.Fatalf("expected wireguard and socks5, got %s and %s", nodes3[0].Protocol, nodes3[1].Protocol)
+	}
+}

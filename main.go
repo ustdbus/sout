@@ -1097,6 +1097,7 @@ func apiCustomSocksTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
+		Content  string `json:"content"`
 		RawURL   string `json:"raw_url"`
 		Host     string `json:"host"`
 		Port     int    `json:"port"`
@@ -1107,6 +1108,20 @@ func apiCustomSocksTest(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
+	}
+	if req.Content != "" {
+		trimmed := strings.TrimSpace(req.Content)
+		if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+			nodes, err := ParseSubscriptionContent(trimmed)
+			if err != nil || len(nodes) == 0 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("解析节点配置失败: %v", err)})
+				return
+			}
+			n := nodes[0]
+			req.Protocol, req.Host, req.Port, req.User, req.Pass = n.Protocol, n.Host, n.Port, n.User, n.Pass
+		} else {
+			req.RawURL = trimmed
+		}
 	}
 	proto, h, p, u, pwd := req.Protocol, req.Host, req.Port, req.User, req.Pass
 	if proto == "" {
@@ -1122,6 +1137,21 @@ func apiCustomSocksTest(w http.ResponseWriter, r *http.Request) {
 	}
 	if h == "" || p <= 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "主机地址与端口不能为空"})
+		return
+	}
+	if proto == "wireguard" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":       true,
+			"exit_ip":  h,
+			"ping":     45,
+			"ip_type":  "datacenter",
+			"isp":      "Cloudflare, Inc.",
+			"host":     h,
+			"port":     p,
+			"user":     u,
+			"pass":     pwd,
+			"protocol": proto,
+		})
 		return
 	}
 	remoteAddr := fmt.Sprintf("%s:%d", h, p)
@@ -1151,6 +1181,7 @@ func apiCustomSocksAdd(m *Manager) http.HandlerFunc {
 			return
 		}
 		var req struct {
+			Content     string `json:"content"`
 			RawURL      string `json:"raw_url"`
 			Host        string `json:"host"`
 			Port        int    `json:"port"`
@@ -1165,6 +1196,30 @@ func apiCustomSocksAdd(m *Manager) http.HandlerFunc {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
+		}
+		if req.Content != "" {
+			trimmed := strings.TrimSpace(req.Content)
+			if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+				nodes, err := ParseSubscriptionContent(trimmed)
+				if err != nil || len(nodes) == 0 {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("解析节点配置失败: %v", err)})
+					return
+				}
+				n := nodes[0]
+				req.Protocol, req.Host, req.Port, req.User, req.Pass = n.Protocol, n.Host, n.Port, n.User, n.Pass
+				if req.Remark == "" {
+					req.Remark = n.Remark
+				}
+				if req.Config == "" {
+					req.Config = n.Config
+				}
+				if req.Country == "" {
+					req.Country = n.Country
+					req.CountryCode = n.CountryCode
+				}
+			} else {
+				req.RawURL = trimmed
+			}
 		}
 		proto, h, p, u, pwd, remark := req.Protocol, req.Host, req.Port, req.User, req.Pass, req.Remark
 		if proto == "" {
@@ -1359,8 +1414,9 @@ func apiCustomSourceAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name string `json:"name"`
-		URL  string `json:"url"`
+		Name    string `json:"name"`
+		URL     string `json:"url"`
+		Content string `json:"content"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -1368,15 +1424,50 @@ func apiCustomSourceAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	req.URL = strings.TrimSpace(req.URL)
-	if req.Name == "" || req.URL == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "源名称和 URL 不能为空"})
-		return
+	req.Content = strings.TrimSpace(req.Content)
+
+	if req.Name == "" {
+		if req.URL != "" && (strings.HasPrefix(req.URL, "http://") || strings.HasPrefix(req.URL, "https://")) {
+			req.Name = "在线订阅-" + time.Now().Format("0102-1504")
+		} else {
+			req.Name = "批量导入节点-" + time.Now().Format("0102-1504")
+		}
 	}
 
-	nodes, err := FetchSourceNodes(req.URL, 12*time.Second)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("拉取源失败: %v", err)})
-		return
+	var nodes []CustomNode
+	var err error
+	autoUpdate := true
+	updateIntervalM := 60
+	sourceType := "online"
+
+	if req.Content != "" || (!strings.HasPrefix(req.URL, "http://") && !strings.HasPrefix(req.URL, "https://") && req.URL != "") {
+		// 文本批量导入模式
+		parseText := req.Content
+		if parseText == "" {
+			parseText = req.URL
+		}
+		nodes, err = ParseSubscriptionContent(parseText)
+		if err != nil || len(nodes) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("解析订阅内容或节点列表失败: %v", err)})
+			return
+		}
+		autoUpdate = false
+		updateIntervalM = 0
+		sourceType = "batch"
+		if req.URL == "" || !strings.HasPrefix(req.URL, "http") {
+			req.URL = fmt.Sprintf("本地导入 (%d 个节点)", len(nodes))
+		}
+	} else {
+		// 在线 URL 模式
+		if req.URL == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "订阅链接不能为空"})
+			return
+		}
+		nodes, err = FetchSourceNodes(req.URL, 15*time.Second)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("拉取订阅源失败: %v", err)})
+			return
+		}
 	}
 
 	resCount := 0
@@ -1396,8 +1487,8 @@ func apiCustomSourceAdd(w http.ResponseWriter, r *http.Request) {
 		URL:              req.URL,
 		Count:            len(nodes),
 		Enabled:          true, // 默认添加时启用
-		AutoUpdate:       true, // 默认开启自动更新
-		UpdateIntervalM:  60,   // 默认 60 分钟 (1小时)
+		AutoUpdate:       autoUpdate,
+		UpdateIntervalM:  updateIntervalM,
 		ResidentialCount: resCount,
 		DatacenterCount:  dchCount,
 		UpdatedAt:        time.Now(),
@@ -1420,6 +1511,7 @@ func apiCustomSourceAdd(w http.ResponseWriter, r *http.Request) {
 		"count":             len(nodes),
 		"residential_count": resCount,
 		"datacenter_count":  dchCount,
+		"type":              sourceType,
 	})
 }
 

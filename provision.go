@@ -16,7 +16,7 @@ type ProvisionRequest struct {
 	PoolType   string // "all" | "residential" | "datacenter"
 }
 
-// GetAllCandidateNodes 获取指定池下的全部候选可用节点 (VPN Gate + 已启用的 SOCKS5 订阅源)
+// GetAllCandidateNodes 获取指定池下的全部候选可用节点 (VPN Gate + 已启用的自定义订阅源)
 func (m *Manager) GetAllCandidateNodes(poolType string) []Node {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -35,7 +35,7 @@ func (m *Manager) getAllCandidateNodesLocked(poolType string) []Node {
 		}
 	}
 
-	// 2. 自定义 SOCKS5 订阅源中已启用的节点
+	// 2. 自定义订阅源中已启用的节点
 	if globalCustomStore != nil {
 		globalCustomStore.mu.RLock()
 		for _, node := range globalCustomStore.Nodes {

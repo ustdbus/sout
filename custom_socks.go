@@ -1101,7 +1101,7 @@ func ParseSubscriptionContent(content string) ([]CustomNode, error) {
 		}
 	}
 
-	// 2. 尝试解析为 sing-box WireGuard outbound JSON (单对象或数组)
+	// 2. 尝试解析为 sing-box outbound JSON (单对象、数组或含 outbounds 的对象)
 	if strings.HasPrefix(content, "{") || strings.HasPrefix(content, "[") {
 		var jsonItems []map[string]any
 		if strings.HasPrefix(content, "[") {
@@ -1109,27 +1109,40 @@ func ParseSubscriptionContent(content string) ([]CustomNode, error) {
 		} else {
 			var single map[string]any
 			if err := json.Unmarshal([]byte(content), &single); err == nil {
-				jsonItems = []map[string]any{single}
+				if obRaw, ok := single["outbounds"].([]any); ok && len(obRaw) > 0 {
+					for _, item := range obRaw {
+						if m, ok := item.(map[string]any); ok {
+							jsonItems = append(jsonItems, m)
+						}
+					}
+				} else {
+					jsonItems = []map[string]any{single}
+				}
 			}
 		}
 
 		var jsonNodes []CustomNode
 		for i, item := range jsonItems {
 			pType, _ := item["type"].(string)
-			if strings.ToLower(pType) == "wireguard" {
-				srv, _ := item["server"].(string)
+			pTypeLower := strings.ToLower(pType)
+			srv, _ := item["server"].(string)
+			port := 0
+			if p, ok := item["server_port"].(float64); ok && p > 0 {
+				port = int(p)
+			}
+			tag, _ := item["tag"].(string)
+			blob, _ := json.Marshal(item)
+
+			if pTypeLower == "wireguard" {
 				if srv == "" {
 					srv = "engage.cloudflareclient.com"
 				}
-				port := 2408
-				if p, ok := item["server_port"].(float64); ok && p > 0 {
-					port = int(p)
+				if port == 0 {
+					port = 2408
 				}
-				tag, _ := item["tag"].(string)
 				if tag == "" {
 					tag = fmt.Sprintf("WARP-WireGuard-%d", i+1)
 				}
-				blob, _ := json.Marshal(item)
 				priv, _ := item["private_key"].(string)
 				country, countryCode := inferCountryFromRemark(tag)
 				nodeID := makeCustomNodeID("wireguard", srv, port, priv, tag)
@@ -1146,6 +1159,60 @@ func ParseSubscriptionContent(content string) ([]CustomNode, error) {
 					ISP:         "Cloudflare, Inc.",
 					Config:      string(blob),
 				})
+			} else if pTypeLower == "socks" || pTypeLower == "socks5" {
+				if srv != "" && port > 0 {
+					if tag == "" {
+						tag = fmt.Sprintf("SOCKS5-%s:%d", srv, port)
+					}
+					u, _ := item["username"].(string)
+					pwd, _ := item["password"].(string)
+					country, countryCode := inferCountryFromRemark(tag)
+					nodeID := makeCustomNodeID("socks5", srv, port, u, tag)
+					jsonNodes = append(jsonNodes, CustomNode{
+						ID:          nodeID,
+						HostName:    nodeID,
+						Host:        srv,
+						Port:        port,
+						User:        u,
+						Pass:        pwd,
+						Protocol:    "socks5",
+						Country:     country,
+						CountryCode: countryCode,
+						Remark:      tag,
+						IPType:      "residential",
+						Config:      string(blob),
+					})
+				}
+			} else if pTypeLower == "http" {
+				if srv != "" && port > 0 {
+					proto := "http"
+					if tlsMap, ok := item["tls"].(map[string]any); ok {
+						if enabled, ok := tlsMap["enabled"].(bool); ok && enabled {
+							proto = "https"
+						}
+					}
+					if tag == "" {
+						tag = fmt.Sprintf("%s-%s:%d", strings.ToUpper(proto), srv, port)
+					}
+					u, _ := item["username"].(string)
+					pwd, _ := item["password"].(string)
+					country, countryCode := inferCountryFromRemark(tag)
+					nodeID := makeCustomNodeID(proto, srv, port, u, tag)
+					jsonNodes = append(jsonNodes, CustomNode{
+						ID:          nodeID,
+						HostName:    nodeID,
+						Host:        srv,
+						Port:        port,
+						User:        u,
+						Pass:        pwd,
+						Protocol:    proto,
+						Country:     country,
+						CountryCode: countryCode,
+						Remark:      tag,
+						IPType:      "datacenter",
+						Config:      string(blob),
+					})
+				}
 			}
 		}
 		if len(jsonNodes) > 0 {
