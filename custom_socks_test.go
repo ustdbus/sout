@@ -200,8 +200,18 @@ func TestLiveVpnSubscriptionIntegration(t *testing.T) {
 	}
 	t.Logf("Successfully parsed %d nodes from online Clash subscription", len(nodes))
 
-	// 2. 测试对第一个真实节点进行 ProbeCustomProxy 连通性探测
-	testNode := nodes[0]
+	// 2. 测试拉取并解析在线单行代理列表 (all-proxies.txt)
+	txtNodes, err := FetchSourceNodes("https://raw.githubusercontent.com/ustdbus/vpn-out/sub/all-proxies.txt", 15*time.Second)
+	if err != nil {
+		t.Fatalf("FetchSourceNodes(all-proxies.txt) error: %v", err)
+	}
+	if len(txtNodes) == 0 {
+		t.Fatalf("no nodes returned from all-proxies.txt")
+	}
+	t.Logf("Successfully parsed %d nodes from online all-proxies.txt", len(txtNodes))
+
+	// 3. 测试对真实节点进行 ProbeCustomProxy 连通性探测
+	testNode := txtNodes[0]
 	t.Logf("Testing probe for node: %s (%s://%s:%d)", testNode.Remark, testNode.Protocol, testNode.Host, testNode.Port)
 	exitIP, ping, ipType, isp, err := ProbeCustomProxy(
 		fmt.Sprintf("%s:%d", testNode.Host, testNode.Port),
@@ -211,10 +221,9 @@ func TestLiveVpnSubscriptionIntegration(t *testing.T) {
 		15*time.Second,
 	)
 	if err != nil {
-		t.Logf("Probe warning: %v", err)
-	} else {
-		t.Logf("Probe success! ExitIP: %s, Ping: %dms, IPType: %s, ISP: %s", exitIP, ping, ipType, isp)
+		t.Fatalf("ProbeCustomProxy failed: %v", err)
 	}
+	t.Logf("Probe success! ExitIP: %s, Ping: %dms, IPType: %s, ISP: %s", exitIP, ping, ipType, isp)
 }
 
 
