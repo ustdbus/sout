@@ -118,7 +118,7 @@ main{padding:20px;max-width:1120px;margin:0 auto}
 
 .modal{position:fixed;inset:0;background:rgba(1,4,9,.75);display:none;align-items:center;justify-content:center;z-index:50;padding:20px;backdrop-filter:blur(2px)}
 .modal.open{display:flex}
-.sheet{background:var(--panel);border:1px solid var(--line);border-radius:8px;width:min(580px,100%);max-height:86vh;display:flex;flex-direction:column;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+.sheet{background:var(--panel);border:1px solid var(--line);border-radius:8px;width:min(640px,100%);max-height:86vh;display:flex;flex-direction:column;box-shadow:0 8px 24px rgba(0,0,0,.5)}
 .sheet .head{display:flex;align-items:center;gap:10px;padding:12px 18px;border-bottom:1px solid var(--line);background:var(--card);border-radius:8px 8px 0 0}
 .sheet .head h2{font-size:14px;margin:0;font-weight:700}
 .sheet .body{overflow:auto;padding:18px}
@@ -131,11 +131,11 @@ option{background:#161b22;color:var(--text);padding:8px}
 .card-input-box:focus-within{border-color:var(--accent)!important}
 .listen-opt-item:hover{background:rgba(88,166,255,.15)!important;color:var(--accent)!important}
 .listen-opt-item.selected{background:rgba(88,166,255,.08);color:var(--accent)}
-.regions{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:6px;max-height:240px;overflow:auto;margin-top:8px}
-.rg{border:1px solid var(--line);background:#0d1117;border-radius:6px;padding:7px 9px;cursor:pointer;text-align:left;display:block;width:100%}
+.regions{display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:8px;max-height:250px;overflow:auto;margin-top:8px}
+.rg{border:1px solid var(--line);background:#0d1117;border-radius:6px;padding:8px 10px;cursor:pointer;text-align:left;display:block;width:100%}
 .rg:hover{border-color:var(--accent)}
 .rg.sel{border-color:var(--accent);background:rgba(88,166,255,.12)}
-.rg b{font-weight:600;font-size:12px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rg b{font-weight:600;font-size:11.5px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rg em{display:block;font-style:normal;color:var(--dim);font-size:11px;margin-top:2px}
 
 .stepper{display:flex;align-items:center;width:fit-content;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:#0d1117}

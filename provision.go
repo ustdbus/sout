@@ -261,7 +261,64 @@ func matchNodeSubRegion(n Node, sub string) bool {
 	remLower := strings.ToLower(n.Remark)
 	cLower := strings.ToLower(n.Country)
 	ccLower := strings.ToLower(n.CountryCode)
-	return strings.Contains(remLower, subLower) || strings.Contains(cLower, subLower) || strings.EqualFold(ccLower, subLower)
+	hostLower := strings.ToLower(n.HostName + " " + n.IP)
+
+	// 精确城市别名与映射识别
+	switch subLower {
+	case "洛杉矶", "los angeles":
+		return strings.Contains(remLower, "洛杉矶") || strings.Contains(remLower, "los angeles") ||
+			strings.Contains(hostLower, "us-west-094") || strings.Contains(hostLower, "us-west-095")
+	case "西雅图", "seattle":
+		return strings.Contains(remLower, "西雅图") || strings.Contains(remLower, "seattle") ||
+			strings.Contains(hostLower, "us-west-084")
+	case "纽约", "new york":
+		return strings.Contains(remLower, "纽约") || strings.Contains(remLower, "new york") ||
+			strings.Contains(hostLower, "us-east")
+	case "芝加哥/亚特兰大", "chicago", "atlanta", "美国中部":
+		return strings.Contains(remLower, "美国中部") || strings.Contains(remLower, "central") ||
+			strings.Contains(hostLower, "us-central")
+	case "温哥华", "vancouver":
+		return strings.Contains(remLower, "温哥华") || strings.Contains(remLower, "vancouver") ||
+			strings.Contains(hostLower, "ca-west")
+	case "多伦多", "toronto":
+		return strings.Contains(remLower, "多伦多") || strings.Contains(remLower, "toronto") ||
+			strings.Contains(hostLower, "ca-038") || strings.Contains(hostLower, "ca-058") || strings.Contains(hostLower, "ca-059")
+	case "蒙特利尔", "montreal":
+		return strings.Contains(remLower, "蒙特利尔") || strings.Contains(remLower, "montreal") ||
+			strings.Contains(hostLower, "ca-065") || strings.Contains(hostLower, "ca-067")
+	case "伦敦", "london":
+		return strings.Contains(remLower, "伦敦") || strings.Contains(remLower, "london") ||
+			strings.Contains(remLower, "英国") || strings.Contains(hostLower, "uk-")
+	case "法兰克福", "frankfurt":
+		return strings.Contains(remLower, "法兰克福") || strings.Contains(remLower, "frankfurt") ||
+			strings.Contains(remLower, "德国") || strings.Contains(hostLower, "de-")
+	case "巴黎", "paris":
+		return strings.Contains(remLower, "巴黎") || strings.Contains(remLower, "paris") ||
+			strings.Contains(remLower, "法国") || strings.Contains(hostLower, "fr-")
+	case "阿姆斯特丹", "amsterdam":
+		return strings.Contains(remLower, "阿姆斯特丹") || strings.Contains(remLower, "amsterdam") ||
+			strings.Contains(remLower, "荷兰") || strings.Contains(hostLower, "nl-")
+	case "苏黎世", "zurich":
+		return strings.Contains(remLower, "苏黎世") || strings.Contains(remLower, "zurich") ||
+			strings.Contains(remLower, "瑞士") || strings.Contains(hostLower, "ch-")
+	case "奥斯陆", "oslo":
+		return strings.Contains(remLower, "奥斯陆") || strings.Contains(remLower, "oslo") ||
+			strings.Contains(remLower, "挪威") || strings.Contains(hostLower, "no-")
+	case "布加勒斯特", "bucharest":
+		return strings.Contains(remLower, "布加勒斯特") || strings.Contains(remLower, "bucharest") ||
+			strings.Contains(remLower, "罗马尼亚") || strings.Contains(hostLower, "ro-")
+	case "香港", "hong kong":
+		return strings.Contains(remLower, "香港") || strings.Contains(remLower, "hong kong") ||
+			strings.Contains(hostLower, "hk-")
+	case "美国西部":
+		return strings.Contains(remLower, "美国西部") || strings.Contains(hostLower, "us-west")
+	case "美国东部":
+		return strings.Contains(remLower, "美国东部") || strings.Contains(hostLower, "us-east")
+	case "加拿大":
+		return strings.Contains(remLower, "加拿大") || strings.Contains(hostLower, "ca-")
+	}
+
+	return strings.Contains(remLower, subLower) || strings.Contains(cLower, subLower) || strings.EqualFold(ccLower, subLower) || strings.Contains(hostLower, subLower)
 }
 
 // pickNodes 挑选 count 个未被占用的节点，按速度与质量降序选取
@@ -429,17 +486,24 @@ func (m *Manager) Regions(poolType string) []RegionStat {
 			Filter string
 			Name   string
 		}{
-			{Filter: "美国东部", Name: "🇺🇸 美国东部 (纽约/迈阿密等)"},
-			{Filter: "美国西部", Name: "🇺🇸 美国西部 (洛杉矶/西雅图等)"},
-			{Filter: "加拿大", Name: "🇨🇦 加拿大 (多伦多等)"},
-			{Filter: "英国", Name: "🇬🇧 英国 (伦敦等)"},
-			{Filter: "德国", Name: "🇩🇪 德国 (法兰克福等)"},
-			{Filter: "法国", Name: "🇫🇷 法国 (巴黎等)"},
-			{Filter: "瑞士", Name: "🇨🇭 瑞士 (苏黎世等)"},
-			{Filter: "荷兰", Name: "🇳🇱 荷兰 (阿姆斯特丹等)"},
-			{Filter: "挪威", Name: "🇳🇴 挪威 (奥斯陆等)"},
-			{Filter: "罗马尼亚", Name: "🇷🇴 罗马尼亚 (布加勒斯特等)"},
-			{Filter: "香港", Name: "🇭🇰 香港 (Victoria等)"},
+			{Filter: "洛杉矶", Name: "🇺🇸 洛杉矶 (Los Angeles)"},
+			{Filter: "西雅图", Name: "🇺🇸 西雅图 (Seattle)"},
+			{Filter: "纽约", Name: "🇺🇸 纽约 (New York)"},
+			{Filter: "芝加哥/亚特兰大", Name: "🇺🇸 芝加哥/亚特兰大 (Central)"},
+			{Filter: "温哥华", Name: "🇨🇦 温哥华 (Vancouver)"},
+			{Filter: "多伦多", Name: "🇨🇦 多伦多 (Toronto)"},
+			{Filter: "蒙特利尔", Name: "🇨🇦 蒙特利尔 (Montreal)"},
+			{Filter: "伦敦", Name: "🇬🇧 伦敦 (London)"},
+			{Filter: "法兰克福", Name: "🇩🇪 法兰克福 (Frankfurt)"},
+			{Filter: "巴黎", Name: "🇫🇷 巴黎 (Paris)"},
+			{Filter: "阿姆斯特丹", Name: "🇳🇱 阿姆斯特丹 (Amsterdam)"},
+			{Filter: "苏黎世", Name: "🇨🇭 苏黎世 (Zurich)"},
+			{Filter: "奥斯陆", Name: "🇳🇴 奥斯陆 (Oslo)"},
+			{Filter: "布加勒斯特", Name: "🇷🇴 布加勒斯特 (Bucharest)"},
+			{Filter: "香港", Name: "🇭🇰 香港 (Victoria)"},
+			{Filter: "美国西部", Name: "🇺🇸 全部美国西部"},
+			{Filter: "美国东部", Name: "🇺🇸 全部美国东部"},
+			{Filter: "加拿大", Name: "🇨🇦 全部加拿大"},
 		}
 		for _, sub := range wsSubs {
 			cnt := 0
