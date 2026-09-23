@@ -1483,15 +1483,6 @@ $('#checkUpdateBtn').onclick = async e => {
   e.target.disabled = false;
 };
 
-// ---- 自定义出口（SOCKS5 / HTTP / 批量订阅）相关 ----
-function switchCustomExitTab(tab){
-  if(tab === 'single'){
-    $('#tabSingleNodeBtn').classList.add('active');
-    $('#tabBatchNodeBtn').classList.remove('active');
-    $('#customExitSingleView').style.display = 'block';
-    $('#customExitBatchView').style.display = 'none';
-    $('#customExitSingleFoot').style.display = 'flex';
-    $('#customExitBatchFoot').style.display = 'none';
 // ---- 添加自定义出口（直接粘贴完整 sing-box 支持的协议节点） ----
 function parseNodePreview(raw){
   raw = (raw || '').trim();
@@ -1763,31 +1754,6 @@ async function loadSourcesList(){
   }catch(err){ box.innerHTML = '<div style="color:var(--danger)">加载失败: ' + esc(err.message) + '</div>'; }
 }
 
-$('#openCustomSourceModalBtn').onclick = () => {
-  $('#srcName').value = '';
-  $('#srcURL').value = '';
-  openModal('customSourceModal');
-  loadSourcesList();
-};
-
-$('#addSourceBtn').onclick = async e => {
-  const name = $('#srcName').value.trim();
-  const url = $('#srcURL').value.trim();
-  if(!name || !url){ toast('请填写源名称和 URL', true); return; }
-  e.target.disabled = true;
-  try{
-    const res = await api('/api/custom/source/add', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({name: name, url: url}),
-    });
-    toast('源添加成功（已默认启用并开启 1 小时自动更新），解析 ' + res.count + ' 个节点');
-    $('#srcName').value = '';
-    $('#srcURL').value = '';
-    loadSourcesList();
-  }catch(err){ toast(err.message, true); }
-  e.target.disabled = false;
-};
 
 $('#sourcesContainer').onchange = async e => {
   const sel = e.target.closest('.source-auto-select');
