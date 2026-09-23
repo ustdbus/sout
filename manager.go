@@ -565,6 +565,7 @@ func (m *Manager) AddCustomExit(node CustomNode) (*Tunnel, error) {
 			SourceID:    node.SourceID,
 		},
 	}
+	t.setEngine(m.engine)
 	m.tunnels[slot] = t
 	m.mu.Unlock()
 

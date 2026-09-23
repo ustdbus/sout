@@ -126,7 +126,7 @@ func (t *Tunnel) start(dir string) error {
 	engine := t.engine
 	t.mu.Unlock()
 
-	if t.Kind == "custom" {
+	if t.Kind == "custom" && t.CustomProto != "wireguard" && t.Node.Protocol != "wireguard" {
 		return t.startCustom()
 	}
 
