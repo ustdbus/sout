@@ -293,7 +293,7 @@ func (m *Manager) candidatesFor(t *Tunnel) []Node {
 	if poolType == "" {
 		poolType = "all"
 	}
-	allNodes := m.GetAllCandidateNodes(poolType)
+	allNodes := m.getAllCandidateNodesLocked(poolType)
 	out := []Node{first}
 
 	targetRegion := t.TargetRegion

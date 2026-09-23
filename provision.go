@@ -20,7 +20,10 @@ type ProvisionRequest struct {
 func (m *Manager) GetAllCandidateNodes(poolType string) []Node {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.getAllCandidateNodesLocked(poolType)
+}
 
+func (m *Manager) getAllCandidateNodesLocked(poolType string) []Node {
 	var nodes []Node
 
 	// 1. VPN Gate 官方节点（全部属于家宽池）
