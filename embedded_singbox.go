@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -100,6 +101,15 @@ func newEmbeddedEngine(listenIP string) (*embeddedEngine, error) {
 		Context: ctx,
 		Options: option.Options{
 			Log: &option.LogOptions{Level: "warn", Timestamp: true},
+			DNS: &option.DNSOptions{
+				RawDNSOptions: option.RawDNSOptions{
+					Servers: []option.DNSServerOptions{{
+						Tag:     "local",
+						Address: "local",
+					}},
+					Final: "local",
+				},
+			},
 			Outbounds: []option.Outbound{{
 				Type:    soutDynamicOutboundType,
 				Tag:     soutDynamicOutboundType,
@@ -152,7 +162,8 @@ func (o *soutDynamicOutbound) endpointFor(ctx context.Context, destination M.Soc
 	if route.block {
 		return nil, destination, fmt.Errorf("入站 %s 绑定的出口当前不可用", metadata.Inbound)
 	}
-	if route.direct || destination.IsIPv6() {
+	isWG := strings.HasPrefix(route.endpoint, "soutwireguard")
+	if route.direct || (!isWG && destination.IsIPv6()) {
 		return N.SystemDialer, destination, nil
 	}
 	if destination.IsDomain() {
@@ -160,13 +171,18 @@ func (o *soutDynamicOutbound) endpointFor(ctx context.Context, destination M.Soc
 		if err != nil {
 			return nil, destination, err
 		}
+		var chosen netip.Addr
 		for _, address := range addresses {
 			if address.Is4() {
-				destination = M.SocksaddrFrom(address, destination.Port)
+				chosen = address
 				break
+			} else if isWG && address.Is6() && !chosen.IsValid() {
+				chosen = address
 			}
 		}
-		if destination.IsDomain() {
+		if chosen.IsValid() {
+			destination = M.SocksaddrFrom(chosen, destination.Port)
+		} else {
 			return N.SystemDialer, destination, nil
 		}
 	}
@@ -298,8 +314,17 @@ func wireguardEndpoint(configJSON, tag string) (map[string]any, error) {
 		mtu = int(m)
 	}
 
+	peerAddress := server
+	if net.ParseIP(server) == nil {
+		if addrs, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip4", server); err == nil && len(addrs) > 0 {
+			peerAddress = addrs[0].String()
+		} else if server == "engage.cloudflareclient.com" {
+			peerAddress = "162.159.192.1"
+		}
+	}
+
 	peer := map[string]any{
-		"address":                       server,
+		"address":                       peerAddress,
 		"port":                          serverPort,
 		"public_key":                    peerPub,
 		"allowed_ips":                   []string{"0.0.0.0/0", "::/0"},

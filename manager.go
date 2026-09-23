@@ -432,6 +432,7 @@ func (m *Manager) Swap(slot int) error {
 		t.CustomPort = picks[0].Port
 		t.CustomUser = picks[0].User
 		t.CustomPass = picks[0].Pass
+		t.CustomProto = picks[0].Protocol
 	}
 	m.reconnect(t, oldHost)
 	return nil

@@ -1160,6 +1160,7 @@ func apiCustomSocksAdd(m *Manager) http.HandlerFunc {
 			Remark      string `json:"remark"`
 			Country     string `json:"country"`
 			CountryCode string `json:"country_code"`
+			Config      string `json:"config"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -1198,6 +1199,9 @@ func apiCustomSocksAdd(m *Manager) http.HandlerFunc {
 					cfgJSON = wgNode.Config
 				}
 			}
+			if cfgJSON == "" && req.Config != "" {
+				cfgJSON = req.Config
+			}
 			exitIP = h
 			ping = 50
 			ipType = "datacenter"
@@ -1225,7 +1229,7 @@ func apiCustomSocksAdd(m *Manager) http.HandlerFunc {
 			}
 		}
 
-		nodeID := fmt.Sprintf("custom-%s-%d", h, p)
+		nodeID := makeCustomNodeID(proto, h, p, u, remark)
 		node := CustomNode{
 			ID:          nodeID,
 			HostName:    nodeID,

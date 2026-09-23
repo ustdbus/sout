@@ -514,5 +514,88 @@ func TestWireGuardDialReal(t *testing.T) {
 	t.Logf("WARP WireGuard real exit IP: %s", exitIP)
 }
 
+func TestCustomNodeIDUniqueness(t *testing.T) {
+	link1 := "wireguard://privkey1@engage.cloudflareclient.com:2408?publickey=pub1&address=172.16.0.2/32#WARP-1"
+	link2 := "wireguard://privkey2@engage.cloudflareclient.com:2408?publickey=pub2&address=172.16.0.3/32#WARP-2"
+
+	node1, err1 := parseWireGuardURL(link1)
+	node2, err2 := parseWireGuardURL(link2)
+	if err1 != nil || err2 != nil {
+		t.Fatalf("parse failed: %v, %v", err1, err2)
+	}
+
+	if node1.ID == node2.ID {
+		t.Fatalf("expected distinct IDs for different WireGuard nodes, got identical: %s", node1.ID)
+	}
+	if node1.HostName == node2.HostName {
+		t.Fatalf("expected distinct HostNames for different WireGuard nodes, got identical: %s", node1.HostName)
+	}
+
+	store := &CustomStore{
+		Nodes: make(map[string]*CustomNode),
+	}
+	store.Nodes[node1.ID] = node1
+	store.Nodes[node2.ID] = node2
+
+	if len(store.Nodes) != 2 {
+		t.Fatalf("expected 2 nodes in store, got %d", len(store.Nodes))
+	}
+}
+
+func TestWireGuardTunnel_SwitchPortAndCred(t *testing.T) {
+	engine, err := newEmbeddedEngine("127.0.0.1")
+	if err != nil {
+		t.Fatalf("newEmbeddedEngine failed: %v", err)
+	}
+	defer engine.close()
+
+	link := "wireguard://privkey@127.0.0.1:2408?publickey=bmXOC%2BF1FxEMF9dyiK2H5%2F1SUtzHZsVoW%2B%2BjnWgmtEs%3D&address=172.16.0.2%2F32&mtu=1280#WARP-WG"
+	node, err := parseWireGuardURL(link)
+	if err != nil {
+		t.Fatalf("parseWireGuardURL failed: %v", err)
+	}
+
+	tunnel := &Tunnel{
+		Slot:        77,
+		Port:        27771,
+		Kind:        "custom",
+		CustomProto: "wireguard",
+		Cred:        SocksCred{User: "u1", Pass: "p1"},
+		Node: Node{
+			HostName: "wg-test-slot77",
+			IP:       node.Host,
+			Port:     node.Port,
+			Protocol: "wireguard",
+			Config:   node.Config,
+		},
+	}
+	tunnel.setEngine(engine)
+
+	if err := engine.addTunnel(tunnel); err != nil {
+		t.Fatalf("engine.addTunnel failed: %v", err)
+	}
+	defer engine.removeTunnel(tunnel)
+
+	// 测试更换端口：必须依然通过 embedded sing-box 处理，不能调用 startCustom
+	if err := tunnel.switchPort(27772); err != nil {
+		t.Fatalf("tunnel.switchPort failed: %v", err)
+	}
+	if tunnel.Port != 27772 {
+		t.Fatalf("expected tunnel.Port = 27772, got %d", tunnel.Port)
+	}
+	if !engine.hasTunnel(77) {
+		t.Fatalf("expected engine.hasTunnel(77) = true after switchPort")
+	}
+
+	// 测试更换凭据：必须同步生效
+	if err := tunnel.setCredential(SocksCred{User: "u2", Pass: "p2"}); err != nil {
+		t.Fatalf("tunnel.setCredential failed: %v", err)
+	}
+	if tunnel.credential().User != "u2" {
+		t.Fatalf("expected credential User = u2, got %s", tunnel.credential().User)
+	}
+}
+
+
 
 

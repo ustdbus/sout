@@ -169,6 +169,7 @@ func (m *Manager) restoreState() (int, error) {
 			CustomPass:     p.CustomPass,
 			CustomProto:    proto,
 		}
+		t.setEngine(m.engine)
 		m.mu.Lock()
 		m.tunnels[p.Slot] = t
 		m.mu.Unlock()

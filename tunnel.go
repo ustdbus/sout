@@ -66,9 +66,10 @@ func (t *Tunnel) setCredential(c SocksCred) error {
 	t.Cred = c
 	engine := t.engine
 	kind := t.Kind
+	isWG := t.CustomProto == "wireguard" || t.Node.Protocol == "wireguard"
 	t.mu.Unlock()
 
-	if kind != "custom" && engine != nil {
+	if (kind != "custom" || isWG) && engine != nil {
 		return engine.addTunnel(t)
 	}
 	return nil
@@ -83,9 +84,10 @@ func (t *Tunnel) switchPort(newPort int) error {
 	t.Port = newPort
 	engine := t.engine
 	kind := t.Kind
+	isWG := t.CustomProto == "wireguard" || t.Node.Protocol == "wireguard"
 	t.mu.Unlock()
 
-	if kind == "custom" {
+	if kind == "custom" && !isWG {
 		t.stop()
 		return t.startCustom()
 	}

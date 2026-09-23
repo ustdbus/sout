@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -39,6 +41,16 @@ type CustomNode struct {
 	ISP         string  `json:"isp,omitempty"`
 	SourceID    string  `json:"source_id,omitempty"`
 	Config      string  `json:"config,omitempty"`
+}
+
+func makeCustomNodeID(proto, host string, port int, user, extra string) string {
+	raw := fmt.Sprintf("%s|%s|%d|%s|%s", proto, host, port, user, extra)
+	h := sha256.Sum256([]byte(raw))
+	hashStr := hex.EncodeToString(h[:])[:8]
+	if proto == "wireguard" {
+		return fmt.Sprintf("cs-wg-%s-%d-%s", host, port, hashStr)
+	}
+	return fmt.Sprintf("cs-%s-%d-%s", host, port, hashStr)
 }
 
 // CustomSource 记录一个第三方的 SOCKS5 订阅/API 节点源
@@ -833,7 +845,7 @@ func parseWireGuardURL(raw string) (*CustomNode, error) {
 	blob, _ := json.Marshal(cfgMap)
 
 	country, countryCode := inferCountryFromRemark(remark)
-	nodeID := fmt.Sprintf("cs-wg-%s-%d", host, port)
+	nodeID := makeCustomNodeID("wireguard", host, port, privKey, remark)
 	return &CustomNode{
 		ID:          nodeID,
 		HostName:    nodeID,
@@ -976,7 +988,12 @@ func parseClashYamlNodes(content string) []CustomNode {
 		}
 
 		country, countryCode := inferCountryFromRemark(name)
-		nodeID := fmt.Sprintf("cs-%s-%d", server, port)
+		var nodeID string
+		if proto == "wireguard" {
+			nodeID = makeCustomNodeID("wireguard", server, port, privKey, name)
+		} else {
+			nodeID = makeCustomNodeID(proto, server, port, user, name)
+		}
 		ipType := "residential"
 		if proto == "wireguard" {
 			ipType = "datacenter"
@@ -1112,8 +1129,9 @@ func ParseSubscriptionContent(content string) ([]CustomNode, error) {
 					tag = fmt.Sprintf("WARP-WireGuard-%d", i+1)
 				}
 				blob, _ := json.Marshal(item)
+				priv, _ := item["private_key"].(string)
 				country, countryCode := inferCountryFromRemark(tag)
-				nodeID := fmt.Sprintf("cs-wg-%s-%d", srv, port)
+				nodeID := makeCustomNodeID("wireguard", srv, port, priv, tag)
 				jsonNodes = append(jsonNodes, CustomNode{
 					ID:          nodeID,
 					HostName:    nodeID,
@@ -1160,7 +1178,7 @@ func ParseSubscriptionContent(content string) ([]CustomNode, error) {
 			remark = fmt.Sprintf("节点-%d", i+1)
 		}
 		country, countryCode := inferCountryFromRemark(remark)
-		nodeID := fmt.Sprintf("cs-%s-%d", h, p)
+		nodeID := makeCustomNodeID(proto, h, p, u, remark)
 		nodes = append(nodes, CustomNode{
 			ID:          nodeID,
 			HostName:    nodeID,
