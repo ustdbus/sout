@@ -757,10 +757,8 @@ func parseWireGuardURL(raw string) (*CustomNode, error) {
 	privKey := ""
 	if u.User != nil {
 		privKey = u.User.Username()
-		if unescaped, err := url.QueryUnescape(privKey); err == nil {
-			privKey = unescaped
-		}
 	}
+	privKey = strings.ReplaceAll(privKey, " ", "+")
 
 	remark, _ := url.QueryUnescape(u.Fragment)
 	if remark == "" {
@@ -774,6 +772,8 @@ func parseWireGuardURL(raw string) (*CustomNode, error) {
 	}
 	if peerPub == "" {
 		peerPub = "bmXOC+F1FxEMF9dyiK2H5/1SUtzHZsVoW++jnWgmtEs="
+	} else {
+		peerPub = strings.ReplaceAll(peerPub, " ", "+")
 	}
 
 	addrStr := q.Get("address")
