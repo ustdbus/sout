@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"testing"
+	"time"
 )
 
 func TestParseProxyURL(t *testing.T) {
@@ -186,4 +188,33 @@ func TestParseSubscriptionContentEdgeCases(t *testing.T) {
 		t.Errorf("expected 1 valid UK node, got %v", mixedNodes)
 	}
 }
+
+func TestLiveVpnSubscriptionIntegration(t *testing.T) {
+	// 1. 测试拉取并解析在线 Clash 订阅
+	nodes, err := FetchSourceNodes("https://raw.githubusercontent.com/ustdbus/vpn-out/sub/clash-subscription.yaml", 15*time.Second)
+	if err != nil {
+		t.Fatalf("FetchSourceNodes(clash-subscription) error: %v", err)
+	}
+	if len(nodes) == 0 {
+		t.Fatalf("no nodes returned from clash-subscription.yaml")
+	}
+	t.Logf("Successfully parsed %d nodes from online Clash subscription", len(nodes))
+
+	// 2. 测试对第一个真实节点进行 ProbeCustomProxy 连通性探测
+	testNode := nodes[0]
+	t.Logf("Testing probe for node: %s (%s://%s:%d)", testNode.Remark, testNode.Protocol, testNode.Host, testNode.Port)
+	exitIP, ping, ipType, isp, err := ProbeCustomProxy(
+		fmt.Sprintf("%s:%d", testNode.Host, testNode.Port),
+		testNode.Protocol,
+		testNode.User,
+		testNode.Pass,
+		15*time.Second,
+	)
+	if err != nil {
+		t.Logf("Probe warning: %v", err)
+	} else {
+		t.Logf("Probe success! ExitIP: %s, Ping: %dms, IPType: %s, ISP: %s", exitIP, ping, ipType, isp)
+	}
+}
+
 

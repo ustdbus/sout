@@ -515,7 +515,14 @@ func dialUpstreamProxy(proxyAddr, protocol, user, pass, targetAddr string, timeo
 	proto := strings.ToLower(strings.TrimSpace(protocol))
 	switch proto {
 	case "http":
-		return dialHttpConnect(proxyAddr, false, user, pass, targetAddr, timeout)
+		conn, err := dialHttpConnect(proxyAddr, false, user, pass, targetAddr, timeout)
+		if err != nil && strings.HasSuffix(proxyAddr, ":443") {
+			// 如果 443 端口明文 HTTP 握手失败，智能回退尝试 HTTPS (TLS) CONNECT
+			if connTLS, errTLS := dialHttpConnect(proxyAddr, true, user, pass, targetAddr, timeout); errTLS == nil {
+				return connTLS, nil
+			}
+		}
+		return conn, err
 	case "https":
 		return dialHttpConnect(proxyAddr, true, user, pass, targetAddr, timeout)
 	default:
