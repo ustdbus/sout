@@ -472,4 +472,47 @@ func TestEmbeddedEngine_WireGuardTunnel(t *testing.T) {
 	}
 }
 
+func TestWireGuardDialReal(t *testing.T) {
+	engine, err := newEmbeddedEngine("127.0.0.1")
+	if err != nil {
+		t.Fatalf("newEmbeddedEngine failed: %v", err)
+	}
+	defer engine.close()
+
+	link := "wireguard://gAA9RhXX9dWIlDsVBFx%2BqmQaFhV0UQvcOW4cGsah%2BUM%3D@engage.cloudflareclient.com:2408?publickey=bmXOC%2BF1FxEMF9dyiK2H5%2F1SUtzH0JuVo51h2wPfgyo%3D&address=172.16.0.2%2F32%2C2606%3A4700%3A110%3A863a%3A5f66%3A2949%3A969e%3Ac779%2F128&reserved=0,0,0&mtu=1280#WARP-WireGuard"
+	node, err := parseWireGuardURL(link)
+	if err != nil {
+		t.Fatalf("parseWireGuardURL failed: %v", err)
+	}
+
+	tunnel := &Tunnel{
+		Slot:        88,
+		Port:        28888,
+		Kind:        "custom",
+		CustomProto: "wireguard",
+		Cred:        SocksCred{User: "user", Pass: "pass"},
+		Node: Node{
+			HostName: "real-warp-node",
+			IP:       node.Host,
+			Port:     node.Port,
+			Protocol: "wireguard",
+			Config:   node.Config,
+		},
+	}
+
+	err = engine.addTunnel(tunnel)
+	if err != nil {
+		t.Fatalf("engine.addTunnel failed: %v", err)
+	}
+	defer engine.removeTunnel(tunnel)
+
+	tunnel.setEngine(engine)
+	exitIP, err := tunnel.probeExitIP(10 * time.Second)
+	if err != nil {
+		t.Fatalf("tunnel.probeExitIP failed: %v", err)
+	}
+	t.Logf("WARP WireGuard real exit IP: %s", exitIP)
+}
+
+
 
