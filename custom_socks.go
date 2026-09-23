@@ -155,8 +155,16 @@ func BatchDetectIPInfo(nodes []*CustomNode) {
 		for _, n := range chunk {
 			ip := strings.TrimSpace(n.Host)
 			if net.ParseIP(ip) == nil {
-				n.IPType = "datacenter"
-				continue
+				// 若为域名，尝试做一次快速解析获取对应真实 IP
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				addrs, err := net.DefaultResolver.LookupIP(ctx, "ip4", ip)
+				cancel()
+				if err == nil && len(addrs) > 0 {
+					ip = addrs[0].String()
+				} else {
+					n.IPType = "datacenter"
+					continue
+				}
 			}
 			if _, seen := nodeIdxMap[ip]; !seen {
 				queries = append(queries, QueryItem{Query: ip})
@@ -348,8 +356,10 @@ func StartAutoUpdateWorker(m *Manager) {
 					}
 				}
 				for _, n := range nodes {
-					n.SourceID = s.ID
-					globalCustomStore.Nodes[n.ID] = &n
+					nodeCopy := n
+					nodeCopy.SourceID = s.ID
+					key := fmt.Sprintf("%s:%s", s.ID, nodeCopy.ID)
+					globalCustomStore.Nodes[key] = &nodeCopy
 				}
 				globalCustomStore.mu.Unlock()
 				_ = globalCustomStore.save()

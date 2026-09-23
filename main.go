@@ -1498,8 +1498,10 @@ func apiCustomSourceAdd(w http.ResponseWriter, r *http.Request) {
 		globalCustomStore.mu.Lock()
 		globalCustomStore.Sources[id] = src
 		for _, n := range nodes {
-			n.SourceID = id
-			globalCustomStore.Nodes[n.ID] = &n
+			nodeCopy := n
+			nodeCopy.SourceID = id
+			key := fmt.Sprintf("%s:%s", id, nodeCopy.ID)
+			globalCustomStore.Nodes[key] = &nodeCopy
 		}
 		globalCustomStore.mu.Unlock()
 		_ = globalCustomStore.save()
@@ -1628,8 +1630,13 @@ func apiCustomSourceList(m *Manager) http.HandlerFunc {
 						}
 					}
 				}
-				s.ResidentialCount = resCount
-				s.DatacenterCount = dchCount
+				if resCount == 0 && dchCount == 0 && (s.ResidentialCount > 0 || s.DatacenterCount > 0) {
+					resCount = s.ResidentialCount
+					dchCount = s.DatacenterCount
+				} else {
+					s.ResidentialCount = resCount
+					s.DatacenterCount = dchCount
+				}
 				list = append(list, SourceItem{
 					ID:               s.ID,
 					Name:             s.Name,
@@ -1718,8 +1725,20 @@ func apiCustomSourceRefresh(m *Manager) http.HandlerFunc {
 			return
 		}
 
+		resCount := 0
+		dchCount := 0
+		for _, n := range nodes {
+			if n.IPType == "datacenter" {
+				dchCount++
+			} else {
+				resCount++
+			}
+		}
+
 		globalCustomStore.mu.Lock()
 		src.Count = len(nodes)
+		src.ResidentialCount = resCount
+		src.DatacenterCount = dchCount
 		src.UpdatedAt = time.Now()
 		for k, n := range globalCustomStore.Nodes {
 			if n.SourceID == id {
@@ -1727,8 +1746,10 @@ func apiCustomSourceRefresh(m *Manager) http.HandlerFunc {
 			}
 		}
 		for _, n := range nodes {
-			n.SourceID = id
-			globalCustomStore.Nodes[n.ID] = &n
+			nodeCopy := n
+			nodeCopy.SourceID = id
+			key := fmt.Sprintf("%s:%s", id, nodeCopy.ID)
+			globalCustomStore.Nodes[key] = &nodeCopy
 		}
 		globalCustomStore.mu.Unlock()
 		_ = globalCustomStore.save()
