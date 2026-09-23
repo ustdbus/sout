@@ -726,7 +726,7 @@ func parseClashYamlNodes(content string) []CustomNode {
 
 		proto := "socks5"
 		if pType == "http" {
-			if tlsStr == "true" || port == 443 {
+			if tlsStr == "true" {
 				proto = "https"
 			} else {
 				proto = "http"
