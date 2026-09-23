@@ -941,8 +941,9 @@ func parseClashYamlNodes(content string) []CustomNode {
 			name = server
 		}
 		configJSON := ""
+		privKey := ""
 		if proto == "wireguard" {
-			privKey := strings.Trim(m["private-key"], "\"' ")
+			privKey = strings.Trim(m["private-key"], "\"' ")
 			pubKey := strings.Trim(m["public-key"], "\"' ")
 			if pubKey == "" {
 				pubKey = "bmXOC+F1FxEMF9dyiK2H5/1SUtzHZsVoW++jnWgmtEs="

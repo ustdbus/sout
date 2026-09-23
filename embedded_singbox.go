@@ -101,15 +101,6 @@ func newEmbeddedEngine(listenIP string) (*embeddedEngine, error) {
 		Context: ctx,
 		Options: option.Options{
 			Log: &option.LogOptions{Level: "warn", Timestamp: true},
-			DNS: &option.DNSOptions{
-				RawDNSOptions: option.RawDNSOptions{
-					Servers: []option.DNSServerOptions{{
-						Tag:     "local",
-						Address: "local",
-					}},
-					Final: "local",
-				},
-			},
 			Outbounds: []option.Outbound{{
 				Type:    soutDynamicOutboundType,
 				Tag:     soutDynamicOutboundType,
