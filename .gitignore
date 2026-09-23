@@ -7,4 +7,5 @@
 scratch/
 __pycache__/
 test_api.sh
+test_e2e.py
 
