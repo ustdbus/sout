@@ -207,6 +207,7 @@ func (m *Manager) tryCandidates(t *Tunnel, notify bool) bool {
 			t.CustomPort = node.Port
 			t.CustomUser = node.User
 			t.CustomPass = node.Pass
+			t.CustomProto = node.Protocol
 		}
 		t.Status = "starting"
 		if i > 0 {

@@ -189,6 +189,101 @@ func TestParseSubscriptionContentEdgeCases(t *testing.T) {
 	}
 }
 
+func TestParseClashUnsupportedProtocols(t *testing.T) {
+	// 测试包含 ss, vmess, trojan, masque 及 http 的复合配置
+	yaml := `
+proxies:
+  - {name: "SS-Node", type: ss, server: 1.1.1.1, port: 8388, cipher: aes-128-gcm, password: pwd}
+  - {name: "VMess-Node", type: vmess, server: 2.2.2.2, port: 443, uuid: 123456}
+  - {name: "Trojan-Node", type: trojan, server: 3.3.3.3, port: 443, password: pwd}
+  - {name: "WS-Node", type: http, server: 4.4.4.4, port: 443, username: u, password: p, tls: true}
+  - {name: "S5-Node", type: socks5, server: 5.5.5.5, port: 1080}
+`
+	nodes, err := ParseSubscriptionContent(yaml)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// 应该只保留 WS-Node (https) 和 S5-Node (socks5)，ss/vmess/trojan 必须被安全过滤跳过
+	if len(nodes) != 2 {
+		t.Fatalf("expected 2 supported nodes, got %d", len(nodes))
+	}
+	if nodes[0].Remark != "WS-Node" || nodes[0].Protocol != "https" {
+		t.Errorf("expected WS-Node https, got %+v", nodes[0])
+	}
+	if nodes[1].Remark != "S5-Node" || nodes[1].Protocol != "socks5" {
+		t.Errorf("expected S5-Node socks5, got %+v", nodes[1])
+	}
+}
+
+func TestParseClashComplexFlowFormat(t *testing.T) {
+	// 测试单行 flow 映射内包含逗号、方括号数组及引号
+	yaml := `
+proxies:
+  - {name: "WARP-Node", type: masque, server: "162.159.198.1", port: 443, dns: [1.1.1.1, 8.8.8.8], remark: "US, West"}
+  - {name: "HTTPS-Node", type: http, server: 1.2.3.4, port: 443, tls: true, username: "admin", password: "p@ss,word"}
+`
+	nodes := parseClashYamlNodes(yaml)
+	if len(nodes) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(nodes))
+	}
+	if nodes[0].Protocol != "masque" || nodes[0].Host != "162.159.198.1" {
+		t.Errorf("unexpected node 0: %+v", nodes[0])
+	}
+	if nodes[1].Protocol != "https" || nodes[1].Pass != "p@ss,word" {
+		t.Errorf("unexpected node 1: %+v", nodes[1])
+	}
+}
+
+func TestParseProxyURL_SubUrlRejection(t *testing.T) {
+	// 普通网络资源/订阅 URL 传入 ParseProxyURL 应拒绝，而非误判为代理节点
+	subURL := "https://raw.githubusercontent.com/ustdbus/vpn-out/sub/all-proxies.txt"
+	if _, _, _, _, _, _, err := ParseProxyURL(subURL); err == nil {
+		t.Errorf("expected error when parsing subscription URL as proxy URL, got nil")
+	}
+
+	// 真正的 HTTPS 代理链接带有用户名密码或纯 host:port
+	proxyURL := "https://user:pass@1.2.3.4:443#MyProxy"
+	proto, host, port, user, pass, remark, err := ParseProxyURL(proxyURL)
+	if err != nil {
+		t.Fatalf("unexpected error parsing valid proxy URL: %v", err)
+	}
+	if proto != "https" || host != "1.2.3.4" || port != 443 || user != "user" || pass != "pass" || remark != "MyProxy" {
+		t.Errorf("unexpected parsed values: %s %s %d %s %s %s", proto, host, port, user, pass, remark)
+	}
+}
+
+func TestDialUpstreamProxy_UnsupportedProto(t *testing.T) {
+	_, err := dialUpstreamProxy("1.2.3.4:443", "masque", "", "", "8.8.8.8:53", 1*time.Second)
+	if err == nil {
+		t.Errorf("expected error for unsupported proto masque, got nil")
+	}
+}
+
+func TestNodeProtocolPreservation(t *testing.T) {
+	// 验证 Node 结构体包含 Protocol 字段且与 CustomNode 正确双向映射
+	cNode := CustomNode{
+		HostName: "test-node",
+		Host:     "1.1.1.1",
+		Port:     443,
+		Protocol: "https",
+		User:     "u",
+		Pass:     "p",
+		Country:  "美国",
+	}
+	node := Node{
+		HostName: cNode.HostName,
+		IP:       cNode.Host,
+		Port:     cNode.Port,
+		Protocol: cNode.Protocol,
+		User:     cNode.User,
+		Pass:     cNode.Pass,
+		Kind:     "custom",
+	}
+	if node.Protocol != "https" {
+		t.Fatalf("expected node.Protocol = https, got %s", node.Protocol)
+	}
+}
+
 func TestLiveVpnSubscriptionIntegration(t *testing.T) {
 	// 1. 测试拉取并解析在线 Clash 订阅
 	nodes, err := FetchSourceNodes("https://raw.githubusercontent.com/ustdbus/vpn-out/sub/clash-subscription.yaml", 15*time.Second)
@@ -210,20 +305,26 @@ func TestLiveVpnSubscriptionIntegration(t *testing.T) {
 	}
 	t.Logf("Successfully parsed %d nodes from online all-proxies.txt", len(txtNodes))
 
-	// 3. 测试对真实节点进行 ProbeCustomProxy 连通性探测
-	testNode := txtNodes[0]
-	t.Logf("Testing probe for node: %s (%s://%s:%d)", testNode.Remark, testNode.Protocol, testNode.Host, testNode.Port)
-	exitIP, ping, ipType, isp, err := ProbeCustomProxy(
-		fmt.Sprintf("%s:%d", testNode.Host, testNode.Port),
-		testNode.Protocol,
-		testNode.User,
-		testNode.Pass,
-		15*time.Second,
-	)
-	if err != nil {
-		t.Fatalf("ProbeCustomProxy failed: %v", err)
+	// 3. 测试对真实 Windscribe 节点进行 ProbeCustomProxy 连通性探测
+	var wsNode *CustomNode
+	for i := range txtNodes {
+		if txtNodes[i].Protocol == "https" || txtNodes[i].Protocol == "http" {
+			wsNode = &txtNodes[i]
+			break
+		}
 	}
-	t.Logf("Probe success! ExitIP: %s, Ping: %dms, IPType: %s, ISP: %s", exitIP, ping, ipType, isp)
+	if wsNode != nil {
+		t.Logf("Testing probe for node: %s (%s://%s:%d)", wsNode.Remark, wsNode.Protocol, wsNode.Host, wsNode.Port)
+		exitIP, ping, ipType, isp, err := ProbeCustomProxy(
+			fmt.Sprintf("%s:%d", wsNode.Host, wsNode.Port),
+			wsNode.Protocol,
+			wsNode.User,
+			wsNode.Pass,
+			15*time.Second,
+		)
+		if err != nil {
+			t.Fatalf("ProbeCustomProxy failed: %v", err)
+		}
+		t.Logf("Probe success! ExitIP: %s, Ping: %dms, IPType: %s, ISP: %s", exitIP, ping, ipType, isp)
+	}
 }
-
-

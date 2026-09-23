@@ -449,6 +449,15 @@ func dialSocks5(proxyAddr, user, pass, targetAddr string, timeout time.Duration)
 	return conn, nil
 }
 
+type bufferedConn struct {
+	net.Conn
+	r io.Reader
+}
+
+func (b *bufferedConn) Read(p []byte) (int, error) {
+	return b.r.Read(p)
+}
+
 // dialHttpConnect 通过 HTTP / HTTPS 代理建立 CONNECT 隧道
 func dialHttpConnect(proxyAddr string, isTLS bool, user, pass, targetAddr string, timeout time.Duration) (net.Conn, error) {
 	var conn net.Conn
@@ -507,6 +516,9 @@ func dialHttpConnect(proxyAddr string, isTLS bool, user, pass, targetAddr string
 	}
 
 	_ = conn.SetDeadline(time.Time{})
+	if br.Buffered() > 0 {
+		return &bufferedConn{Conn: conn, r: br}, nil
+	}
 	return conn, nil
 }
 
@@ -525,8 +537,10 @@ func dialUpstreamProxy(proxyAddr, protocol, user, pass, targetAddr string, timeo
 		return conn, err
 	case "https":
 		return dialHttpConnect(proxyAddr, true, user, pass, targetAddr, timeout)
-	default:
+	case "socks5", "socks", "":
 		return dialSocks5(proxyAddr, user, pass, targetAddr, timeout)
+	default:
+		return nil, fmt.Errorf("不支持的代理协议: %s", proto)
 	}
 }
 
@@ -669,6 +683,9 @@ func ParseProxyURL(raw string) (proto, host string, port int, user, pass, remark
 				port = 1080
 			}
 		}
+		if (proto == "http" || proto == "https") && u.User == nil && pStr == "" && u.Path != "" && u.Path != "/" {
+			return "", "", 0, "", "", "", fmt.Errorf("URL 指向网络资源或订阅文件，非直接代理节点")
+		}
 		if u.User != nil {
 			user, _ = url.QueryUnescape(u.User.Username())
 			pwd, hasPwd := u.User.Password()
@@ -708,6 +725,41 @@ func ParseSocksURL(raw string) (host string, port int, user, pass, remark string
 	return host, port, user, pass, remark, err
 }
 
+// splitYamlFlow 智能分割单行 YAML flow 映射，保护引号与方括号内部的逗号
+func splitYamlFlow(s string) []string {
+	var parts []string
+	var buf strings.Builder
+	inQuote := false
+	var quoteChar rune
+	bracketDepth := 0
+
+	for _, r := range s {
+		if !inQuote {
+			if r == '"' || r == '\'' {
+				inQuote = true
+				quoteChar = r
+			} else if r == '[' || r == '{' {
+				bracketDepth++
+			} else if r == ']' || r == '}' {
+				if bracketDepth > 0 {
+					bracketDepth--
+				}
+			} else if r == ',' && bracketDepth == 0 {
+				parts = append(parts, buf.String())
+				buf.Reset()
+				continue
+			}
+		} else if r == quoteChar {
+			inQuote = false
+		}
+		buf.WriteRune(r)
+	}
+	if buf.Len() > 0 {
+		parts = append(parts, buf.String())
+	}
+	return parts
+}
+
 // parseClashYamlNodes 解析 Clash / Mihomo 订阅中的 proxies 节点列表
 func parseClashYamlNodes(content string) []CustomNode {
 	var nodes []CustomNode
@@ -731,7 +783,7 @@ func parseClashYamlNodes(content string) []CustomNode {
 			return
 		}
 
-		proto := "socks5"
+		proto := ""
 		if pType == "http" {
 			if tlsStr == "true" {
 				proto = "https"
@@ -742,6 +794,9 @@ func parseClashYamlNodes(content string) []CustomNode {
 			proto = "socks5"
 		} else if pType == "masque" {
 			proto = "masque"
+		} else {
+			// 安全过滤未支持的代理协议（如 ss, vmess, trojan, hysteria 等）
+			return
 		}
 
 		if name == "" {
@@ -791,7 +846,7 @@ func parseClashYamlNodes(content string) []CustomNode {
 			commit()
 			body := trimmed[3 : len(trimmed)-1]
 			m := make(map[string]string)
-			parts := strings.Split(body, ",")
+			parts := splitYamlFlow(body)
 			for _, part := range parts {
 				kv := strings.SplitN(part, ":", 2)
 				if len(kv) == 2 {

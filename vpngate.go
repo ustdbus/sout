@@ -52,6 +52,7 @@ type Node struct {
 	Port        int     `json:"port,omitempty"`
 	User        string  `json:"user,omitempty"`
 	Pass        string  `json:"pass,omitempty"`
+	Protocol    string  `json:"protocol,omitempty"` // "socks5" | "http" | "https"
 	Remark      string  `json:"remark,omitempty"`
 	SourceID    string  `json:"source_id,omitempty"`
 }

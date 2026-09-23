@@ -1266,8 +1266,8 @@ func apiCustomSocksBatchAdd(m *Manager) http.HandlerFunc {
 		var nodes []CustomNode
 		var err error
 		if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
-			// 如果输入的是单一 URL 且不是代理协议链接，优先尝试拉取
-			if !strings.Contains(raw, "@") && (strings.Contains(raw, "/sub") || strings.Contains(raw, ".txt") || strings.Contains(raw, ".yaml") || strings.Contains(raw, "raw.githubusercontent.com")) {
+			// 如果输入的是单一 URL 且不是代理协议链接，优先尝试在线拉取订阅
+			if !strings.Contains(raw, "@") && !strings.Contains(raw, "\n") {
 				nodes, err = FetchSourceNodes(raw, 15*time.Second)
 			}
 		}
@@ -1281,8 +1281,14 @@ func apiCustomSocksBatchAdd(m *Manager) http.HandlerFunc {
 		}
 
 		addedCount := 0
+		skippedCount := 0
 		var addedList []map[string]any
 		for _, n := range nodes {
+			// 过滤当前不支持建立原生出站隧道的协议（例如 masque 等特殊协议）
+			if n.Protocol != "http" && n.Protocol != "https" && n.Protocol != "socks5" && n.Protocol != "socks" && n.Protocol != "" {
+				skippedCount++
+				continue
+			}
 			t, err := m.AddCustomExit(n)
 			if err != nil {
 				continue
@@ -1300,16 +1306,26 @@ func apiCustomSocksBatchAdd(m *Manager) http.HandlerFunc {
 		}
 
 		if addedCount == 0 {
+			if skippedCount > 0 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("解析到 %d 个节点，但协议暂不受当前面板原生出站支持 (如 MASQUE)", skippedCount)})
+				return
+			}
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "未能建立出口，可能端口池已满或节点不可达"})
 			return
+		}
+
+		msg := fmt.Sprintf("成功解析并建立了 %d 个自定义出口隧道", addedCount)
+		if skippedCount > 0 {
+			msg += fmt.Sprintf(" (另有 %d 个特殊协议节点已跳过)", skippedCount)
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":      true,
 			"added":   addedCount,
 			"total":   len(nodes),
+			"skipped": skippedCount,
 			"nodes":   addedList,
-			"message": fmt.Sprintf("成功解析并建立了 %d 个自定义出口隧道", addedCount),
+			"message": msg,
 		})
 	}
 }
