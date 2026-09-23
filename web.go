@@ -1792,10 +1792,19 @@ async function loadSourcesList(){
             ? '<span style="background:#8957e5;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">本地批量</span>'
             : '<span style="background:#1f6feb;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">在线订阅</span>'));
       
-      const isConfigured = !!s.url || s.count > 0;
+      const isWarp = s.type === 'warp' || s.id === 'preset-warp';
+      const isConfigured = isWarp ? (s.count > 0) : (!!s.url || s.count > 0);
       const isEn = s.enabled !== false;
       let statusBadge = '';
-      if(!isConfigured && !s.is_builtin){
+      if(isWarp){
+        if(s.count > 0){
+          statusBadge = isEn
+            ? '<span style="background:rgba(63,185,80,.15);color:#3fb950;border:1px solid rgba(63,185,80,.3);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">已就绪</span>'
+            : '<span style="background:rgba(248,81,73,.15);color:#f85149;border:1px solid rgba(248,81,73,.3);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">已禁用</span>';
+        } else {
+          statusBadge = '<span style="background:rgba(139,148,158,.15);color:#8b949e;border:1px solid rgba(139,148,158,.3);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">未创建账号</span>';
+        }
+      } else if(!isConfigured && !s.is_builtin){
         statusBadge = '<span style="background:rgba(210,153,34,.15);color:#d29922;border:1px solid rgba(210,153,34,.3);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">待配置链接</span>';
       } else {
         statusBadge = isEn
@@ -1806,8 +1815,6 @@ async function loadSourcesList(){
       const toggleBtn = isEn
         ? '<button class="chip-btn danger" data-toggle-src="' + esc(s.id) + '" title="点击禁用此源（节点将从家宽/机房池移除）">禁用</button>'
         : '<button class="chip-btn" style="background:#238636;color:#fff" data-toggle-src="' + esc(s.id) + '" title="点击启用此源（节点将加入家宽/机房池）">启用</button>';
-
-      const isWarp = s.type === 'warp' || s.id === 'preset-warp';
 
       let actBtns = '';
       if(s.is_builtin){
@@ -1829,15 +1836,20 @@ async function loadSourcesList(){
       let nodeCounts = '';
       if(s.is_builtin){
         nodeCounts = s.count + ' 个节点 (全部为 🏠 家宽)' + timeStr;
+      } else if(isWarp){
+        nodeCounts = s.count > 0
+          ? (s.count + ' 个节点 (全部为 🏢 机房) · 已就绪' + timeStr)
+          : '本机尚未创建 WARP 账号，点击右侧「申请 WARP」即可一键生成原生出口';
       } else if(!isConfigured){
-        nodeCounts = isWarp
-          ? '本机尚未创建 WARP 账号，点击右侧「申请 WARP」即可一键生成原生出口'
-          : '尚未配置订阅链接，请点击右侧「配置链接」填入';
+        nodeCounts = '尚未配置订阅链接，请点击右侧「配置链接」填入';
       } else {
         nodeCounts = s.count + ' 个节点 (🏠 家宽: ' + (s.residential_count || 0) + ' · 🏢 机房: ' + (s.datacenter_count || 0) + ')' + timeStr;
       }
 
-      const displayUrl = s.url ? s.url : (isWarp ? '本机原生 Cloudflare 账号' : '待填入订阅链接 (点击配置链接)');
+      const displayUrl = isWarp 
+        ? (s.count > 0 ? 'Cloudflare 官方 WireGuard 原生出口 · 本机专属账户' : '无需订阅链接 · 本机原生创建') 
+        : (s.url ? s.url : '待填入订阅链接 (点击配置链接)');
+
 
       return '<div style="background:#12151a;border:1px solid var(--line);border-radius:6px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px">'
         + '<div style="min-width:0;flex:1">'

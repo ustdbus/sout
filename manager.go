@@ -67,13 +67,30 @@ func NewManager(maxSlots int, workDir string) *Manager {
 	if err != nil {
 		log.Printf("初始化内嵌 sing-box 引擎警告: %v", err)
 	}
+
+	// 优先预载本地持久化节点缓存，杜绝服务启动/刷新期间出现「源不存在/暂无节点」的空窗期
+	var initNodes []Node
+	var initFetched time.Time
+	cachePath := filepath.Join(workDir, "vpngate_cache.json")
+	if blob, rerr := os.ReadFile(cachePath); rerr == nil {
+		var cached []Node
+		if jerr := json.Unmarshal(blob, &cached); jerr == nil && len(cached) > 0 {
+			initNodes = cached
+			initFetched = time.Now()
+			log.Printf("VPN Gate 官方源启动即载入本地缓存 %d 个节点 (0毫秒就绪)", len(cached))
+		}
+	}
+
 	return &Manager{
 		tunnels:  map[int]*Tunnel{},
+		nodes:    initNodes,
+		fetched:  initFetched,
 		workDir:  workDir,
 		maxSlots: maxSlots,
 		engine:   engine,
 	}
 }
+
 
 // RefreshNodes 获取节点列表并同步更新已有隧道的元数据
 func (m *Manager) RefreshNodes() (int, error) {
@@ -124,13 +141,31 @@ func (m *Manager) RefreshNodes() (int, error) {
 	return len(nodes), nil
 }
 
+func (m *Manager) ensureNodesLoadedLocked() {
+	if len(m.nodes) > 0 {
+		return
+	}
+	cachePath := filepath.Join(m.workDir, "vpngate_cache.json")
+	if blob, rerr := os.ReadFile(cachePath); rerr == nil {
+		var cached []Node
+		if jerr := json.Unmarshal(blob, &cached); jerr == nil && len(cached) > 0 {
+			m.nodes = cached
+			m.fetched = time.Now()
+			log.Printf("VPN Gate 官方源自动从本地缓存应急载入 %d 个节点", len(cached))
+		}
+	}
+}
+
 func (m *Manager) Nodes() ([]Node, time.Time) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	m.ensureNodesLoadedLocked()
 	out := make([]Node, len(m.nodes))
 	copy(out, m.nodes)
-	return out, m.fetched
+	fetched := m.fetched
+	m.mu.Unlock()
+	return out, fetched
 }
+
 
 func (m *Manager) Tunnels() []*Tunnel {
 	m.mu.RLock()

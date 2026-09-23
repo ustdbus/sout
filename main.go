@@ -20,7 +20,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v3.3.0"
+var version = "v3.3.1"
 
 func initLowMemoryProtection() {
 	if os.Getenv("GOMEMLIMIT") == "" {
@@ -1865,12 +1865,35 @@ func apiCustomSourceList(m *Manager) http.HandlerFunc {
 
 				if matched != "" {
 					item.IsPreset = true
-					presetMap[matched] = &item
+					existing := presetMap[matched]
+					if existing == nil || existing.Count == 0 || (s.ID == "preset-"+matched && item.Count > 0) || item.Count > existing.Count {
+						presetMap[matched] = &item
+					}
 				} else {
 					others = append(others, item)
 				}
 			}
 			globalCustomStore.mu.RUnlock()
+		}
+
+		// 智能识别：若 presetMap["warp"] 节点数为 0，但当前活跃隧道中已存在正在运行的 WARP 出口，自动识别并展示就绪状态
+		warpPreset := presetMap["warp"]
+		if warpPreset != nil && warpPreset.Count == 0 {
+			for _, t := range m.Tunnels() {
+				if t.Status == "up" || t.Status == "starting" {
+					hostLower := strings.ToLower(t.Node.HostName)
+					remkLower := strings.ToLower(t.Node.Remark)
+					if t.CustomProto == "wireguard" || strings.Contains(hostLower, "warp") || strings.Contains(remkLower, "warp") || strings.Contains(strings.ToLower(t.CustomHost), "cloudflare") {
+						warpPreset.Count = 1
+						warpPreset.DatacenterCount = 1
+						warpPreset.ResidentialCount = 0
+						warpPreset.Enabled = true
+						warpPreset.URL = "本机原生出站运行中"
+						warpPreset.UpdatedAt = time.Now()
+						break
+					}
+				}
+			}
 		}
 
 		// 固定顺序：VPN Gate、WARP、Windscribe、Opera、Proton，其余后置
@@ -1883,6 +1906,7 @@ func apiCustomSourceList(m *Manager) http.HandlerFunc {
 		}
 		list = append(list, others...)
 		writeJSON(w, http.StatusOK, list)
+
 	}
 }
 

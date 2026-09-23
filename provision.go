@@ -18,8 +18,8 @@ type ProvisionRequest struct {
 
 // GetAllCandidateNodes 获取指定池下的全部候选可用节点 (VPN Gate + 已启用的自定义订阅源)
 func (m *Manager) GetAllCandidateNodes(poolType string) []Node {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.getAllCandidateNodesLocked(poolType)
 }
 
@@ -28,12 +28,14 @@ func (m *Manager) getAllCandidateNodesLocked(poolType string) []Node {
 
 	// 1. VPN Gate 官方节点（全部属于家宽池）
 	if isVPNGateEnabled() && (poolType == "" || poolType == "all" || poolType == "residential") {
+		m.ensureNodesLoadedLocked()
 		for _, n := range m.nodes {
 			n.Kind = "vpngate"
 			n.IPType = "residential"
 			nodes = append(nodes, n)
 		}
 	}
+
 
 	// 2. 自定义订阅源中已启用的节点
 	if globalCustomStore != nil {
@@ -451,11 +453,27 @@ func (m *Manager) Regions(poolType string) []RegionStat {
 
 	// --- 2. WARP 分类 ---
 	warpNodes := make([]Node, 0)
+	warpInUse := 0
 	for _, n := range candidateNodes {
-		if !used[n.HostName] && classifyNodeCategory(n) == "warp" {
-			warpNodes = append(warpNodes, n)
+		if classifyNodeCategory(n) == "warp" {
+			if !used[n.HostName] {
+				warpNodes = append(warpNodes, n)
+			} else {
+				warpInUse++
+			}
 		}
 	}
+	if len(warpNodes) == 0 && warpInUse == 0 {
+		m.mu.RLock()
+		for _, t := range m.tunnels {
+			if t.Status == "up" && (strings.Contains(strings.ToLower(t.Node.HostName), "warp") || strings.Contains(strings.ToLower(t.CustomHost), "cloudflare") || t.CustomProto == "wireguard") {
+				warpInUse++
+				break
+			}
+		}
+		m.mu.RUnlock()
+	}
+
 	if len(warpNodes) > 0 {
 		bestSpeed := 0.0
 		for _, n := range warpNodes {
@@ -470,7 +488,15 @@ func (m *Manager) Regions(poolType string) []RegionStat {
 			BestSpeed: bestSpeed,
 			Category:  "warp",
 		})
+	} else if warpInUse > 0 {
+		result = append(result, RegionStat{
+			Code:      "SRC:warp:ALL",
+			Name:      "⚡ 全球就近出站 (WARP 账号已就绪 · 出口运行中)",
+			Available: 1,
+			Category:  "warp",
+		})
 	}
+
 
 	// --- 3. Windscribe 分类 (支持城市/大区精确专属页面) ---
 	wsNodes := make([]Node, 0)

@@ -264,11 +264,15 @@ func initCustomStore(dir string) *CustomStore {
 		{ID: "preset-opera", Name: "Opera"},
 		{ID: "preset-proton", Name: "Proton"},
 	}
-	// 规范化已存在源的名称
-	for _, s := range cs.Sources {
+	// 规范化已存在源的名称并清理多余的历史空 WARP 源
+	for id, s := range cs.Sources {
 		lowerName := strings.ToLower(s.Name)
 		lowerID := strings.ToLower(s.ID)
 		if strings.Contains(lowerID, "warp") || strings.Contains(lowerName, "warp") {
+			if id != "preset-warp" && s.Count == 0 {
+				delete(cs.Sources, id)
+				continue
+			}
 			s.Name = "WARP"
 		} else if strings.Contains(lowerID, "windscribe") || strings.Contains(lowerName, "windscribe") {
 			s.Name = "Windscribe"
@@ -278,6 +282,25 @@ func initCustomStore(dir string) *CustomStore {
 			s.Name = "Proton"
 		}
 	}
+
+	warpCount := 0
+	for _, n := range cs.Nodes {
+		n.IPType = "datacenter"
+		if strings.Contains(strings.ToLower(n.HostName), "warp") || strings.Contains(strings.ToLower(n.Host), "cloudflare") || n.Protocol == "wireguard" {
+			n.SourceID = "preset-warp"
+			warpCount++
+		}
+	}
+	if warpCount > 0 {
+		if pw, ok := cs.Sources["preset-warp"]; ok {
+			pw.Count = warpCount
+			pw.DatacenterCount = warpCount
+			pw.ResidentialCount = 0
+			pw.Enabled = true
+			pw.URL = "本机原生创建 (Cloudflare 官方账号)"
+		}
+	}
+
 
 	for _, p := range presets {
 		has := false
