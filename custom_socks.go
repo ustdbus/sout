@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -19,7 +20,7 @@ import (
 	"time"
 )
 
-// CustomNode 记录一个用户自定义的 SOCKS5 出口节点
+// CustomNode 记录一个用户自定义的 SOCKS5 / HTTP 出口节点
 type CustomNode struct {
 	ID          string  `json:"id"`
 	HostName    string  `json:"hostname"`
@@ -27,6 +28,7 @@ type CustomNode struct {
 	Port        int     `json:"port"`
 	User        string  `json:"user"`
 	Pass        string  `json:"pass"`
+	Protocol    string  `json:"protocol,omitempty"` // "socks5" | "http" | "https" | "masque"
 	Country     string  `json:"country"`
 	CountryCode string  `json:"country_code"`
 	Remark      string  `json:"remark"`
@@ -447,11 +449,85 @@ func dialSocks5(proxyAddr, user, pass, targetAddr string, timeout time.Duration)
 	return conn, nil
 }
 
-// ProbeCustomSocks 探测自定义 SOCKS5 代理的真实出口 IP、延迟及家宽/机房属性
-func ProbeCustomSocks(proxyAddr, user, pass string, timeout time.Duration) (exitIP string, ping int, ipType string, isp string, err error) {
+// dialHttpConnect 通过 HTTP / HTTPS 代理建立 CONNECT 隧道
+func dialHttpConnect(proxyAddr string, isTLS bool, user, pass, targetAddr string, timeout time.Duration) (net.Conn, error) {
+	var conn net.Conn
+	var err error
+	if isTLS {
+		conn, err = tls.DialWithDialer(&net.Dialer{Timeout: timeout}, "tcp", proxyAddr, &tls.Config{
+			InsecureSkipVerify: true,
+		})
+	} else {
+		conn, err = net.DialTimeout("tcp", proxyAddr, timeout)
+	}
+	if err != nil {
+		return nil, err
+	}
+	_ = conn.SetDeadline(time.Now().Add(timeout))
+
+	req := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Connection: Keep-Alive\r\n", targetAddr, targetAddr)
+	if user != "" || pass != "" {
+		auth := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
+		req += fmt.Sprintf("Proxy-Authorization: Basic %s\r\n", auth)
+	}
+	req += "\r\n"
+
+	if _, err := conn.Write([]byte(req)); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+
+	br := bufio.NewReader(conn)
+	statusLine, err := br.ReadString('\n')
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("读取 HTTP 代理握手响应失败: %w", err)
+	}
+
+	parts := strings.SplitN(statusLine, " ", 3)
+	if len(parts) < 2 {
+		_ = conn.Close()
+		return nil, fmt.Errorf("无效的 HTTP 代理响应: %s", strings.TrimSpace(statusLine))
+	}
+	statusCode, _ := strconv.Atoi(parts[1])
+	if statusCode != 200 {
+		_ = conn.Close()
+		return nil, fmt.Errorf("HTTP 代理 CONNECT 失败 (状态码: %d %s)", statusCode, strings.TrimSpace(statusLine))
+	}
+
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		if strings.TrimSpace(line) == "" {
+			break
+		}
+	}
+
+	_ = conn.SetDeadline(time.Time{})
+	return conn, nil
+}
+
+// dialUpstreamProxy 统一根据协议建立到远端代理的连接
+func dialUpstreamProxy(proxyAddr, protocol, user, pass, targetAddr string, timeout time.Duration) (net.Conn, error) {
+	proto := strings.ToLower(strings.TrimSpace(protocol))
+	switch proto {
+	case "http":
+		return dialHttpConnect(proxyAddr, false, user, pass, targetAddr, timeout)
+	case "https":
+		return dialHttpConnect(proxyAddr, true, user, pass, targetAddr, timeout)
+	default:
+		return dialSocks5(proxyAddr, user, pass, targetAddr, timeout)
+	}
+}
+
+// ProbeCustomProxy 探测自定义代理（SOCKS5 / HTTP / HTTPS）的真实出口 IP、延迟及家宽/机房属性
+func ProbeCustomProxy(proxyAddr, protocol, user, pass string, timeout time.Duration) (exitIP string, ping int, ipType string, isp string, err error) {
 	start := time.Now()
 	dialer := func(ctx context.Context, network, addr string) (net.Conn, error) {
-		return dialSocks5(proxyAddr, user, pass, addr, timeout)
+		return dialUpstreamProxy(proxyAddr, protocol, user, pass, addr, timeout)
 	}
 	tr := &http.Transport{
 		DialContext:     dialer,
@@ -484,7 +560,7 @@ func ProbeCustomSocks(proxyAddr, user, pass string, timeout time.Duration) (exit
 	}
 
 	if exitIP == "" {
-		return "", 0, "", "", fmt.Errorf("连接 SOCKS5 代理超时或未获取到出口 IP")
+		return "", 0, "", "", fmt.Errorf("连接代理超时或未获取到出口 IP")
 	}
 
 	ping = int(time.Since(start).Milliseconds())
@@ -494,30 +570,110 @@ func ProbeCustomSocks(proxyAddr, user, pass string, timeout time.Duration) (exit
 	return exitIP, ping, ipType, isp, nil
 }
 
-// ParseSocksURL 解析 socks5://user:pass@host:port#remark 格式或 host:port:user:pass 格式
-func ParseSocksURL(raw string) (host string, port int, user, pass, remark string, err error) {
+// ProbeCustomSocks 保持向后兼容调用 ProbeCustomProxy
+func ProbeCustomSocks(proxyAddr, user, pass string, timeout time.Duration) (exitIP string, ping int, ipType string, isp string, err error) {
+	return ProbeCustomProxy(proxyAddr, "socks5", user, pass, timeout)
+}
+
+// inferCountryFromRemark 根据节点备注名称智能推断国家与代码
+func inferCountryFromRemark(remark string) (string, string) {
+	r := strings.ToLower(remark)
+	if strings.Contains(r, "香港") || strings.Contains(r, "hk") || strings.Contains(r, "hongkong") {
+		return "香港", "HK"
+	}
+	if strings.Contains(r, "日本") || strings.Contains(r, "jp") || strings.Contains(r, "japan") || strings.Contains(r, "tokyo") {
+		return "日本", "JP"
+	}
+	if strings.Contains(r, "美国") || strings.Contains(r, "us") || strings.Contains(r, "united states") {
+		return "美国", "US"
+	}
+	if strings.Contains(r, "新加坡") || strings.Contains(r, "sg") || strings.Contains(r, "singapore") {
+		return "新加坡", "SG"
+	}
+	if strings.Contains(r, "加拿大") || strings.Contains(r, "ca") || strings.Contains(r, "canada") {
+		return "加拿大", "CA"
+	}
+	if strings.Contains(r, "英国") || strings.Contains(r, "gb") || strings.Contains(r, "uk") || strings.Contains(r, "london") {
+		return "英国", "GB"
+	}
+	if strings.Contains(r, "德国") || strings.Contains(r, "de") || strings.Contains(r, "germany") {
+		return "德国", "DE"
+	}
+	if strings.Contains(r, "法国") || strings.Contains(r, "fr") || strings.Contains(r, "france") {
+		return "法国", "FR"
+	}
+	if strings.Contains(r, "荷兰") || strings.Contains(r, "nl") || strings.Contains(r, "netherlands") {
+		return "荷兰", "NL"
+	}
+	if strings.Contains(r, "瑞士") || strings.Contains(r, "ch") || strings.Contains(r, "switzerland") {
+		return "瑞士", "CH"
+	}
+	if strings.Contains(r, "罗马尼亚") || strings.Contains(r, "ro") || strings.Contains(r, "romania") {
+		return "罗马尼亚", "RO"
+	}
+	if strings.Contains(r, "挪威") || strings.Contains(r, "no") || strings.Contains(r, "norway") {
+		return "挪威", "NO"
+	}
+	if strings.Contains(r, "亚洲") || strings.Contains(r, "asia") {
+		return "亚洲", "AS"
+	}
+	if strings.Contains(r, "欧洲") || strings.Contains(r, "europe") {
+		return "欧洲", "EU"
+	}
+	if strings.Contains(r, "美洲") || strings.Contains(r, "america") {
+		return "美洲", "AM"
+	}
+	return "自定义", "CUSTOM"
+}
+
+// ParseProxyURL 解析代理链接，兼容 socks5://, socks://, http://, https://, masque:// 以及 host:port[:user:pass]
+func ParseProxyURL(raw string) (proto, host string, port int, user, pass, remark string, err error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return "", 0, "", "", "", fmt.Errorf("链接为空")
+		return "", "", 0, "", "", "", fmt.Errorf("链接为空")
 	}
 
+	proto = "socks5"
 	if strings.HasPrefix(raw, "socks5://") || strings.HasPrefix(raw, "socks://") {
+		proto = "socks5"
+	} else if strings.HasPrefix(raw, "https://") {
+		proto = "https"
+	} else if strings.HasPrefix(raw, "http://") {
+		proto = "http"
+	} else if strings.HasPrefix(raw, "masque://") {
+		proto = "masque"
+	}
+
+	if strings.Contains(raw, "://") {
 		u, err := url.Parse(raw)
 		if err != nil {
-			return "", 0, "", "", "", err
+			return "", "", 0, "", "", "", err
 		}
 		host = u.Hostname()
-		p, _ := strconv.Atoi(u.Port())
-		port = p
+		pStr := u.Port()
+		if pStr != "" {
+			port, _ = strconv.Atoi(pStr)
+		} else {
+			if proto == "https" || proto == "masque" {
+				port = 443
+			} else if proto == "http" {
+				port = 80
+			} else {
+				port = 1080
+			}
+		}
 		if u.User != nil {
-			user = u.User.Username()
-			pass, _ = u.User.Password()
+			user, _ = url.QueryUnescape(u.User.Username())
+			pwd, hasPwd := u.User.Password()
+			if hasPwd {
+				pass, _ = url.QueryUnescape(pwd)
+			}
 		}
 		remark, _ = url.QueryUnescape(u.Fragment)
 		if remark == "" {
 			remark = host
 		}
-		return host, port, user, pass, remark, nil
+		return proto, host, port, user, pass, remark, nil
 	}
 
 	// 尝试 host:port[:user:pass] 格式
@@ -529,12 +685,208 @@ func ParseSocksURL(raw string) (host string, port int, user, pass, remark string
 			user = parts[2]
 			pass = parts[3]
 		}
-		return host, port, user, pass, host, nil
+		if port == 443 {
+			proto = "https"
+		} else if port == 80 || port == 8080 {
+			proto = "http"
+		}
+		return proto, host, port, user, pass, host, nil
 	}
-	return "", 0, "", "", "", fmt.Errorf("无法解析的 SOCKS5 格式")
+	return "", "", 0, "", "", "", fmt.Errorf("无法解析的代理格式: %s", raw)
 }
 
-// FetchSourceNodes 拉取并解析外部 SOCKS5 订阅源
+// ParseSocksURL 兼容原有接口
+func ParseSocksURL(raw string) (host string, port int, user, pass, remark string, err error) {
+	_, host, port, user, pass, remark, err = ParseProxyURL(raw)
+	return host, port, user, pass, remark, err
+}
+
+// parseClashYamlNodes 解析 Clash / Mihomo 订阅中的 proxies 节点列表
+func parseClashYamlNodes(content string) []CustomNode {
+	var nodes []CustomNode
+	lines := strings.Split(content, "\n")
+	inProxies := false
+
+	parseMap := func(m map[string]string) {
+		server := strings.Trim(m["server"], "\"' ")
+		portStr := strings.Trim(m["port"], "\"' ")
+		name := strings.Trim(m["name"], "\"' ")
+		pType := strings.ToLower(strings.Trim(m["type"], "\"' "))
+		user := strings.Trim(m["username"], "\"' ")
+		pass := strings.Trim(m["password"], "\"' ")
+		tlsStr := strings.ToLower(strings.Trim(m["tls"], "\"' "))
+
+		if server == "" || portStr == "" {
+			return
+		}
+		port, _ := strconv.Atoi(portStr)
+		if port <= 0 {
+			return
+		}
+
+		proto := "socks5"
+		if pType == "http" {
+			if tlsStr == "true" || port == 443 {
+				proto = "https"
+			} else {
+				proto = "http"
+			}
+		} else if pType == "socks5" || pType == "socks" {
+			proto = "socks5"
+		} else if pType == "masque" {
+			proto = "masque"
+		}
+
+		if name == "" {
+			name = server
+		}
+		country, countryCode := inferCountryFromRemark(name)
+		nodeID := fmt.Sprintf("cs-%s-%d", server, port)
+		nodes = append(nodes, CustomNode{
+			ID:          nodeID,
+			HostName:    nodeID,
+			Host:        server,
+			Port:        port,
+			User:        user,
+			Pass:        pass,
+			Protocol:    proto,
+			Country:     country,
+			CountryCode: countryCode,
+			Remark:      name,
+			IPType:      "residential",
+		})
+	}
+
+	var curProxy map[string]string
+	commit := func() {
+		if len(curProxy) > 0 {
+			parseMap(curProxy)
+			curProxy = nil
+		}
+	}
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "proxies:") {
+			inProxies = true
+			continue
+		}
+		if inProxies && (strings.HasPrefix(trimmed, "proxy-groups:") || strings.HasPrefix(trimmed, "rules:") || strings.HasPrefix(trimmed, "rule-providers:")) {
+			commit()
+			break
+		}
+		if !inProxies {
+			continue
+		}
+
+		// 单行 flow 格式: - {name: "xxx", type: http, ...}
+		if strings.HasPrefix(trimmed, "- {") && strings.HasSuffix(trimmed, "}") {
+			commit()
+			body := trimmed[3 : len(trimmed)-1]
+			m := make(map[string]string)
+			parts := strings.Split(body, ",")
+			for _, part := range parts {
+				kv := strings.SplitN(part, ":", 2)
+				if len(kv) == 2 {
+					m[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
+				}
+			}
+			parseMap(m)
+			continue
+		}
+
+		// 多行 block 格式: - name: "xxx"
+		if strings.HasPrefix(trimmed, "- ") {
+			commit()
+			curProxy = make(map[string]string)
+			rest := strings.TrimPrefix(trimmed, "- ")
+			kv := strings.SplitN(rest, ":", 2)
+			if len(kv) == 2 {
+				curProxy[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
+			}
+		} else if curProxy != nil && strings.Contains(trimmed, ":") {
+			kv := strings.SplitN(trimmed, ":", 2)
+			if len(kv) == 2 {
+				curProxy[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
+			}
+		}
+	}
+	commit()
+	return nodes
+}
+
+// ParseSubscriptionContent 能够识别并解析多行链接、Base64 订阅以及 Clash/Mihomo YAML
+func ParseSubscriptionContent(content string) ([]CustomNode, error) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil, fmt.Errorf("订阅内容为空")
+	}
+
+	// 尝试 Base64 解码
+	if dec, err := base64.StdEncoding.DecodeString(content); err == nil && len(dec) > 0 {
+		content = string(dec)
+	} else if dec, err := base64.URLEncoding.DecodeString(content); err == nil && len(dec) > 0 {
+		content = string(dec)
+	}
+
+	// 1. 如果包含 proxies: 说明是 Clash / Mihomo 配置文件
+	if strings.Contains(content, "proxies:") {
+		nodes := parseClashYamlNodes(content)
+		if len(nodes) > 0 {
+			ptrs := make([]*CustomNode, len(nodes))
+			for i := range nodes {
+				ptrs[i] = &nodes[i]
+			}
+			BatchDetectIPInfo(ptrs)
+			return nodes, nil
+		}
+	}
+
+	// 2. 按行解析多行链接
+	var nodes []CustomNode
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		proto, h, p, u, pwd, remark, err := ParseProxyURL(line)
+		if err != nil || h == "" || p <= 0 {
+			continue
+		}
+		if remark == "" {
+			remark = fmt.Sprintf("节点-%d", i+1)
+		}
+		country, countryCode := inferCountryFromRemark(remark)
+		nodeID := fmt.Sprintf("cs-%s-%d", h, p)
+		nodes = append(nodes, CustomNode{
+			ID:          nodeID,
+			HostName:    nodeID,
+			Host:        h,
+			Port:        p,
+			User:        u,
+			Pass:        pwd,
+			Protocol:    proto,
+			Country:     country,
+			CountryCode: countryCode,
+			Remark:      remark,
+			IPType:      "residential",
+		})
+	}
+
+	if len(nodes) == 0 {
+		return nil, fmt.Errorf("未能从内容中解析出有效代理节点 (支持 SOCKS5 / HTTP / HTTPS 链接及 Clash YAML)")
+	}
+
+	ptrs := make([]*CustomNode, len(nodes))
+	for i := range nodes {
+		ptrs[i] = &nodes[i]
+	}
+	BatchDetectIPInfo(ptrs)
+	return nodes, nil
+}
+
+// FetchSourceNodes 拉取并解析外部订阅源（支持链接列表、Base64 及 Clash/Mihomo YAML）
 func FetchSourceNodes(sourceURL string, timeout time.Duration) ([]CustomNode, error) {
 	client := &http.Client{Timeout: timeout}
 	req, err := http.NewRequest(http.MethodGet, sourceURL, nil)
@@ -557,52 +909,6 @@ func FetchSourceNodes(sourceURL string, timeout time.Duration) ([]CustomNode, er
 		return nil, err
 	}
 
-	content := strings.TrimSpace(string(raw))
-	if dec, err := base64.StdEncoding.DecodeString(content); err == nil {
-		content = string(dec)
-	} else if dec, err := base64.URLEncoding.DecodeString(content); err == nil {
-		content = string(dec)
-	}
-
-	var nodes []CustomNode
-	lines := strings.Split(content, "\n")
-	for i, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		h, p, u, pwd, remark, err := ParseSocksURL(line)
-		if err != nil || h == "" || p <= 0 {
-			continue
-		}
-		if remark == "" {
-			remark = fmt.Sprintf("节点-%d", i+1)
-		}
-		nodeID := fmt.Sprintf("cs-%s-%d", h, p)
-		nodes = append(nodes, CustomNode{
-			ID:          nodeID,
-			HostName:    nodeID,
-			Host:        h,
-			Port:        p,
-			User:        u,
-			Pass:        pwd,
-			Country:     "自定义",
-			CountryCode: "CUSTOM",
-			Remark:      remark,
-			IPType:      "residential", // 初始默认
-		})
-	}
-
-	if len(nodes) == 0 {
-		return nil, fmt.Errorf("未在该源中解析出有效 SOCKS5 节点")
-	}
-
-	// 批量探测 IP 属性与家宽/机房分类
-	ptrs := make([]*CustomNode, len(nodes))
-	for i := range nodes {
-		ptrs[i] = &nodes[i]
-	}
-	BatchDetectIPInfo(ptrs)
-
-	return nodes, nil
+	return ParseSubscriptionContent(string(raw))
 }
+

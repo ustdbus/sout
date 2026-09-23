@@ -521,38 +521,71 @@ option{background:#161b22;color:var(--text);padding:8px}
   </div>
 </div>
 
-<!-- Modal 6: 添加自定义 SOCKS5 出口 -->
+<!-- Modal 6: 添加自定义出口 -->
 <div class="modal" id="customExitModal">
-  <div class="sheet">
+  <div class="sheet" style="max-width:600px">
     <div class="head">
-      <h2>添加自定义 SOCKS5 出口</h2>
+      <h2>添加自定义出口 (SOCKS5 / HTTP / 订阅导入)</h2>
       <span class="spacer"></span>
       <button class="icon" data-close="customExitModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
     <div class="body">
-      <label class="f">
-        <span>快捷导入 (socks5:// 链接或 host:port:user:pass)</span>
-        <input type="text" id="csRawUrl" placeholder="如 socks5://user:pass@1.2.3.4:1080#香港家宽">
-      </label>
-      <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-top:10px">
-        <label class="f"><span>服务器地址 (IP 或域名)</span><input type="text" id="csHost" placeholder="如 123.45.67.89"></label>
-        <label class="f"><span>端口</span><input type="text" id="csPort" inputmode="numeric" placeholder="如 1080"></label>
+      <div style="display:flex;gap:6px;margin-bottom:14px">
+        <button type="button" class="tab-pill active" id="tabSingleNodeBtn">单个节点添加</button>
+        <button type="button" class="tab-pill" id="tabBatchNodeBtn">批量导入 / 订阅解析</button>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">
-        <label class="f"><span>用户名 (可选)</span><input type="text" id="csUser" placeholder="留空为无认证"></label>
-        <label class="f"><span>密码 (可选)</span><input type="password" id="csPass" placeholder="留空为无认证"></label>
+
+      <!-- 单节点视图 -->
+      <div id="customExitSingleView">
+        <label class="f">
+          <span>快捷导入 (socks5://、http://、https:// 链接或 host:port:user:pass)</span>
+          <input type="text" id="csRawUrl" placeholder="如 http://user:pass@1.2.3.4:443#香港落地 或 socks5://...">
+        </label>
+        <div style="display:grid;grid-template-columns:120px 2fr 1fr;gap:12px;margin-top:10px">
+          <label class="f">
+            <span>代理协议</span>
+            <select id="csProtocol" style="background:#0d1117;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13px">
+              <option value="socks5">SOCKS5</option>
+              <option value="http">HTTP</option>
+              <option value="https">HTTPS (TLS)</option>
+            </select>
+          </label>
+          <label class="f"><span>服务器地址 (IP 或域名)</span><input type="text" id="csHost" placeholder="如 123.45.67.89"></label>
+          <label class="f"><span>端口</span><input type="text" id="csPort" inputmode="numeric" placeholder="如 1080 / 443"></label>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">
+          <label class="f"><span>用户名 (可选)</span><input type="text" id="csUser" placeholder="留空为无认证"></label>
+          <label class="f"><span>密码 (可选)</span><input type="password" id="csPass" placeholder="留空为无认证"></label>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">
+          <label class="f"><span>地区/国家标识</span><input type="text" id="csCountry" placeholder="如 香港 / 日本 / 美国 / 自定义"></label>
+          <label class="f"><span>节点备注名</span><input type="text" id="csRemark" placeholder="如 私人住宅S5 或 Windscribe香港"></label>
+        </div>
+        <div id="csTestResult" style="min-height:20px;font-size:12px;margin-top:8px"></div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">
-        <label class="f"><span>地区/国家标识</span><input type="text" id="csCountry" placeholder="如 香港 / 日本 / 美国 / 自定义"></label>
-        <label class="f"><span>节点备注名</span><input type="text" id="csRemark" placeholder="如 私人住宅S5"></label>
+
+      <!-- 批量与订阅导入视图 -->
+      <div id="customExitBatchView" style="display:none">
+        <label class="f">
+          <span>粘贴订阅链接或多行节点列表 (兼容 Clash/Mihomo YAML、Base64 与节点链接)</span>
+          <textarea id="csBatchContent" rows="7" spellcheck="false" placeholder="支持直接粘贴以下任意一种格式：&#10;1. 订阅链接 (如 https://raw.githubusercontent.com/ustdbus/vpn-out/sub/all-proxies.txt)&#10;2. 批量节点链接 (每行一个 socks5:// 或 http:// 或 https:// 链接)&#10;3. Clash / Mihomo 配置文件 YAML 内容 (包含 proxies: 列表)&#10;4. 标准 Base64 订阅文本" style="width:100%;border:1px solid var(--line);background:#0d1117;color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;padding:8px;border-radius:6px;resize:vertical"></textarea>
+        </label>
+        <div id="csBatchStatus" style="min-height:20px;font-size:12px;margin-top:8px"></div>
       </div>
-      <div id="csTestResult" style="min-height:20px;font-size:12px;margin-top:8px"></div>
     </div>
     <div class="foot">
-      <button id="csTestBtn">测试连通性</button>
-      <span class="spacer"></span>
-      <button data-close="customExitModal">取消</button>
-      <button class="primary" id="saveCustomExitBtn">添加并启用</button>
+      <div id="customExitSingleFoot" style="display:flex;width:100%;align-items:center">
+        <button id="csTestBtn">测试连通性</button>
+        <span class="spacer"></span>
+        <button data-close="customExitModal">取消</button>
+        <button class="primary" id="saveCustomExitBtn">添加并启用</button>
+      </div>
+      <div id="customExitBatchFoot" style="display:none;width:100%;align-items:center">
+        <span style="font-size:12px;color:var(--dim)">将自动解析所有节点并建立出口</span>
+        <span class="spacer"></span>
+        <button data-close="customExitModal">取消</button>
+        <button class="primary" id="saveBatchExitBtn">批量解析并建立出口</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1437,9 +1470,30 @@ $('#checkUpdateBtn').onclick = async e => {
   e.target.disabled = false;
 };
 
-// ---- 自定义 SOCKS5 出口相关 ----
+// ---- 自定义出口（SOCKS5 / HTTP / 批量订阅）相关 ----
+function switchCustomExitTab(tab){
+  if(tab === 'single'){
+    $('#tabSingleNodeBtn').classList.add('active');
+    $('#tabBatchNodeBtn').classList.remove('active');
+    $('#customExitSingleView').style.display = 'block';
+    $('#customExitBatchView').style.display = 'none';
+    $('#customExitSingleFoot').style.display = 'flex';
+    $('#customExitBatchFoot').style.display = 'none';
+  } else {
+    $('#tabSingleNodeBtn').classList.remove('active');
+    $('#tabBatchNodeBtn').classList.add('active');
+    $('#customExitSingleView').style.display = 'none';
+    $('#customExitBatchView').style.display = 'block';
+    $('#customExitSingleFoot').style.display = 'none';
+    $('#customExitBatchFoot').style.display = 'flex';
+  }
+}
+$('#tabSingleNodeBtn').onclick = () => switchCustomExitTab('single');
+$('#tabBatchNodeBtn').onclick = () => switchCustomExitTab('batch');
+
 $('#openCustomExitModalBtn').onclick = () => {
   $('#csRawUrl').value = '';
+  $('#csProtocol').value = 'socks5';
   $('#csHost').value = '';
   $('#csPort').value = '';
   $('#csUser').value = '';
@@ -1447,6 +1501,9 @@ $('#openCustomExitModalBtn').onclick = () => {
   $('#csCountry').value = '';
   $('#csRemark').value = '';
   $('#csTestResult').innerHTML = '';
+  $('#csBatchContent').value = '';
+  $('#csBatchStatus').innerHTML = '';
+  switchCustomExitTab('single');
   openModal('customExitModal');
 };
 
@@ -1456,10 +1513,31 @@ $('#csRawUrl').oninput = () => {
   try{
     if(raw.startsWith('socks5://') || raw.startsWith('socks://')){
       const u = new URL(raw);
+      $('#csProtocol').value = 'socks5';
       $('#csHost').value = u.hostname;
       $('#csPort').value = u.port || 1080;
-      $('#csUser').value = u.username || '';
-      $('#csPass').value = u.password || '';
+      $('#csUser').value = u.username ? decodeURIComponent(u.username) : '';
+      $('#csPass').value = u.password ? decodeURIComponent(u.password) : '';
+      if(u.hash){
+        $('#csRemark').value = decodeURIComponent(u.hash.replace(/^#/, ''));
+      }
+    } else if(raw.startsWith('https://')){
+      const u = new URL(raw);
+      $('#csProtocol').value = 'https';
+      $('#csHost').value = u.hostname;
+      $('#csPort').value = u.port || 443;
+      $('#csUser').value = u.username ? decodeURIComponent(u.username) : '';
+      $('#csPass').value = u.password ? decodeURIComponent(u.password) : '';
+      if(u.hash){
+        $('#csRemark').value = decodeURIComponent(u.hash.replace(/^#/, ''));
+      }
+    } else if(raw.startsWith('http://')){
+      const u = new URL(raw);
+      $('#csProtocol').value = (u.port === '443' ? 'https' : 'http');
+      $('#csHost').value = u.hostname;
+      $('#csPort').value = u.port || 80;
+      $('#csUser').value = u.username ? decodeURIComponent(u.username) : '';
+      $('#csPass').value = u.password ? decodeURIComponent(u.password) : '';
       if(u.hash){
         $('#csRemark').value = decodeURIComponent(u.hash.replace(/^#/, ''));
       }
@@ -1468,6 +1546,7 @@ $('#csRawUrl').oninput = () => {
       if(parts.length >= 2){
         $('#csHost').value = parts[0];
         $('#csPort').value = parts[1];
+        if(parts[1] === '443') $('#csProtocol').value = 'https';
         if(parts.length >= 4){
           $('#csUser').value = parts[2];
           $('#csPass').value = parts[3];
@@ -1480,6 +1559,7 @@ $('#csRawUrl').oninput = () => {
 $('#csTestBtn').onclick = async e => {
   const host = $('#csHost').value.trim();
   const port = parseInt($('#csPort').value.trim(), 10);
+  const proto = $('#csProtocol').value || 'socks5';
   if(!host || !port){ toast('请填写地址和端口', true); return; }
   e.target.disabled = true;
   $('#csTestResult').innerHTML = '<span style="color:var(--dim)">正在连接并探测出口 IP...</span>';
@@ -1490,11 +1570,12 @@ $('#csTestBtn').onclick = async e => {
       body: JSON.stringify({
         host: host,
         port: port,
+        protocol: proto,
         user: $('#csUser').value.trim(),
         pass: $('#csPass').value.trim(),
       }),
     });
-    $('#csTestResult').innerHTML = '<span style="color:var(--ok)">✓ 连通成功！出口 IP: ' + esc(res.exit_ip) + ' (' + res.ping + ' ms)</span>';
+    $('#csTestResult').innerHTML = '<span style="color:var(--ok)">✓ 连通成功！出口 IP: ' + esc(res.exit_ip) + ' (' + res.ping + ' ms) [' + esc(proto.toUpperCase()) + ']</span>';
   }catch(err){
     $('#csTestResult').innerHTML = '<span style="color:var(--danger)">✗ 连接失败: ' + esc(err.message) + '</span>';
   }
@@ -1504,6 +1585,7 @@ $('#csTestBtn').onclick = async e => {
 $('#saveCustomExitBtn').onclick = async e => {
   const host = $('#csHost').value.trim();
   const port = parseInt($('#csPort').value.trim(), 10);
+  const proto = $('#csProtocol').value || 'socks5';
   if(!host || !port){ toast('请填写服务器地址和端口', true); return; }
   e.target.disabled = true;
   try{
@@ -1513,6 +1595,7 @@ $('#saveCustomExitBtn').onclick = async e => {
       body: JSON.stringify({
         host: host,
         port: port,
+        protocol: proto,
         user: $('#csUser').value.trim(),
         pass: $('#csPass').value.trim(),
         country: $('#csCountry').value.trim() || '自定义',
@@ -1520,10 +1603,31 @@ $('#saveCustomExitBtn').onclick = async e => {
         remark: $('#csRemark').value.trim() || host,
       }),
     });
-    toast('自定义 SOCKS5 出口已添加并启用');
+    toast('自定义出口已添加并启用');
     closeModal('customExitModal');
     poll();
   }catch(err){ toast(err.message, true); }
+  e.target.disabled = false;
+};
+
+$('#saveBatchExitBtn').onclick = async e => {
+  const content = $('#csBatchContent').value.trim();
+  if(!content){ toast('请粘贴订阅内容或节点链接', true); return; }
+  e.target.disabled = true;
+  const statusBox = $('#csBatchStatus');
+  statusBox.innerHTML = '<span style="color:var(--dim)">正在解析节点并批量建立出口...</span>';
+  try{
+    const res = await api('/api/custom/socks/batch-add', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ content: content })
+    });
+    toast(res.message || ('已成功添加 ' + res.added + ' 个出口'));
+    closeModal('customExitModal');
+    poll();
+  }catch(err){
+    statusBox.innerHTML = '<span style="color:var(--danger)">✗ 导入失败: ' + esc(err.message) + '</span>';
+  }
   e.target.disabled = false;
 };
 

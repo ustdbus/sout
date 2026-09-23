@@ -159,6 +159,7 @@ func main() {
 
 	mux.HandleFunc("/api/branch/toggle", apiBranchToggle(mgr))
 	mux.HandleFunc("/api/custom/socks/add", apiCustomSocksAdd(mgr))
+	mux.HandleFunc("/api/custom/socks/batch-add", apiCustomSocksBatchAdd(mgr))
 	mux.HandleFunc("/api/custom/socks/test", apiCustomSocksTest)
 	mux.HandleFunc("/api/custom/source/add", apiCustomSourceAdd)
 	mux.HandleFunc("/api/custom/source/list", apiCustomSourceList(mgr))
@@ -1096,45 +1097,50 @@ func apiCustomSocksTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		RawURL string `json:"raw_url"`
-		Host   string `json:"host"`
-		Port   int    `json:"port"`
-		User   string `json:"user"`
-		Pass   string `json:"pass"`
+		RawURL   string `json:"raw_url"`
+		Host     string `json:"host"`
+		Port     int    `json:"port"`
+		User     string `json:"user"`
+		Pass     string `json:"pass"`
+		Protocol string `json:"protocol"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	h, p, u, pwd := req.Host, req.Port, req.User, req.Pass
+	proto, h, p, u, pwd := req.Protocol, req.Host, req.Port, req.User, req.Pass
+	if proto == "" {
+		proto = "socks5"
+	}
 	if req.RawURL != "" {
-		parsedH, parsedP, parsedU, parsedPwd, _, err := ParseSocksURL(req.RawURL)
+		parsedProto, parsedH, parsedP, parsedU, parsedPwd, _, err := ParseProxyURL(req.RawURL)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		h, p, u, pwd = parsedH, parsedP, parsedU, parsedPwd
+		proto, h, p, u, pwd = parsedProto, parsedH, parsedP, parsedU, parsedPwd
 	}
 	if h == "" || p <= 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "主机地址与端口不能为空"})
 		return
 	}
 	remoteAddr := fmt.Sprintf("%s:%d", h, p)
-	exitIP, ping, ipType, isp, err := ProbeCustomSocks(remoteAddr, u, pwd, 8*time.Second)
+	exitIP, ping, ipType, isp, err := ProbeCustomProxy(remoteAddr, proto, u, pwd, 8*time.Second)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("连通性测试失败: %v", err)})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":      true,
-		"exit_ip": exitIP,
-		"ping":    ping,
-		"ip_type": ipType,
-		"isp":     isp,
-		"host":    h,
-		"port":    p,
-		"user":    u,
-		"pass":    pwd,
+		"ok":       true,
+		"exit_ip":  exitIP,
+		"ping":     ping,
+		"ip_type":  ipType,
+		"isp":      isp,
+		"host":     h,
+		"port":     p,
+		"user":     u,
+		"pass":     pwd,
+		"protocol": proto,
 	})
 }
 
@@ -1150,6 +1156,7 @@ func apiCustomSocksAdd(m *Manager) http.HandlerFunc {
 			Port        int    `json:"port"`
 			User        string `json:"user"`
 			Pass        string `json:"pass"`
+			Protocol    string `json:"protocol"`
 			Remark      string `json:"remark"`
 			Country     string `json:"country"`
 			CountryCode string `json:"country_code"`
@@ -1158,14 +1165,17 @@ func apiCustomSocksAdd(m *Manager) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		h, p, u, pwd, remark := req.Host, req.Port, req.User, req.Pass, req.Remark
+		proto, h, p, u, pwd, remark := req.Protocol, req.Host, req.Port, req.User, req.Pass, req.Remark
+		if proto == "" {
+			proto = "socks5"
+		}
 		if req.RawURL != "" {
-			parsedH, parsedP, parsedU, parsedPwd, parsedRemark, err := ParseSocksURL(req.RawURL)
+			parsedProto, parsedH, parsedP, parsedU, parsedPwd, parsedRemark, err := ParseProxyURL(req.RawURL)
 			if err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 				return
 			}
-			h, p, u, pwd = parsedH, parsedP, parsedU, parsedPwd
+			proto, h, p, u, pwd = parsedProto, parsedH, parsedP, parsedU, parsedPwd
 			if remark == "" {
 				remark = parsedRemark
 			}
@@ -1178,19 +1188,23 @@ func apiCustomSocksAdd(m *Manager) http.HandlerFunc {
 			remark = h
 		}
 		remoteAddr := fmt.Sprintf("%s:%d", h, p)
-		exitIP, ping, ipType, isp, err := ProbeCustomSocks(remoteAddr, u, pwd, 10*time.Second)
+		exitIP, ping, ipType, isp, err := ProbeCustomProxy(remoteAddr, proto, u, pwd, 10*time.Second)
 		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("连接 SOCKS5 代理失败: %v", err)})
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("连接代理失败: %v", err)})
 			return
 		}
 
 		country := req.Country
-		if country == "" {
-			country = "自定义"
-		}
 		countryCode := req.CountryCode
-		if countryCode == "" {
-			countryCode = "CUSTOM"
+		if country == "" || country == "自定义" {
+			infC, infCC := inferCountryFromRemark(remark)
+			if infC != "自定义" {
+				country = infC
+				countryCode = infCC
+			} else {
+				country = "自定义"
+				countryCode = "CUSTOM"
+			}
 		}
 
 		nodeID := fmt.Sprintf("custom-%s-%d", h, p)
@@ -1201,6 +1215,7 @@ func apiCustomSocksAdd(m *Manager) http.HandlerFunc {
 			Port:        p,
 			User:        u,
 			Pass:        pwd,
+			Protocol:    proto,
 			Country:     country,
 			CountryCode: countryCode,
 			Remark:      remark,
@@ -1217,12 +1232,84 @@ func apiCustomSocksAdd(m *Manager) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":       true,
+			"slot":     t.Slot,
+			"port":     t.Port,
+			"exit_ip":  exitIP,
+			"ip_type":  ipType,
+			"isp":      isp,
+			"protocol": proto,
+		})
+	}
+}
+
+// apiCustomSocksBatchAdd 支持批量导入节点或解析外部订阅内容并一键建立出口
+func apiCustomSocksBatchAdd(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
+			return
+		}
+		var req struct {
+			Content string `json:"content"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		raw := strings.TrimSpace(req.Content)
+		if raw == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "导入内容不能为空"})
+			return
+		}
+
+		var nodes []CustomNode
+		var err error
+		if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+			// 如果输入的是单一 URL 且不是代理协议链接，优先尝试拉取
+			if !strings.Contains(raw, "@") && (strings.Contains(raw, "/sub") || strings.Contains(raw, ".txt") || strings.Contains(raw, ".yaml") || strings.Contains(raw, "raw.githubusercontent.com")) {
+				nodes, err = FetchSourceNodes(raw, 15*time.Second)
+			}
+		}
+
+		if len(nodes) == 0 {
+			nodes, err = ParseSubscriptionContent(raw)
+		}
+		if err != nil || len(nodes) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("解析失败: %v", err)})
+			return
+		}
+
+		addedCount := 0
+		var addedList []map[string]any
+		for _, n := range nodes {
+			t, err := m.AddCustomExit(n)
+			if err != nil {
+				continue
+			}
+			addedCount++
+			addedList = append(addedList, map[string]any{
+				"slot":        t.Slot,
+				"port":        t.Port,
+				"remark":      n.Remark,
+				"country":     n.Country,
+				"protocol":    n.Protocol,
+				"host":        n.Host,
+				"server_port": n.Port,
+			})
+		}
+
+		if addedCount == 0 {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "未能建立出口，可能端口池已满或节点不可达"})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":      true,
-			"slot":    t.Slot,
-			"port":    t.Port,
-			"exit_ip": exitIP,
-			"ip_type": ipType,
-			"isp":     isp,
+			"added":   addedCount,
+			"total":   len(nodes),
+			"nodes":   addedList,
+			"message": fmt.Sprintf("成功解析并建立了 %d 个自定义出口隧道", addedCount),
 		})
 	}
 }

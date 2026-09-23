@@ -37,6 +37,7 @@ type Tunnel struct {
 	CustomPort     int       `json:"custom_port,omitempty"`
 	CustomUser     string    `json:"custom_user,omitempty"`
 	CustomPass     string    `json:"custom_pass,omitempty"`
+	CustomProto    string    `json:"custom_proto,omitempty"` // "socks5" | "http" | "https"
 	TargetPoolType string    `json:"target_pool_type,omitempty"` // "residential" | "datacenter" | "all"
 	TargetRegion   string    `json:"target_region,omitempty"`    // 国家代码或源 (如 "US", "JP", "ALL")
 	TargetSourceID string    `json:"target_source_id,omitempty"` // 源 ID
@@ -402,9 +403,9 @@ func (t *Tunnel) handleCustomForward(clientConn net.Conn, targetAddr string) {
 	}
 	dstPort := int(portBuf[0])<<8 | int(portBuf[1])
 
-	// 3. 连接远端上游 SOCKS5 并完成握手
+	// 3. 连接远端上游代理并完成握手
 	dstAddr := net.JoinHostPort(dstHost, strconv.Itoa(dstPort))
-	targetConn, err := dialSocks5(targetAddr, t.CustomUser, t.CustomPass, dstAddr, 15*time.Second)
+	targetConn, err := dialUpstreamProxy(targetAddr, t.CustomProto, t.CustomUser, t.CustomPass, dstAddr, 15*time.Second)
 	if err != nil {
 		clientConn.Write([]byte{0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0}) // Host unreachable
 		return

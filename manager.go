@@ -536,6 +536,7 @@ func (m *Manager) AddCustomExit(node CustomNode) (*Tunnel, error) {
 		CustomPort:     node.Port,
 		CustomUser:     node.User,
 		CustomPass:     node.Pass,
+		CustomProto:    node.Protocol,
 		Status:         "starting",
 		Since:          time.Now(),
 		Cred:           cred,
