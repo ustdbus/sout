@@ -269,6 +269,7 @@ func (m *Manager) tryNode(t *Tunnel) error {
 		t.CustomPort = t.Node.Port
 		t.CustomUser = t.Node.User
 		t.CustomPass = t.Node.Pass
+		t.CustomProto = t.Node.Protocol
 		return t.startCustom()
 	}
 	return t.start(m.workDir)

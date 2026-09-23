@@ -240,14 +240,15 @@ func (t *Tunnel) waitExitIP(timeout time.Duration) (string, error) {
 }
 
 func (t *Tunnel) probeCustomExitIP() (string, error) {
-	// 自定义 SOCKS5 代理通过本地监听端口建立 HTTP 客户端探测
+	// 自定义代理通过本地监听端口建立 HTTP 客户端探测
 	proxyURL, err := url.Parse(fmt.Sprintf("socks5://%s:%s@127.0.0.1:%d", t.Cred.User, t.Cred.Pass, t.Port))
 	if err != nil {
 		return "", err
 	}
 
 	transport := &http.Transport{
-		Proxy: http.ProxyURL(proxyURL),
+		Proxy:           http.ProxyURL(proxyURL),
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		DialContext: (&net.Dialer{
 			Timeout:   6 * time.Second,
 			KeepAlive: 30 * time.Second,
@@ -259,7 +260,7 @@ func (t *Tunnel) probeCustomExitIP() (string, error) {
 		Timeout:   10 * time.Second,
 	}
 
-	for _, u := range []string{"http://api.ipify.org", "http://ifconfig.me", "http://icanhazip.com"} {
+	for _, u := range []string{"https://api.ipify.org", "http://api.ipify.org", "http://ifconfig.me", "http://icanhazip.com"} {
 		resp, err := client.Get(u)
 		if err != nil {
 			continue
@@ -275,7 +276,15 @@ func (t *Tunnel) probeCustomExitIP() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("自定义 SOCKS5 探测出口 IP 失败")
+	// 若本地 SOCKS5 端口探测超时，回退尝试通过 ProbeCustomProxy 进行上游直连探测
+	if t.CustomHost != "" && t.CustomPort > 0 {
+		proxyAddr := fmt.Sprintf("%s:%d", t.CustomHost, t.CustomPort)
+		if ip, _, _, _, pErr := ProbeCustomProxy(proxyAddr, t.CustomProto, t.CustomUser, t.CustomPass, 8*time.Second); pErr == nil && ip != "" {
+			return ip, nil
+		}
+	}
+
+	return "", fmt.Errorf("自定义代理探测出口 IP 失败")
 }
 
 func (t *Tunnel) startCustom() error {
