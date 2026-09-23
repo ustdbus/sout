@@ -328,3 +328,97 @@ func TestLiveVpnSubscriptionIntegration(t *testing.T) {
 		t.Logf("Probe success! ExitIP: %s, Ping: %dms, IPType: %s, ISP: %s", exitIP, ping, ipType, isp)
 	}
 }
+
+func TestParseWireGuardURL(t *testing.T) {
+	raw := "wireguard://a1b2c3d4e5f6g7h8%3D@engage.cloudflareclient.com:2408?publickey=bmXOC%2BF1FxEMF9dyiK2H5%2F1SUtzHZsVoW%2B%2BjnWgmtEs%3D&address=172.16.0.2%2F32%2C2606%3A4700%3A110%3A%3A1%2F128&reserved=0%2C0%2C0&mtu=1280#WARP-WireGuard"
+	node, err := parseWireGuardURL(raw)
+	if err != nil {
+		t.Fatalf("parseWireGuardURL failed: %v", err)
+	}
+	if node.Protocol != "wireguard" {
+		t.Errorf("expected protocol wireguard, got %s", node.Protocol)
+	}
+	if node.Host != "engage.cloudflareclient.com" || node.Port != 2408 {
+		t.Errorf("unexpected host/port: %s:%d", node.Host, node.Port)
+	}
+	if node.Remark != "WARP-WireGuard" {
+		t.Errorf("unexpected remark: %s", node.Remark)
+	}
+	if node.Config == "" {
+		t.Fatalf("expected non-empty node.Config")
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal([]byte(node.Config), &m); err != nil {
+		t.Fatalf("node.Config is not valid json: %v", err)
+	}
+	if m["type"] != "wireguard" || m["server"] != "engage.cloudflareclient.com" {
+		t.Errorf("unexpected config map: %v", m)
+	}
+}
+
+func TestParseSubscriptionContent_WireGuardJSON(t *testing.T) {
+	jsonContent := `{
+  "type": "wireguard",
+  "tag": "WARP-WireGuard-Test",
+  "server": "engage.cloudflareclient.com",
+  "server_port": 2408,
+  "local_address": [
+    "172.16.0.2/32",
+    "2606:4700:110:83a0::1/128"
+  ],
+  "private_key": "private_key_base64",
+  "peer_public_key": "bmXOC+F1FxEMF9dyiK2H5/1SUtzHZsVoW++jnWgmtEs=",
+  "reserved": [0, 0, 0],
+  "mtu": 1280
+}`
+	nodes, err := ParseSubscriptionContent(jsonContent)
+	if err != nil {
+		t.Fatalf("ParseSubscriptionContent(json) error: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(nodes))
+	}
+	n := nodes[0]
+	if n.Protocol != "wireguard" {
+		t.Errorf("expected protocol wireguard, got %s", n.Protocol)
+	}
+	if n.Remark != "WARP-WireGuard-Test" {
+		t.Errorf("expected remark WARP-WireGuard-Test, got %s", n.Remark)
+	}
+	if n.CountryCode != "CF" {
+		t.Errorf("expected countryCode CF, got %s", n.CountryCode)
+	}
+}
+
+func TestParseSubscriptionContent_WireGuardClash(t *testing.T) {
+	yaml := `
+proxies:
+  - name: WARP-WireGuard-Node
+    type: wireguard
+    server: engage.cloudflareclient.com
+    port: 2408
+    ip: 172.16.0.2
+    ipv6: 2606:4700:110::1
+    public-key: bmXOC+F1FxEMF9dyiK2H5/1SUtzHZsVoW++jnWgmtEs=
+    private-key: privkey_base64
+    udp: true
+    mtu: 1280
+    reserved: [0, 0, 0]
+`
+	nodes, err := ParseSubscriptionContent(yaml)
+	if err != nil {
+		t.Fatalf("ParseSubscriptionContent(yaml) error: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(nodes))
+	}
+	n := nodes[0]
+	if n.Protocol != "wireguard" {
+		t.Errorf("expected protocol wireguard, got %s", n.Protocol)
+	}
+	if n.Config == "" {
+		t.Errorf("expected config not empty")
+	}
+}
+

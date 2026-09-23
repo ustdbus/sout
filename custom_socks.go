@@ -28,7 +28,7 @@ type CustomNode struct {
 	Port        int     `json:"port"`
 	User        string  `json:"user"`
 	Pass        string  `json:"pass"`
-	Protocol    string  `json:"protocol,omitempty"` // "socks5" | "http" | "https" | "masque"
+	Protocol    string  `json:"protocol,omitempty"` // "socks5" | "http" | "https" | "wireguard" | "masque"
 	Country     string  `json:"country"`
 	CountryCode string  `json:"country_code"`
 	Remark      string  `json:"remark"`
@@ -38,6 +38,7 @@ type CustomNode struct {
 	IPType      string  `json:"ip_type"` // "residential" | "datacenter"
 	ISP         string  `json:"isp,omitempty"`
 	SourceID    string  `json:"source_id,omitempty"`
+	Config      string  `json:"config,omitempty"`
 }
 
 // CustomSource 记录一个第三方的 SOCKS5 订阅/API 节点源
@@ -644,6 +645,9 @@ func inferCountryFromRemark(remark string) (string, string) {
 	if strings.Contains(r, "美洲") || strings.Contains(r, "america") {
 		return "美洲", "AM"
 	}
+	if strings.Contains(r, "warp") || strings.Contains(r, "cloudflare") {
+		return "WARP", "CF"
+	}
 	return "自定义", "CUSTOM"
 }
 
@@ -663,6 +667,8 @@ func ParseProxyURL(raw string) (proto, host string, port int, user, pass, remark
 		proto = "http"
 	} else if strings.HasPrefix(raw, "masque://") {
 		proto = "masque"
+	} else if strings.HasPrefix(raw, "wireguard://") {
+		proto = "wireguard"
 	}
 
 	if strings.Contains(raw, "://") {
@@ -677,6 +683,8 @@ func ParseProxyURL(raw string) (proto, host string, port int, user, pass, remark
 		} else {
 			if proto == "https" || proto == "masque" {
 				port = 443
+			} else if proto == "wireguard" {
+				port = 2408
 			} else if proto == "http" {
 				port = 80
 			} else {
@@ -723,6 +731,122 @@ func ParseProxyURL(raw string) (proto, host string, port int, user, pass, remark
 func ParseSocksURL(raw string) (host string, port int, user, pass, remark string, err error) {
 	_, host, port, user, pass, remark, err = ParseProxyURL(raw)
 	return host, port, user, pass, remark, err
+}
+
+// parseWireGuardURL 解析 wireguard:// 链接并组装标准 sing-box WireGuard outbound JSON
+func parseWireGuardURL(raw string) (*CustomNode, error) {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, "wireguard://") {
+		return nil, fmt.Errorf("非 wireguard 链接")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	host := u.Hostname()
+	if host == "" {
+		return nil, fmt.Errorf("wireguard 链接缺少主机地址")
+	}
+	port := 2408
+	if pStr := u.Port(); pStr != "" {
+		if p, err := strconv.Atoi(pStr); err == nil && p > 0 {
+			port = p
+		}
+	}
+
+	privKey := ""
+	if u.User != nil {
+		privKey = u.User.Username()
+		if unescaped, err := url.QueryUnescape(privKey); err == nil {
+			privKey = unescaped
+		}
+	}
+
+	remark, _ := url.QueryUnescape(u.Fragment)
+	if remark == "" {
+		remark = "WARP-WireGuard"
+	}
+
+	q := u.Query()
+	peerPub := q.Get("publickey")
+	if peerPub == "" {
+		peerPub = q.Get("public_key")
+	}
+	if peerPub == "" {
+		peerPub = "bmXOC+F1FxEMF9dyiK2H5/1SUtzHZsVoW++jnWgmtEs="
+	}
+
+	addrStr := q.Get("address")
+	if addrStr == "" {
+		addrStr = q.Get("ip")
+	}
+	var addresses []string
+	if addrStr != "" {
+		for _, a := range strings.Split(addrStr, ",") {
+			a = strings.TrimSpace(a)
+			if a != "" {
+				if !strings.Contains(a, "/") {
+					if strings.Contains(a, ":") {
+						a += "/128"
+					} else {
+						a += "/32"
+					}
+				}
+				addresses = append(addresses, a)
+			}
+		}
+	}
+	if len(addresses) == 0 {
+		addresses = []string{"172.16.0.2/32"}
+	}
+
+	var reserved []int
+	if reservedStr := q.Get("reserved"); reservedStr != "" {
+		for _, r := range strings.Split(reservedStr, ",") {
+			r = strings.TrimSpace(r)
+			if n, err := strconv.Atoi(r); err == nil {
+				reserved = append(reserved, n)
+			}
+		}
+	}
+
+	mtu := 1280
+	if mStr := q.Get("mtu"); mStr != "" {
+		if m, err := strconv.Atoi(mStr); err == nil && m > 0 {
+			mtu = m
+		}
+	}
+
+	cfgMap := map[string]any{
+		"type":            "wireguard",
+		"tag":             remark,
+		"server":          host,
+		"server_port":     port,
+		"private_key":     privKey,
+		"peer_public_key": peerPub,
+		"local_address":   addresses,
+		"mtu":             mtu,
+	}
+	if len(reserved) > 0 {
+		cfgMap["reserved"] = reserved
+	}
+	blob, _ := json.Marshal(cfgMap)
+
+	country, countryCode := inferCountryFromRemark(remark)
+	nodeID := fmt.Sprintf("cs-wg-%s-%d", host, port)
+	return &CustomNode{
+		ID:          nodeID,
+		HostName:    nodeID,
+		Host:        host,
+		Port:        port,
+		Protocol:    "wireguard",
+		Country:     country,
+		CountryCode: countryCode,
+		Remark:      remark,
+		IPType:      "datacenter",
+		ISP:         "Cloudflare, Inc.",
+		Config:      string(blob),
+	}, nil
 }
 
 // splitYamlFlow 智能分割单行 YAML flow 映射，保护引号与方括号内部的逗号
@@ -794,6 +918,8 @@ func parseClashYamlNodes(content string) []CustomNode {
 			proto = "socks5"
 		} else if pType == "masque" {
 			proto = "masque"
+		} else if pType == "wireguard" {
+			proto = "wireguard"
 		} else {
 			// 安全过滤未支持的代理协议（如 ss, vmess, trojan, hysteria 等）
 			return
@@ -802,8 +928,59 @@ func parseClashYamlNodes(content string) []CustomNode {
 		if name == "" {
 			name = server
 		}
+		configJSON := ""
+		if proto == "wireguard" {
+			privKey := strings.Trim(m["private-key"], "\"' ")
+			pubKey := strings.Trim(m["public-key"], "\"' ")
+			if pubKey == "" {
+				pubKey = "bmXOC+F1FxEMF9dyiK2H5/1SUtzHZsVoW++jnWgmtEs="
+			}
+			ip4 := strings.Trim(m["ip"], "\"' ")
+			ip6 := strings.Trim(m["ipv6"], "\"' ")
+			var addrs []string
+			if ip4 != "" {
+				if !strings.Contains(ip4, "/") {
+					addrs = append(addrs, ip4+"/32")
+				} else {
+					addrs = append(addrs, ip4)
+				}
+			}
+			if ip6 != "" {
+				if !strings.Contains(ip6, "/") {
+					addrs = append(addrs, ip6+"/128")
+				} else {
+					addrs = append(addrs, ip6)
+				}
+			}
+			if len(addrs) == 0 {
+				addrs = []string{"172.16.0.2/32"}
+			}
+			mtu := 1280
+			if mStr := strings.Trim(m["mtu"], "\"' "); mStr != "" {
+				if n, err := strconv.Atoi(mStr); err == nil && n > 0 {
+					mtu = n
+				}
+			}
+			cfgMap := map[string]any{
+				"type":            "wireguard",
+				"tag":             name,
+				"server":          server,
+				"server_port":     port,
+				"private_key":     privKey,
+				"peer_public_key": pubKey,
+				"local_address":   addrs,
+				"mtu":             mtu,
+			}
+			blob, _ := json.Marshal(cfgMap)
+			configJSON = string(blob)
+		}
+
 		country, countryCode := inferCountryFromRemark(name)
 		nodeID := fmt.Sprintf("cs-%s-%d", server, port)
+		ipType := "residential"
+		if proto == "wireguard" {
+			ipType = "datacenter"
+		}
 		nodes = append(nodes, CustomNode{
 			ID:          nodeID,
 			HostName:    nodeID,
@@ -815,7 +992,9 @@ func parseClashYamlNodes(content string) []CustomNode {
 			Country:     country,
 			CountryCode: countryCode,
 			Remark:      name,
-			IPType:      "residential",
+			IPType:      ipType,
+			ISP:         "Cloudflare, Inc.",
+			Config:      configJSON,
 		})
 	}
 
@@ -904,7 +1083,58 @@ func ParseSubscriptionContent(content string) ([]CustomNode, error) {
 		}
 	}
 
-	// 2. 按行解析多行链接
+	// 2. 尝试解析为 sing-box WireGuard outbound JSON (单对象或数组)
+	if strings.HasPrefix(content, "{") || strings.HasPrefix(content, "[") {
+		var jsonItems []map[string]any
+		if strings.HasPrefix(content, "[") {
+			_ = json.Unmarshal([]byte(content), &jsonItems)
+		} else {
+			var single map[string]any
+			if err := json.Unmarshal([]byte(content), &single); err == nil {
+				jsonItems = []map[string]any{single}
+			}
+		}
+
+		var jsonNodes []CustomNode
+		for i, item := range jsonItems {
+			pType, _ := item["type"].(string)
+			if strings.ToLower(pType) == "wireguard" {
+				srv, _ := item["server"].(string)
+				if srv == "" {
+					srv = "engage.cloudflareclient.com"
+				}
+				port := 2408
+				if p, ok := item["server_port"].(float64); ok && p > 0 {
+					port = int(p)
+				}
+				tag, _ := item["tag"].(string)
+				if tag == "" {
+					tag = fmt.Sprintf("WARP-WireGuard-%d", i+1)
+				}
+				blob, _ := json.Marshal(item)
+				country, countryCode := inferCountryFromRemark(tag)
+				nodeID := fmt.Sprintf("cs-wg-%s-%d", srv, port)
+				jsonNodes = append(jsonNodes, CustomNode{
+					ID:          nodeID,
+					HostName:    nodeID,
+					Host:        srv,
+					Port:        port,
+					Protocol:    "wireguard",
+					Country:     country,
+					CountryCode: countryCode,
+					Remark:      tag,
+					IPType:      "datacenter",
+					ISP:         "Cloudflare, Inc.",
+					Config:      string(blob),
+				})
+			}
+		}
+		if len(jsonNodes) > 0 {
+			return jsonNodes, nil
+		}
+	}
+
+	// 3. 按行解析多行链接 (包含 wireguard:// 以及 SOCKS/HTTP)
 	var nodes []CustomNode
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
@@ -912,6 +1142,16 @@ func ParseSubscriptionContent(content string) ([]CustomNode, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+
+		// 单独支持 wireguard:// 链接
+		if strings.HasPrefix(line, "wireguard://") {
+			wgNode, err := parseWireGuardURL(line)
+			if err == nil && wgNode != nil {
+				nodes = append(nodes, *wgNode)
+				continue
+			}
+		}
+
 		proto, h, p, u, pwd, remark, err := ParseProxyURL(line)
 		if err != nil || h == "" || p <= 0 {
 			continue
@@ -937,7 +1177,7 @@ func ParseSubscriptionContent(content string) ([]CustomNode, error) {
 	}
 
 	if len(nodes) == 0 {
-		return nil, fmt.Errorf("未能从内容中解析出有效代理节点 (支持 SOCKS5 / HTTP / HTTPS 链接及 Clash YAML)")
+		return nil, fmt.Errorf("未能从内容中解析出有效代理节点 (支持 WireGuard / SOCKS5 / HTTP / HTTPS 链接及 Clash YAML / sing-box JSON)")
 	}
 
 	ptrs := make([]*CustomNode, len(nodes))

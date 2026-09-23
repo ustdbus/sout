@@ -171,7 +171,7 @@ func (t *Tunnel) stop() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if t.Kind == "custom" {
+	if t.Kind == "custom" && t.CustomProto != "wireguard" && t.Node.Protocol != "wireguard" {
 		if t.listener != nil {
 			_ = t.listener.Close()
 			t.listener = nil
@@ -187,7 +187,7 @@ func (t *Tunnel) stop() {
 }
 
 func (t *Tunnel) probeExitIP(timeout time.Duration) (string, error) {
-	if t.Kind == "custom" {
+	if t.Kind == "custom" && t.CustomProto != "wireguard" && t.Node.Protocol != "wireguard" {
 		return t.probeCustomExitIP()
 	}
 
@@ -220,6 +220,11 @@ func (t *Tunnel) probeExitIP(timeout time.Duration) (string, error) {
 		}
 	}
 
+	// 回退尝试通过本地 SOCKS5 端口探测
+	if ip, err := t.probeCustomExitIP(); err == nil && ip != "" {
+		return ip, nil
+	}
+
 	return "", fmt.Errorf("所有出口 IP 探测源均无有效 IPv4 响应")
 }
 
@@ -237,7 +242,7 @@ func (t *Tunnel) waitExitIP(timeout time.Duration) (string, error) {
 	if lastErr == nil {
 		lastErr = fmt.Errorf("超时")
 	}
-	return "", fmt.Errorf("等待 OpenVPN 握手与出口就绪失败: %w", lastErr)
+	return "", fmt.Errorf("等待出口握手就绪失败: %w", lastErr)
 }
 
 func (t *Tunnel) probeCustomExitIP() (string, error) {

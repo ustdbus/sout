@@ -264,13 +264,16 @@ func (m *Manager) tunnelActive(t *Tunnel) bool {
 
 func (m *Manager) tryNode(t *Tunnel) error {
 	t.setEngine(m.engine)
-	if t.Kind == "custom" {
+	if t.Kind == "custom" && t.Node.Protocol != "wireguard" && t.CustomProto != "wireguard" {
 		t.CustomHost = t.Node.IP
 		t.CustomPort = t.Node.Port
 		t.CustomUser = t.Node.User
 		t.CustomPass = t.Node.Pass
 		t.CustomProto = t.Node.Protocol
 		return t.startCustom()
+	}
+	if t.Kind == "custom" && (t.Node.Protocol == "wireguard" || t.CustomProto == "wireguard") {
+		t.CustomProto = "wireguard"
 	}
 	return t.start(m.workDir)
 }
@@ -550,9 +553,15 @@ func (m *Manager) AddCustomExit(node CustomNode) (*Tunnel, error) {
 			CountryCode: node.CountryCode,
 			Ping:        node.Ping,
 			SpeedMbps:   node.SpeedMbps,
+			Config:      node.Config,
 			IPType:      ipType,
 			ISP:         node.ISP,
 			Kind:        "custom",
+			Port:        node.Port,
+			User:        node.User,
+			Pass:        node.Pass,
+			Protocol:    node.Protocol,
+			Remark:      node.Remark,
 			SourceID:    node.SourceID,
 		},
 	}

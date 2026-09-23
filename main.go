@@ -1187,11 +1187,25 @@ func apiCustomSocksAdd(m *Manager) http.HandlerFunc {
 		if remark == "" {
 			remark = h
 		}
-		remoteAddr := fmt.Sprintf("%s:%d", h, p)
-		exitIP, ping, ipType, isp, err := ProbeCustomProxy(remoteAddr, proto, u, pwd, 10*time.Second)
-		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("连接代理失败: %v", err)})
-			return
+		var cfgJSON string
+		if proto == "wireguard" {
+			if req.RawURL != "" && strings.HasPrefix(req.RawURL, "wireguard://") {
+				if wgNode, err := parseWireGuardURL(req.RawURL); err == nil && wgNode != nil {
+					cfgJSON = wgNode.Config
+				}
+			}
+			exitIP = h
+			ping = 50
+			ipType = "datacenter"
+			isp = "Cloudflare, Inc."
+		} else {
+			remoteAddr := fmt.Sprintf("%s:%d", h, p)
+			var err error
+			exitIP, ping, ipType, isp, err = ProbeCustomProxy(remoteAddr, proto, u, pwd, 10*time.Second)
+			if err != nil {
+				writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("连接代理失败: %v", err)})
+				return
+			}
 		}
 
 		country := req.Country
@@ -1224,6 +1238,7 @@ func apiCustomSocksAdd(m *Manager) http.HandlerFunc {
 			ExitIP:      exitIP,
 			IPType:      ipType,
 			ISP:         isp,
+			Config:      cfgJSON,
 		}
 
 		t, err := m.AddCustomExit(node)
@@ -1285,7 +1300,7 @@ func apiCustomSocksBatchAdd(m *Manager) http.HandlerFunc {
 		var addedList []map[string]any
 		for _, n := range nodes {
 			// 过滤当前不支持建立原生出站隧道的协议（例如 masque 等特殊协议）
-			if n.Protocol != "http" && n.Protocol != "https" && n.Protocol != "socks5" && n.Protocol != "socks" && n.Protocol != "" {
+			if n.Protocol != "http" && n.Protocol != "https" && n.Protocol != "socks5" && n.Protocol != "socks" && n.Protocol != "wireguard" && n.Protocol != "" {
 				skippedCount++
 				continue
 			}
@@ -1682,7 +1697,15 @@ func apiCustomSourceImport(m *Manager) http.HandlerFunc {
 				defer func() { <-sem }()
 
 				remoteAddr := fmt.Sprintf("%s:%d", n.Host, n.Port)
-				ip, ping, _, _, err := ProbeCustomSocks(remoteAddr, n.User, n.Pass, 3500*time.Millisecond)
+				var ip string
+				var ping int
+				var err error
+				if n.Protocol == "wireguard" {
+					ip = n.Host
+					ping = 50
+				} else {
+					ip, ping, _, _, err = ProbeCustomProxy(remoteAddr, n.Protocol, n.User, n.Pass, 3500*time.Millisecond)
+				}
 				if err == nil && ip != "" {
 					select {
 					case resCh <- probeResult{node: n, exitIP: ip, ping: ping}:

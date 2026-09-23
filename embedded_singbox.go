@@ -25,6 +25,7 @@ import (
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/protocol/openvpn"
 	"github.com/sagernet/sing-box/protocol/socks"
+	"github.com/sagernet/sing-box/protocol/wireguard"
 	SBJSON "github.com/sagernet/sing/common/json"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -79,6 +80,7 @@ func newEmbeddedEngine(listenIP string) (*embeddedEngine, error) {
 
 	socks.RegisterInbound(inboundRegistry)
 	openvpn.RegisterEndpoint(endpointRegistry)
+	wireguard.RegisterEndpoint(endpointRegistry)
 
 	sboutbound.Register[soutDynamicOutboundOptions](outboundRegistry, soutDynamicOutboundType,
 		func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ soutDynamicOutboundOptions) (adapter.Outbound, error) {
@@ -176,7 +178,7 @@ func (o *soutDynamicOutbound) endpointFor(ctx context.Context, destination M.Soc
 }
 
 func isEmbeddedEndpointInbound(tag string) bool {
-	return strings.HasPrefix(tag, "soutopenvpn") || strings.HasPrefix(tag, "sout-openvpn-") || strings.HasPrefix(tag, "fanoutopenvpn") || strings.HasPrefix(tag, "fanout-openvpn-")
+	return strings.HasPrefix(tag, "soutopenvpn") || strings.HasPrefix(tag, "sout-openvpn-") || strings.HasPrefix(tag, "fanoutopenvpn") || strings.HasPrefix(tag, "fanout-openvpn-") || strings.HasPrefix(tag, "soutwireguard") || strings.HasPrefix(tag, "sout-wireguard-")
 }
 
 func (e *embeddedEngine) close() error {
@@ -206,6 +208,119 @@ func (e *embeddedEngine) portAvailable(port int) bool {
 	return true
 }
 
+// wireguardEndpoint 将 WireGuard 配置转换为 sing-box 1.14 用户态 endpoint 配置格式
+func wireguardEndpoint(configJSON, tag string) (map[string]any, error) {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(configJSON), &raw); err != nil {
+		return nil, fmt.Errorf("解析 WireGuard 配置 JSON 失败: %w", err)
+	}
+
+	if _, hasPeers := raw["peers"]; hasPeers {
+		raw["type"] = "wireguard"
+		raw["tag"] = tag
+		raw["system"] = false
+		return raw, nil
+	}
+
+	server, _ := raw["server"].(string)
+	if server == "" {
+		server = "engage.cloudflareclient.com"
+	}
+	var serverPort uint16 = 2408
+	if p, ok := raw["server_port"].(float64); ok && p > 0 {
+		serverPort = uint16(p)
+	} else if p, ok := raw["server_port"].(int); ok && p > 0 {
+		serverPort = uint16(p)
+	} else if pStr, ok := raw["server_port"].(string); ok {
+		if p, err := strconv.Atoi(pStr); err == nil && p > 0 {
+			serverPort = uint16(p)
+		}
+	}
+
+	privKey, _ := raw["private_key"].(string)
+	peerPub, _ := raw["peer_public_key"].(string)
+	if peerPub == "" {
+		peerPub, _ = raw["public_key"].(string)
+	}
+	if peerPub == "" {
+		peerPub = "bmXOC+F1FxEMF9dyiK2H5/1SUtzHZsVoW++jnWgmtEs="
+	}
+
+	var addresses []string
+	if addrs, ok := raw["local_address"].([]any); ok {
+		for _, a := range addrs {
+			if aStr, ok := a.(string); ok && aStr != "" {
+				addresses = append(addresses, aStr)
+			}
+		}
+	} else if addrs, ok := raw["address"].([]any); ok {
+		for _, a := range addrs {
+			if aStr, ok := a.(string); ok && aStr != "" {
+				addresses = append(addresses, aStr)
+			}
+		}
+	} else if aStr, ok := raw["address"].(string); ok && aStr != "" {
+		for _, part := range strings.Split(aStr, ",") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				addresses = append(addresses, part)
+			}
+		}
+	}
+
+	if len(addresses) == 0 {
+		addresses = []string{"172.16.0.2/32"}
+	}
+
+	for i, a := range addresses {
+		if !strings.Contains(a, "/") {
+			if strings.Contains(a, ":") {
+				addresses[i] = a + "/128"
+			} else {
+				addresses[i] = a + "/32"
+			}
+		}
+	}
+
+	var reserved []int
+	if res, ok := raw["reserved"].([]any); ok {
+		for _, item := range res {
+			if n, ok := item.(float64); ok {
+				reserved = append(reserved, int(n))
+			} else if n, ok := item.(int); ok {
+				reserved = append(reserved, n)
+			}
+		}
+	}
+
+	mtu := 1280
+	if m, ok := raw["mtu"].(float64); ok && m > 0 {
+		mtu = int(m)
+	}
+
+	peer := map[string]any{
+		"address":                       server,
+		"port":                          serverPort,
+		"public_key":                    peerPub,
+		"allowed_ips":                   []string{"0.0.0.0/0", "::/0"},
+		"persistent_keepalive_interval": 25,
+	}
+	if len(reserved) > 0 {
+		peer["reserved"] = reserved
+	}
+
+	endpoint := map[string]any{
+		"type":        "wireguard",
+		"tag":         tag,
+		"system":      false,
+		"address":     addresses,
+		"private_key": privKey,
+		"mtu":         mtu,
+		"peers":       []any{peer},
+	}
+	return endpoint, nil
+}
+
 func (e *embeddedEngine) addTunnel(tunnel *Tunnel) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -213,7 +328,9 @@ func (e *embeddedEngine) addTunnel(tunnel *Tunnel) error {
 		return fmt.Errorf("内嵌 sing-box 已关闭")
 	}
 
-	endpointTag := fmt.Sprintf("soutopenvpn%d", tunnel.Slot)
+	var endpointTag string
+	var endpointConfig map[string]any
+	var endpointLoggerName string
 	socksTag := fmt.Sprintf("soutsocks%d", tunnel.Slot)
 
 	if previous, exists := e.tunnels[tunnel.Slot]; exists {
@@ -225,16 +342,31 @@ func (e *embeddedEngine) addTunnel(tunnel *Tunnel) error {
 		delete(e.tunnels, tunnel.Slot)
 	}
 
-	endpointConfig, err := openVPNEndpoint(tunnel.Node.Config, endpointTag)
-	if err != nil {
-		return fmt.Errorf("转换 VPN Gate 配置失败: %w", err)
+	isWG := tunnel.CustomProto == "wireguard" || tunnel.Node.Protocol == "wireguard"
+	if isWG {
+		endpointTag = fmt.Sprintf("soutwireguard%d", tunnel.Slot)
+		endpointLoggerName = "wireguard"
+		cfg, err := wireguardEndpoint(tunnel.Node.Config, endpointTag)
+		if err != nil {
+			return fmt.Errorf("转换 WireGuard 配置失败: %w", err)
+		}
+		endpointConfig = cfg
+	} else {
+		endpointTag = fmt.Sprintf("soutopenvpn%d", tunnel.Slot)
+		endpointLoggerName = "openvpn"
+		cfg, err := openVPNEndpoint(tunnel.Node.Config, endpointTag)
+		if err != nil {
+			return fmt.Errorf("转换 VPN Gate 配置失败: %w", err)
+		}
+		endpointConfig = cfg
 	}
+
 	endpointOptions, err := decodeSingBoxOptions[option.Endpoint](e.ctx, endpointConfig)
 	if err != nil {
-		return fmt.Errorf("解析 OpenVPN endpoint 配置失败: %w", err)
+		return fmt.Errorf("解析 %s endpoint 配置失败: %w", endpointLoggerName, err)
 	}
-	if err := e.box.Endpoint().Create(e.ctx, e.box.Router(), e.box.LogFactory().NewLogger("openvpn"), endpointOptions.Tag, endpointOptions.Type, endpointOptions.Options); err != nil {
-		return fmt.Errorf("启动 OpenVPN endpoint 失败: %w", err)
+	if err := e.box.Endpoint().Create(e.ctx, e.box.Router(), e.box.LogFactory().NewLogger(endpointLoggerName), endpointOptions.Tag, endpointOptions.Type, endpointOptions.Options); err != nil {
+		return fmt.Errorf("启动 %s endpoint 失败: %w", endpointLoggerName, err)
 	}
 
 	socksConfig := map[string]any{
@@ -288,11 +420,11 @@ func (e *embeddedEngine) dialTunnel(ctx context.Context, tunnel *Tunnel, network
 	box := e.box
 	e.mu.Unlock()
 	if !found || box == nil {
-		return nil, fmt.Errorf("OpenVPN endpoint 未运行")
+		return nil, fmt.Errorf("出口 endpoint 未运行")
 	}
 	endpoint, found := box.Endpoint().Get(state.endpointTag)
 	if !found {
-		return nil, fmt.Errorf("OpenVPN endpoint 未运行")
+		return nil, fmt.Errorf("出口 endpoint 未运行")
 	}
 	destination := M.ParseSocksaddr(address)
 	if !destination.IsValid() {
