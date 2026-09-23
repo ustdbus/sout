@@ -1,13 +1,53 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 )
+
+var (
+	vpngateMu       sync.RWMutex
+	vpngateDisabled bool
+	vpngatePath     string
+)
+
+func initVPNGateToggle(dir string) {
+	vpngateMu.Lock()
+	defer vpngateMu.Unlock()
+	vpngatePath = filepath.Join(dir, "vpngate_disabled")
+	if _, err := os.Stat(vpngatePath); err == nil {
+		vpngateDisabled = true
+	} else {
+		vpngateDisabled = false
+	}
+}
+
+func isVPNGateEnabled() bool {
+	vpngateMu.RLock()
+	defer vpngateMu.RUnlock()
+	return !vpngateDisabled
+}
+
+func setVPNGateEnabled(enabled bool) error {
+	vpngateMu.Lock()
+	defer vpngateMu.Unlock()
+	vpngateDisabled = !enabled
+	if vpngatePath == "" {
+		return nil
+	}
+	if !enabled {
+		return os.WriteFile(vpngatePath, []byte("disabled\n"), 0644)
+	}
+	_ = os.Remove(vpngatePath)
+	return nil
+}
 
 // Manager 维护隧道槽位与状态
 type Manager struct {
@@ -22,6 +62,7 @@ type Manager struct {
 }
 
 func NewManager(maxSlots int, workDir string) *Manager {
+	initVPNGateToggle(workDir)
 	engine, err := newEmbeddedEngine("127.0.0.1")
 	if err != nil {
 		log.Printf("初始化内嵌 sing-box 引擎警告: %v", err)
@@ -36,10 +77,29 @@ func NewManager(maxSlots int, workDir string) *Manager {
 
 // RefreshNodes 获取节点列表并同步更新已有隧道的元数据
 func (m *Manager) RefreshNodes() (int, error) {
+	cachePath := filepath.Join(m.workDir, "vpngate_cache.json")
 	nodes, err := fetchNodes(60 * time.Second)
 	if err != nil {
+		// 网络拉取失败，尝试使用本地持久化缓存
+		if blob, rerr := os.ReadFile(cachePath); rerr == nil {
+			var cached []Node
+			if jerr := json.Unmarshal(blob, &cached); jerr == nil && len(cached) > 0 {
+				m.mu.Lock()
+				m.nodes = cached
+				m.fetched = time.Now()
+				m.mu.Unlock()
+				log.Printf("VPN Gate 官方源从本地缓存恢复 %d 个节点 (网络拉取重试中: %v)", len(cached), err)
+				return len(cached), nil
+			}
+		}
 		return 0, err
 	}
+
+	// 拉取成功，异步写入本地缓存以备无网/超时恢复
+	if blob, merr := json.Marshal(nodes); merr == nil {
+		_ = os.WriteFile(cachePath, blob, 0644)
+	}
+
 	m.mu.Lock()
 	m.nodes = nodes
 	m.fetched = time.Now()

@@ -260,6 +260,21 @@ func initCustomStore(dir string) *CustomStore {
 		{ID: "preset-opera", Name: "Opera"},
 		{ID: "preset-proton", Name: "Proton"},
 	}
+	// 规范化已存在源的名称
+	for _, s := range cs.Sources {
+		lowerName := strings.ToLower(s.Name)
+		lowerID := strings.ToLower(s.ID)
+		if strings.Contains(lowerID, "warp") || strings.Contains(lowerName, "warp") {
+			s.Name = "WARP"
+		} else if strings.Contains(lowerID, "windscribe") || strings.Contains(lowerName, "windscribe") {
+			s.Name = "Windscribe"
+		} else if strings.Contains(lowerID, "opera") || strings.Contains(lowerName, "opera") {
+			s.Name = "Opera"
+		} else if strings.Contains(lowerID, "proton") || strings.Contains(lowerName, "proton") {
+			s.Name = "Proton"
+		}
+	}
+
 	for _, p := range presets {
 		has := false
 		for _, s := range cs.Sources {
@@ -280,6 +295,7 @@ func initCustomStore(dir string) *CustomStore {
 			}
 		}
 	}
+	_ = cs.save()
 
 	globalCustomStore = cs
 	return cs

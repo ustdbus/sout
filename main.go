@@ -20,7 +20,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v3.2.9"
+var version = "v3.2.10"
 
 func initLowMemoryProtection() {
 	if os.Getenv("GOMEMLIMIT") == "" {
@@ -1570,8 +1570,19 @@ func apiCustomSourceToggle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.URL.Query().Get("id")
-	if id == "" || globalCustomStore == nil {
+	if id == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id 不能为空"})
+		return
+	}
+	if id == "builtin-vpngate" {
+		cur := isVPNGateEnabled()
+		newVal := !cur
+		_ = setVPNGateEnabled(newVal)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enabled": newVal})
+		return
+	}
+	if globalCustomStore == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "存储未初始化"})
 		return
 	}
 	globalCustomStore.mu.Lock()
@@ -1725,7 +1736,7 @@ func apiCustomSourceList(m *Manager) http.HandlerFunc {
 			Name:             "VPN Gate 官方全球家宽源",
 			URL:              "https://www.vpngate.net/api/iphone/",
 			Count:            len(nodes),
-			Enabled:          true,
+			Enabled:          isVPNGateEnabled(),
 			AutoUpdate:       true,
 			UpdateIntervalM:  60,
 			ResidentialCount: len(nodes),
@@ -1836,12 +1847,16 @@ func apiCustomSourceList(m *Manager) http.HandlerFunc {
 				matched := ""
 				if strings.Contains(lowerID, "warp") || strings.Contains(lowerName, "warp") {
 					matched = "warp"
+					item.Name = "WARP"
 				} else if strings.Contains(lowerID, "windscribe") || strings.Contains(lowerName, "windscribe") {
 					matched = "windscribe"
+					item.Name = "Windscribe"
 				} else if strings.Contains(lowerID, "opera") || strings.Contains(lowerName, "opera") {
 					matched = "opera"
+					item.Name = "Opera"
 				} else if strings.Contains(lowerID, "proton") || strings.Contains(lowerName, "proton") {
 					matched = "proton"
+					item.Name = "Proton"
 				}
 
 				if matched != "" {

@@ -27,7 +27,7 @@ func (m *Manager) getAllCandidateNodesLocked(poolType string) []Node {
 	var nodes []Node
 
 	// 1. VPN Gate 官方节点（全部属于家宽池）
-	if poolType == "" || poolType == "all" || poolType == "residential" {
+	if isVPNGateEnabled() && (poolType == "" || poolType == "all" || poolType == "residential") {
 		for _, n := range m.nodes {
 			n.Kind = "vpngate"
 			n.IPType = "residential"
@@ -336,9 +336,11 @@ func (m *Manager) Regions(poolType string) []RegionStat {
 
 	// --- 1. VPN Gate 分类 ---
 	vpngateNodes := make([]Node, 0)
-	for _, n := range candidateNodes {
-		if !used[n.HostName] && classifyNodeCategory(n) == "vpngate" {
-			vpngateNodes = append(vpngateNodes, n)
+	if isVPNGateEnabled() {
+		for _, n := range candidateNodes {
+			if !used[n.HostName] && classifyNodeCategory(n) == "vpngate" {
+				vpngateNodes = append(vpngateNodes, n)
+			}
 		}
 	}
 	if len(vpngateNodes) > 0 {

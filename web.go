@@ -1271,9 +1271,37 @@ function renderRegionList(){
     return;
   }
 
-  // 2. 若当前分类下暂无节点，显示引导卡片
+  // 2. 若当前分类下暂无节点，显示针对性引导卡片
   if(!catRegions || !catRegions.length){
-    const srcNames = {windscribe:'Windscribe', opera:'Opera', proton:'Proton', vpngate:'VPN Gate'};
+    if(currentSourceCategory === 'vpngate'){
+      $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:22px 14px;text-align:center;background:#12151a;border:1px dashed var(--line);border-radius:6px">'
+        + '<div style="font-weight:600;font-size:13px;color:var(--text);margin-bottom:6px">当前「VPN Gate」官方节点池暂无可用节点</div>'
+        + '<div style="font-size:12px;color:var(--dim);margin-bottom:14px;line-height:1.5">VPN Gate 为系统内置全球家宽源，无需配置订阅链接。<br>若刚启动或已被禁用，请点击下方按钮立即刷新节点池，或前往「订阅源」检查启用状态。</div>'
+        + '<div style="display:flex;gap:8px;justify-content:center">'
+        +   '<button class="primary" id="refreshVpnGateDirectBtn" style="padding:6px 16px">' + ICON.redo + ' 立即刷新节点池</button>'
+        +   '<button class="chip-btn" id="goCustomSourceBtn" style="padding:6px 14px">管理订阅源</button>'
+        + '</div>'
+        + '</div>';
+      const rb = $('#refreshVpnGateDirectBtn');
+      if(rb) rb.onclick = async () => {
+        rb.disabled = true;
+        rb.textContent = '正在刷新…';
+        toast('正在拉取 VPN Gate 官方全球节点…');
+        try{
+          await api('/api/refresh', {method:'POST'});
+          toast('官方节点池拉取完成！');
+          await loadRegions();
+          renderRegionList();
+        }catch(err){ toast('刷新失败: ' + err.message, true); }
+        rb.disabled = false;
+        rb.innerHTML = ICON.redo + ' 立即刷新节点池';
+      };
+      const gb = $('#goCustomSourceBtn');
+      if(gb) gb.onclick = () => { closeModal('newExitModal'); $('#openCustomSourceModalBtn').click(); };
+      return;
+    }
+
+    const srcNames = {windscribe:'Windscribe', opera:'Opera', proton:'Proton'};
     const name = srcNames[currentSourceCategory] || '该源';
     $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:22px 14px;text-align:center;background:#12151a;border:1px dashed var(--line);border-radius:6px">'
       + '<div style="font-weight:600;font-size:13px;color:var(--text);margin-bottom:6px">当前「' + esc(name) + '」暂无可用节点</div>'
@@ -1783,7 +1811,7 @@ async function loadSourcesList(){
 
       let actBtns = '';
       if(s.is_builtin){
-        actBtns = '<button class="chip-btn" data-refresh-src="' + esc(s.id) + '" title="立即刷新官方节点数据">' + ICON.redo + ' 刷新节点池</button>';
+        actBtns = toggleBtn + '<button class="chip-btn" data-refresh-src="' + esc(s.id) + '" title="立即刷新官方节点数据">' + ICON.redo + ' 刷新节点池</button>';
       } else if(isWarp){
         actBtns = '<button class="chip-btn" style="background:#0969da;color:#fff;border-color:#0969da" data-gen-warp="1" title="调用 Cloudflare 官方 API 为本机直接免费申请 WireGuard 账号并生成节点">⚡ 申请/重建 WARP</button>'
           + (s.count > 0 ? toggleBtn : '')
