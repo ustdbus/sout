@@ -244,17 +244,17 @@ func classifyNodeCategory(n Node) string {
 	if n.Kind == "vpngate" || strings.Contains(n.SourceID, "vpngate") {
 		return "vpngate"
 	}
-	if strings.Contains(remLower, "warp") || strings.Contains(hostLower, "cloudflare") || protoLower == "wireguard" {
-		return "warp"
+	if strings.Contains(remLower, "proton") || strings.Contains(hostLower, "proton") || strings.Contains(n.SourceID, "proton") {
+		return "proton"
 	}
-	if strings.Contains(remLower, "ws-") || strings.Contains(remLower, "windscribe") || strings.Contains(hostLower, "totallyacdn") {
+	if strings.Contains(remLower, "ws-") || strings.Contains(remLower, "windscribe") || strings.Contains(hostLower, "totallyacdn") || strings.Contains(n.SourceID, "windscribe") {
 		return "windscribe"
 	}
-	if strings.Contains(remLower, "opera") || strings.Contains(hostLower, "opera") {
+	if strings.Contains(remLower, "opera") || strings.Contains(hostLower, "opera") || strings.Contains(n.SourceID, "opera") {
 		return "opera"
 	}
-	if strings.Contains(remLower, "proton") || strings.Contains(hostLower, "proton") {
-		return "proton"
+	if strings.Contains(remLower, "warp") || strings.Contains(hostLower, "cloudflare") || (protoLower == "wireguard" && !strings.Contains(remLower, "proton")) {
+		return "warp"
 	}
 	return "custom"
 }
@@ -603,7 +603,7 @@ func (m *Manager) Regions(poolType string) []RegionStat {
 		}
 	}
 
-	// --- 5. Proton 分类 ---
+	// --- 5. Proton 分类 (支持日本、新加坡、美国等国家专属出口) ---
 	protonNodes := make([]Node, 0)
 	for _, n := range candidateNodes {
 		if !used[n.HostName] && classifyNodeCategory(n) == "proton" {
@@ -617,6 +617,42 @@ func (m *Manager) Regions(poolType string) []RegionStat {
 			Available: len(protonNodes),
 			Category:  "proton",
 		})
+		protonSubs := []struct {
+			Filter string
+			Name   string
+		}{
+			{Filter: "日本", Name: "🇯🇵 日本 (Japan)"},
+			{Filter: "新加坡", Name: "🇸🇬 新加坡 (Singapore)"},
+			{Filter: "美国", Name: "🇺🇸 美国 (United States)"},
+			{Filter: "荷兰", Name: "🇳🇱 荷兰 (Netherlands)"},
+			{Filter: "瑞士", Name: "🇨🇭 瑞士 (Switzerland)"},
+			{Filter: "加拿大", Name: "🇨🇦 加拿大 (Canada)"},
+			{Filter: "挪威", Name: "🇳🇴 挪威 (Norway)"},
+			{Filter: "波兰", Name: "🇵🇱 波兰 (Poland)"},
+			{Filter: "罗马尼亚", Name: "🇷🇴 罗马尼亚 (Romania)"},
+			{Filter: "墨西哥", Name: "🇲🇽 墨西哥 (Mexico)"},
+		}
+		for _, sub := range protonSubs {
+			cnt := 0
+			bestSpd := 0.0
+			for _, n := range protonNodes {
+				if matchNodeSubRegion(n, sub.Filter) {
+					cnt++
+					if n.SpeedMbps > bestSpd {
+						bestSpd = n.SpeedMbps
+					}
+				}
+			}
+			if cnt > 0 {
+				result = append(result, RegionStat{
+					Code:      "SRC:proton:" + sub.Filter,
+					Name:      sub.Name,
+					Available: cnt,
+					BestSpeed: bestSpd,
+					Category:  "proton",
+				})
+			}
+		}
 	}
 	return result
 }

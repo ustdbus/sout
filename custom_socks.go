@@ -286,7 +286,10 @@ func initCustomStore(dir string) *CustomStore {
 	warpCount := 0
 	for _, n := range cs.Nodes {
 		n.IPType = "datacenter"
-		if strings.Contains(strings.ToLower(n.HostName), "warp") || strings.Contains(strings.ToLower(n.Host), "cloudflare") || n.Protocol == "wireguard" {
+		remLower := strings.ToLower(n.Remark)
+		if strings.Contains(remLower, "proton") {
+			n.SourceID = "preset-proton"
+		} else if strings.Contains(strings.ToLower(n.HostName), "warp") || strings.Contains(strings.ToLower(n.Host), "cloudflare") || (n.Protocol == "wireguard" && !strings.Contains(remLower, "proton")) {
 			n.SourceID = "preset-warp"
 			warpCount++
 		}
