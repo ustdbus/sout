@@ -20,7 +20,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v3.3.1"
+var version = "v3.3.2"
 
 func initLowMemoryProtection() {
 	if os.Getenv("GOMEMLIMIT") == "" {
@@ -50,6 +50,7 @@ func initLowMemoryProtection() {
 
 func main() {
 	initLowMemoryProtection()
+	initLogCapture()
 	var (
 		webPort  = flag.Int("web", 8899, "Web 管理端口")
 		maxSlots = flag.Int("max", 20, "最多同时运行的隧道数")
@@ -169,6 +170,7 @@ func main() {
 	mux.HandleFunc("/api/custom/source/refresh", apiCustomSourceRefresh(mgr))
 	mux.HandleFunc("/api/custom/source/import", apiCustomSourceImport(mgr))
 	mux.HandleFunc("/api/custom/warp/generate", apiCustomWARPGenerate(mgr))
+	mux.HandleFunc("/api/logs", apiLogsHandler)
 
 	mux.HandleFunc("/sub", handleSub(mgr))
 	mux.HandleFunc("/sub/", handleSub(mgr))

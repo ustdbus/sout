@@ -1472,7 +1472,8 @@ func RegisterWARPAccount() (*CustomNode, error) {
 			addresses = append(addresses, v4)
 		}
 	}
-	if v6 != "" {
+	// 仅当底层网络环境支持 IPv6 时才分配 v6 地址，防止在纯 IPv4 主机上触发 address family not supported by protocol 掉线
+	if v6 != "" && systemSupportsIPv6() {
 		if !strings.Contains(v6, "/") {
 			addresses = append(addresses, v6+"/128")
 		} else {
@@ -1514,5 +1515,15 @@ func RegisterWARPAccount() (*CustomNode, error) {
 		SourceID:    "preset-warp",
 		Config:      string(cfgBlob),
 	}, nil
+}
+
+// systemSupportsIPv6 探测本机是否支持向外部 IPv6 网络发包
+func systemSupportsIPv6() bool {
+	conn, err := net.DialTimeout("udp6", "[2606:4700:4700::1111]:53", 1*time.Second)
+	if err == nil {
+		_ = conn.Close()
+		return true
+	}
+	return false
 }
 

@@ -295,14 +295,17 @@ func (m *Manager) ExitsOf() ExitsView {
 					exitIP = "连接中"
 				}
 				if t.Kind == "custom" {
-					tag := t.Node.Country
-					if tag == "" {
-						tag = "自定义S5"
+					tag := formatExitRemark(t.TargetRegion, t.IPType, t.Node.HostName)
+					if tag == "" || tag == "出站出口" {
+						tag = t.Node.Country
+						if tag == "" {
+							tag = "自定义出口"
+						}
 					}
 					boundLabel = fmt.Sprintf("%s (%s · SOCKS5:%d)", tag, exitIP, t.Port)
 				} else {
-					cName := countryNameCN(t.Node.CountryCode, t.Node.Country)
-					boundLabel = fmt.Sprintf("%s家宽 (%s · SOCKS5:%d)", cName, exitIP, t.Port)
+					exitRemark := formatExitRemark(t.Node.CountryCode, t.IPType, t.Node.HostName)
+					boundLabel = fmt.Sprintf("%s (%s · SOCKS5:%d)", exitRemark, exitIP, t.Port)
 				}
 			} else {
 				boundLabel = fmt.Sprintf("出口 (%s)", ib.BoundTo)

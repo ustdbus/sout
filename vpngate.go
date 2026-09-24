@@ -122,9 +122,21 @@ func parseNodeCSV(body string) ([]Node, error) {
 
 	r := csv.NewReader(strings.NewReader(strings.Join(kept, "\n")))
 	r.FieldsPerRecord = -1
-	records, err := r.ReadAll()
-	if err != nil {
-		return nil, fmt.Errorf("解析节点 CSV 失败: %w", err)
+	r.LazyQuotes = true
+
+	var records [][]string
+	for {
+		rec, err := r.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			continue
+		}
+		records = append(records, rec)
+	}
+	if len(records) < 2 {
+		return nil, fmt.Errorf("节点列表有效记录不足")
 	}
 
 	header := records[0]

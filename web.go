@@ -166,6 +166,10 @@ option{background:#161b22;color:var(--text);padding:8px}
     <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
     导出订阅链接
   </button>
+  <button id="viewLogsBtn" style="gap:6px">
+    <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+    运行日志
+  </button>
   <button class="icon" id="settingsBtn" title="设置">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
   </button>
@@ -615,6 +619,44 @@ option{background:#161b22;color:var(--text);padding:8px}
     <div class="foot">
       <span class="spacer"></span>
       <button data-close="customSourceModal">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal 8: 系统运行日志查看 -->
+<div class="modal" id="systemLogsModal">
+  <div class="sheet" style="max-width:850px;width:95%">
+    <div class="head">
+      <h2>
+        <svg viewBox="0 0 24 24" style="color:var(--accent)"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+        系统与服务运行日志
+      </h2>
+      <span class="spacer"></span>
+      <button class="icon" data-close="systemLogsModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="body" style="padding-top:10px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+        <div style="display:flex;gap:6px" id="logSourceTabs">
+          <button type="button" class="tab-pill active" data-src="sout">sout 服务日志</button>
+          <button type="button" class="tab-pill" data-src="sing-box">sing-box 内核日志</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--dim);cursor:pointer;user-select:none">
+            <input type="checkbox" id="logAutoScroll" checked style="cursor:pointer"> 自动滚底
+          </label>
+          <button type="button" id="copyLogsBtn" style="padding:4px 8px;font-size:12px">复制日志</button>
+          <button type="button" class="primary" id="refreshLogsBtn" style="padding:4px 10px;font-size:12px">
+            <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+            刷新
+          </button>
+        </div>
+      </div>
+      <pre id="logContentBox" style="background:#0a0c10;border:1px solid var(--line);border-radius:6px;padding:12px;color:#c9d1d9;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:1.45;height:420px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;margin:0">正在加载日志...</pre>
+    </div>
+    <div class="foot">
+      <span style="font-size:12px;color:var(--dim)" id="logStatusText">显示最近 200 行日志</span>
+      <span class="spacer"></span>
+      <button data-close="systemLogsModal">关闭</button>
     </div>
   </div>
 </div>
@@ -1960,6 +2002,51 @@ $('#sourcesContainer').onclick = async e => {
     }catch(err){ toast(err.message, true); }
     return;
   }
+};
+
+// 系统日志查看交互
+let curLogSource = 'sout';
+async function loadLogs(src) {
+  if (src) curLogSource = src;
+  const box = $('#logContentBox');
+  const status = $('#logStatusText');
+  box.textContent = '正在获取 ' + (curLogSource === 'sing-box' ? 'sing-box' : 'sout') + ' 日志...';
+  try {
+    const res = await api('/api/logs?source=' + encodeURIComponent(curLogSource) + '&lines=250');
+    box.textContent = res.logs || '暂无日志输出';
+    status.textContent = '来源: ' + res.source + ' | 已显示最近 ' + (res.lines || 250) + ' 行';
+    if ($('#logAutoScroll').checked) {
+      box.scrollTop = box.scrollHeight;
+    }
+  } catch (err) {
+    box.textContent = '获取日志失败: ' + err.message;
+    status.textContent = '获取失败';
+  }
+}
+
+$('#viewLogsBtn').onclick = () => {
+  openModal('systemLogsModal');
+  loadLogs('sout');
+};
+
+$('#logSourceTabs').onclick = e => {
+  const btn = e.target.closest('[data-src]');
+  if (!btn) return;
+  $('#logSourceTabs').querySelectorAll('.tab-pill').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  loadLogs(btn.dataset.src);
+};
+
+$('#refreshLogsBtn').onclick = () => loadLogs();
+
+$('#copyLogsBtn').onclick = () => {
+  const text = $('#logContentBox').textContent;
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    toast('日志已复制到剪贴板');
+  }).catch(() => {
+    toast('复制失败，请手动选择复制', true);
+  });
 };
 
 poll();

@@ -946,6 +946,52 @@ func countryNameCN(code, name string) string {
 	}
 }
 
+// formatExitRemark 将 region, poolType, host 转换为人类友好的出口描述，杜绝内部代码和机房家宽混淆
+func formatExitRemark(region, poolType, host string) string {
+	lowerReg := strings.ToLower(region)
+	lowerHost := strings.ToLower(host)
+
+	// 1. WARP 官方/原生出站
+	if strings.Contains(lowerReg, "warp") || strings.Contains(lowerHost, "warp") {
+		return "WARP 机房"
+	}
+
+	// 2. 自定义订阅源 SRC:<sourceID>:<subRegion>
+	if strings.HasPrefix(region, "SRC:") {
+		parts := strings.Split(region, ":")
+		srcName := "自定义"
+		subRegion := ""
+		if len(parts) >= 2 {
+			p1 := parts[1]
+			if len(p1) > 0 {
+				srcName = strings.ToUpper(p1[:1]) + p1[1:]
+			}
+		}
+		if len(parts) >= 3 && parts[2] != "ALL" && parts[2] != "" {
+			subRegion = countryNameCN(parts[2], "")
+		}
+		if subRegion != "" {
+			return fmt.Sprintf("%s (%s) 机房", srcName, subRegion)
+		}
+		return fmt.Sprintf("%s 机房", srcName)
+	}
+
+	// 3. VPN Gate 或标准国家/地区出口
+	if region != "" && !strings.HasPrefix(region, "SRC:") {
+		pName := "家宽"
+		if poolType == "datacenter" {
+			pName = "机房"
+		}
+		cName := countryNameCN(region, "")
+		return fmt.Sprintf("%s%s", cName, pName)
+	}
+
+	if host != "" {
+		return host
+	}
+	return "出站出口"
+}
+
 type branchBinding struct {
 	TemplateID int    `json:"template_id"`
 	Slot       int    `json:"slot,omitempty"`
@@ -958,7 +1004,15 @@ func branchBindingsPath(workDir string) string {
 	if workDir == "" {
 		workDir = "/var/lib/sout"
 	}
-	return filepath.Join(workDir, "branch_bindings.json")
+	suiPath := filepath.Join(workDir, "sui_branch_bindings.json")
+	if _, err := os.Stat(suiPath); err == nil {
+		return suiPath
+	}
+	legacyPath := filepath.Join(workDir, "branch_bindings.json")
+	if _, err := os.Stat(legacyPath); err == nil {
+		return legacyPath
+	}
+	return suiPath
 }
 
 func loadBranchBindings(workDir string) []branchBinding {
@@ -1178,14 +1232,19 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		slot := 0
 		region := ""
 		poolType := ""
+		clientRemark := "海外出口"
 		if targetTunnel != nil {
-			cName = countryNameCN(targetTunnel.Node.CountryCode, targetTunnel.Node.Country)
-			if targetTunnel.IPType == "datacenter" {
-				poolName = "机房"
-			}
 			slot = targetTunnel.Slot
 			region = targetTunnel.TargetRegion
 			poolType = targetTunnel.TargetPoolType
+			clientRemark = formatExitRemark(region, targetTunnel.IPType, targetTunnel.Node.HostName)
+			if clientRemark == "" {
+				cName = countryNameCN(targetTunnel.Node.CountryCode, targetTunnel.Node.Country)
+				if targetTunnel.IPType == "datacenter" {
+					poolName = "机房"
+				}
+				clientRemark = fmt.Sprintf("%s%s", cName, poolName)
+			}
 		}
 
 		// 持久化保存分流绑定意图，确保重启或节点轮换后自动恢复
@@ -1198,7 +1257,6 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		})
 
 		clientName := fmt.Sprintf("soutu%d%s", templateID, sanitizeTag(host))
-		clientRemark := fmt.Sprintf("%s%s", cName, poolName)
 
 		existing, existingOK, err := s.apiClientByName(clientName)
 		if err != nil {
@@ -1373,12 +1431,15 @@ func (s *SUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
 	}
 	oldHostTag := sanitizeTag(oldHost)
 
-	cName := countryNameCN(target.Node.CountryCode, target.Node.Country)
-	poolName := "家宽"
-	if target.IPType == "datacenter" {
-		poolName = "机房"
+	newRemark := formatExitRemark(target.TargetRegion, target.IPType, target.Node.HostName)
+	if newRemark == "" {
+		cName := countryNameCN(target.Node.CountryCode, target.Node.Country)
+		poolName := "家宽"
+		if target.IPType == "datacenter" {
+			poolName = "机房"
+		}
+		newRemark = fmt.Sprintf("%s%s", cName, poolName)
 	}
-	newRemark := fmt.Sprintf("%s%s", cName, poolName)
 
 	for userName, host := range boundMap {
 		if host == oldHost || host == oldHostTag {

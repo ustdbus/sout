@@ -67,6 +67,75 @@ func (sb *SingBox) saveInboundAddrs(m map[string][]NodeAddrItem) {
 	_ = os.WriteFile(sb.addrsFilePath(), b, 0644)
 }
 
+func (sb *SingBox) branchBindingsPath() string {
+	if sb.workDir == "" {
+		sb.workDir = "/var/lib/sout"
+	}
+	return filepath.Join(sb.workDir, "singbox_branch_bindings.json")
+}
+
+func (sb *SingBox) loadBranchBindings() []branchBinding {
+	blob, err := os.ReadFile(sb.branchBindingsPath())
+	if err != nil {
+		// 首次运行如果不存在，尝试平滑迁移旧的通用 branch_bindings.json
+		legacyBlob, err2 := os.ReadFile(filepath.Join(sb.workDir, "branch_bindings.json"))
+		if err2 == nil {
+			var legacyList []branchBinding
+			_ = json.Unmarshal(legacyBlob, &legacyList)
+			return legacyList
+		}
+		return nil
+	}
+	var list []branchBinding
+	_ = json.Unmarshal(blob, &list)
+	return list
+}
+
+func (sb *SingBox) saveBranchBinding(binding branchBinding) {
+	list := sb.loadBranchBindings()
+	var updated []branchBinding
+	exists := false
+	for _, b := range list {
+		if b.TemplateID == binding.TemplateID && (b.Host == binding.Host || sanitizeTag(b.Host) == sanitizeTag(binding.Host)) {
+			updated = append(updated, binding)
+			exists = true
+		} else {
+			updated = append(updated, b)
+		}
+	}
+	if !exists {
+		updated = append(updated, binding)
+	}
+	data, err := json.MarshalIndent(updated, "", "  ")
+	if err == nil {
+		_ = os.WriteFile(sb.branchBindingsPath(), data, 0600)
+	}
+}
+
+func (sb *SingBox) saveAllBranchBindings(list []branchBinding) {
+	data, err := json.MarshalIndent(list, "", "  ")
+	if err == nil {
+		_ = os.WriteFile(sb.branchBindingsPath(), data, 0600)
+	}
+}
+
+func (sb *SingBox) removeBranchBinding(templateID int, hostTag string) {
+	list := sb.loadBranchBindings()
+	var updated []branchBinding
+	for _, b := range list {
+		match := false
+		if b.TemplateID == templateID {
+			if hostTag == "" || b.Host == hostTag || sanitizeTag(b.Host) == sanitizeTag(hostTag) {
+				match = true
+			}
+		}
+		if !match {
+			updated = append(updated, b)
+		}
+	}
+	sb.saveAllBranchBindings(updated)
+}
+
 // DetectSingBox 探测本机是否安装 sing-box 或存在配置文件
 func DetectSingBox(workDir string) (*SingBox, error) {
 	// 检查常用路径
@@ -339,16 +408,10 @@ func (sb *SingBox) Inbounds(live map[string]bool) ([]Inbound, error) {
 					boundUp = live[sanitizeTag(boundHost)]
 				}
 				cRemark := boundHost
-				bindings := loadBranchBindings(sb.workDir)
+				bindings := sb.loadBranchBindings()
 				for _, b := range bindings {
-					if b.Host != "" && strings.Contains(userName, sanitizeTag(b.Host)) {
-						if b.Region != "" {
-							pName := "家宽"
-							if b.PoolType == "datacenter" {
-								pName = "机房"
-							}
-							cRemark = fmt.Sprintf("%s%s", countryNameCN(b.Region, ""), pName)
-						}
+					if b.TemplateID == baseID && (b.Host == boundHost || sanitizeTag(b.Host) == boundHost || strings.Contains(userName, sanitizeTag(b.Host))) {
+						cRemark = formatExitRemark(b.Region, b.PoolType, b.Host)
 						break
 					}
 				}
@@ -572,18 +635,11 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 	baseRemark := tag
 	if strings.HasPrefix(uName, "soutu") {
 		branchName := uName
-		bindings := loadBranchBindings(sb.workDir)
+		bindings := sb.loadBranchBindings()
 		matchedRegion := ""
 		for _, b := range bindings {
-			if b.Host != "" && strings.Contains(uName, sanitizeTag(b.Host)) {
-				if b.Region != "" {
-					pName := "家宽"
-					if b.PoolType == "datacenter" {
-						pName = "机房"
-					}
-					cName := countryNameCN(b.Region, "")
-					matchedRegion = fmt.Sprintf("(%s%s)", cName, pName)
-				}
+			if (b.TemplateID == id || b.TemplateID == (id/1000)*1000) && (b.Host != "" && strings.Contains(uName, sanitizeTag(b.Host))) {
+				matchedRegion = fmt.Sprintf("(%s)", formatExitRemark(b.Region, b.PoolType, b.Host))
 				break
 			}
 		}
@@ -992,7 +1048,7 @@ func (sb *SingBox) CloneToTunnels(templateID int, hosts []string, tunnels []*Tun
 		}
 
 		// 持久化保存分流绑定记录，重启或隧道切换时自动自愈
-		saveBranchBinding(sb.workDir, branchBinding{
+		sb.saveBranchBinding(branchBinding{
 			TemplateID: templateID,
 			Slot:       slot,
 			Host:       host,
@@ -1131,10 +1187,10 @@ func (sb *SingBox) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) err
 	oldTag := "sout" + oldHostTag
 	newTag := "sout" + newHostTag
 
-	// 1. 同步更新持久化绑定记录
-	bindings := loadBranchBindings(sb.workDir)
+	// 1. 同步更新持久化绑定记录 (仅精准更新匹配该 host 的分支，杜绝跨节点伪联动)
+	bindings := sb.loadBranchBindings()
 	for i := range bindings {
-		if bindings[i].Host == oldHost || sanitizeTag(bindings[i].Host) == oldHostTag || (target.Slot > 0 && bindings[i].Slot == target.Slot) {
+		if bindings[i].Host == oldHost || sanitizeTag(bindings[i].Host) == oldHostTag {
 			bindings[i].Host = target.Node.HostName
 			bindings[i].Slot = target.Slot
 			reg := target.TargetRegion
@@ -1153,7 +1209,7 @@ func (sb *SingBox) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) err
 			}
 		}
 	}
-	saveAllBranchBindings(sb.workDir, bindings)
+	sb.saveAllBranchBindings(bindings)
 
 	// 2. 更新 inbounds 中的旧客户端用户名
 	inboundsRaw, _ := cfg["inbounds"].([]any)
@@ -1302,8 +1358,10 @@ func (sb *SingBox) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
 						routeRaw["rules"] = keptRules
 					}
 
-					// 清理持久化绑定记录
-					removeBranchBinding(sb.workDir, (tplIdx+1)*1000, "", 0)
+					// 清理持久化绑定记录 (提取特定 client 关联的 hostTag 进行精准清理)
+					prefix := fmt.Sprintf("soutu%d", (tplIdx+1)*1000)
+					delHostTag := strings.TrimPrefix(delName, prefix)
+					sb.removeBranchBinding((tplIdx+1)*1000, delHostTag)
 				}
 			}
 		}
@@ -1321,7 +1379,7 @@ func (sb *SingBox) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
 		for idx, ib := range inboundsRaw {
 			bID := (idx + 1) * 1000
 			if baseDeleteSet[bID] {
-				removeBranchBinding(sb.workDir, bID, "", 0)
+				sb.removeBranchBinding(bID, "")
 				continue
 			}
 			remainingInbounds = append(remainingInbounds, ib)
@@ -1774,7 +1832,7 @@ func (sb *SingBox) OnTunnelsChanged(tunnels []*Tunnel) error {
 	sb.syncOutboundsInternal(cfg, tunnels)
 
 	// 自动从持久化绑定中自愈恢复家宽分流规则
-	bindings := loadBranchBindings(sb.workDir)
+	bindings := sb.loadBranchBindings()
 	changed := false
 	if len(bindings) > 0 {
 		inboundsRaw, _ := cfg["inbounds"].([]any)
