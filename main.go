@@ -21,7 +21,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v3.3.7"
+var version = "v3.3.8"
 
 func initLowMemoryProtection() {
 	if os.Getenv("GOMEMLIMIT") == "" {
@@ -457,7 +457,7 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 				}
 				cleanNewBP := strings.Trim(newBP, "/")
 				if oldBP != "" && cleanNewBP != "" && oldBP != cleanNewBP {
-					syncCaddyBasePath(*workDir, oldBP, cleanNewBP)
+					syncCaddyBasePath(currentBasePathDir(), oldBP, cleanNewBP)
 				}
 			}
 			if in.PanelURL != nil {
@@ -522,6 +522,9 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 func syncCaddyBasePath(dir, oldBP, newBP string) {
 	if oldBP == "" || newBP == "" || oldBP == newBP {
 		return
+	}
+	if dir == "" {
+		dir = "/var/lib/sout"
 	}
 	// 1. 同步更新 caddy_meta.json
 	metaPath := filepath.Join(dir, "caddy_meta.json")

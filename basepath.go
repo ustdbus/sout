@@ -36,6 +36,12 @@ func currentBasePath() string {
 	return basePathCur
 }
 
+func currentBasePathDir() string {
+	basePathMu.RLock()
+	defer basePathMu.RUnlock()
+	return basePathDir
+}
+
 func setBasePath(raw string) (string, error) {
 	bp := normalizeBasePath(raw)
 	if bp != "" {
