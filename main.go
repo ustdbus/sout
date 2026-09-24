@@ -21,7 +21,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v3.3.6"
+var version = "v3.3.7"
 
 func initLowMemoryProtection() {
 	if os.Getenv("GOMEMLIMIT") == "" {
@@ -516,6 +516,7 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 			"password": auth.currentPassword(),
 			"version":      version,
 		})
+	}
 }
 
 func syncCaddyBasePath(dir, oldBP, newBP string) {
