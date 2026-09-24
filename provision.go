@@ -118,11 +118,20 @@ func (m *Manager) Provision(req ProvisionRequest) (*Job, error) {
 	} else if where == "SRC:builtin-vpngate" {
 		where = "VPN Gate 官方源"
 	} else if strings.HasPrefix(where, "SRC:") {
-		srcID := strings.TrimPrefix(where, "SRC:")
+		parts := strings.Split(strings.TrimPrefix(where, "SRC:"), ":")
+		srcID := parts[0]
+		sub := ""
+		if len(parts) > 1 {
+			sub = parts[1]
+		}
 		if globalCustomStore != nil {
 			globalCustomStore.mu.RLock()
 			if s, ok := globalCustomStore.Sources[srcID]; ok {
-				where = s.Name
+				if sub != "" && sub != "ALL" {
+					where = fmt.Sprintf("%s (%s)", s.Name, sub)
+				} else {
+					where = s.Name
+				}
 			}
 			globalCustomStore.mu.RUnlock()
 		}
@@ -178,7 +187,8 @@ func (m *Manager) runProvision(job *Job, picks []Node, region, poolType string, 
 		t.TargetPoolType = poolType
 		t.TargetRegion = region
 		if strings.HasPrefix(region, "SRC:") {
-			t.TargetSourceID = strings.TrimPrefix(region, "SRC:")
+			parts := strings.Split(strings.TrimPrefix(region, "SRC:"), ":")
+			t.TargetSourceID = parts[0]
 		}
 		started[i] = t
 		job.Set(i, "running", "连接 "+node.HostName)
@@ -654,6 +664,84 @@ func (m *Manager) Regions(poolType string) []RegionStat {
 			}
 		}
 	}
+
+	// --- 6. 自定义订阅源 / 新添加的源分类 ---
+	if globalCustomStore != nil {
+		globalCustomStore.mu.RLock()
+		var customSources []*CustomSource
+		for _, s := range globalCustomStore.Sources {
+			if s.ID == "preset-warp" || s.ID == "preset-windscribe" || s.ID == "preset-opera" || s.ID == "preset-proton" {
+				continue
+			}
+			customSources = append(customSources, s)
+		}
+		sort.Slice(customSources, func(i, j int) bool {
+			return customSources[i].UpdatedAt.Before(customSources[j].UpdatedAt)
+		})
+
+		for _, s := range customSources {
+			var srcNodes []Node
+			for _, n := range candidateNodes {
+				if !used[n.HostName] && n.SourceID == s.ID {
+					srcNodes = append(srcNodes, n)
+				}
+			}
+
+			if len(srcNodes) > 0 {
+				bestSpeed := 0.0
+				for _, n := range srcNodes {
+					if n.SpeedMbps > bestSpeed {
+						bestSpeed = n.SpeedMbps
+					}
+				}
+				result = append(result, RegionStat{
+					Code:      "SRC:" + s.ID + ":ALL",
+					Name:      fmt.Sprintf("🌐 全部 %s 节点", s.Name),
+					Available: len(srcNodes),
+					BestSpeed: bestSpeed,
+					Category:  s.ID,
+				})
+
+				countryMap := map[string]*RegionStat{}
+				for _, n := range srcNodes {
+					cCode := strings.ToUpper(strings.TrimSpace(n.CountryCode))
+					cName := strings.TrimSpace(n.Country)
+					if cCode == "" || cCode == "CUSTOM" {
+						continue
+					}
+					stat := countryMap[cCode]
+					if stat == nil {
+						dispName := cCode
+						if cName != "" && cName != "自定义S5" && cName != "自定义" {
+							dispName = fmt.Sprintf("%s %s", cCode, cName)
+						}
+						stat = &RegionStat{
+							Code:      "SRC:" + s.ID + ":" + cCode,
+							Name:      dispName,
+							BestPing:  n.Ping,
+							Category:  s.ID,
+						}
+						countryMap[cCode] = stat
+					}
+					stat.Available++
+					if n.SpeedMbps > stat.BestSpeed {
+						stat.BestSpeed = n.SpeedMbps
+					}
+					if n.Ping > 0 && (stat.BestPing == 0 || n.Ping < stat.BestPing) {
+						stat.BestPing = n.Ping
+					}
+				}
+				var countryList []RegionStat
+				for _, cs := range countryMap {
+					countryList = append(countryList, *cs)
+				}
+				sort.Slice(countryList, func(i, j int) bool { return countryList[i].Available > countryList[j].Available })
+				result = append(result, countryList...)
+			}
+		}
+		globalCustomStore.mu.RUnlock()
+	}
+
 	return result
 }
 

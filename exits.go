@@ -197,9 +197,13 @@ func (m *Manager) ExitsOf() ExitsView {
 		sourceName := "VPN Gate"
 		if kind == "custom" {
 			sourceName = "自定义订阅"
-			if t.Node.SourceID != "" && globalCustomStore != nil {
+			srcID := t.Node.SourceID
+			if srcID == "" {
+				srcID = t.TargetSourceID
+			}
+			if srcID != "" && globalCustomStore != nil {
 				globalCustomStore.mu.RLock()
-				if s, ok := globalCustomStore.Sources[t.Node.SourceID]; ok && s.Name != "" {
+				if s, ok := globalCustomStore.Sources[srcID]; ok && s.Name != "" {
 					sourceName = s.Name
 				}
 				globalCustomStore.mu.RUnlock()

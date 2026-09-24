@@ -1247,6 +1247,37 @@ $('#stepIncBtn').onclick = () => {
 
 let currentPoolType = 'all';
 let currentSourceCategory = 'vpngate';
+let allSourcesList = [];
+
+function renderSourceTabs(){
+  const container = $('#sourceTabs');
+  if(!container) return;
+  const presetTabs = [
+    { id: 'vpngate', name: 'VPN Gate' },
+    { id: 'warp', name: 'WARP' },
+    { id: 'windscribe', name: 'Windscribe' },
+    { id: 'opera', name: 'Opera' },
+    { id: 'proton', name: 'Proton' },
+  ];
+  const customTabs = (allSourcesList || [])
+    .filter(s => !s.is_builtin && !s.is_preset)
+    .map(s => ({ id: s.id, name: s.name }));
+
+  const allTabs = [...presetTabs, ...customTabs];
+  if(!allTabs.some(t => t.id === currentSourceCategory)){
+    currentSourceCategory = 'vpngate';
+  }
+  container.innerHTML = allTabs.map(t => {
+    const active = (t.id === currentSourceCategory) ? ' active' : '';
+    return '<button type="button" class="tab-pill' + active + '" data-src="' + esc(t.id) + '">' + esc(t.name) + '</button>';
+  }).join('');
+}
+
+async function loadRegions(){
+  try{
+    regionList = await api('/api/regions?type=' + encodeURIComponent(currentPoolType)) || [];
+  }catch(err){ regionList = []; }
+}
 
 $('#poolTabs').onclick = async e => {
   const btn = e.target.closest('[data-pool]');
@@ -1254,9 +1285,7 @@ $('#poolTabs').onclick = async e => {
     document.querySelectorAll('#poolTabs .tab-pill').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     currentPoolType = btn.dataset.pool;
-    try{
-      regionList = await api('/api/regions?type=' + encodeURIComponent(currentPoolType)) || [];
-    }catch(err){ regionList = []; }
+    await loadRegions();
     renderRegionList();
   }
 };
@@ -1276,8 +1305,16 @@ $('#openNewExitModalBtn').onclick = async () => {
   exitCount = 1;
   $('#exitCountInput').value = exitCount;
   try{
-    regionList = await api('/api/regions?type=' + encodeURIComponent(currentPoolType)) || [];
-  }catch(e){}
+    const [regions, sources] = await Promise.all([
+      api('/api/regions?type=' + encodeURIComponent(currentPoolType)),
+      api('/api/custom/source/list')
+    ]);
+    regionList = regions || [];
+    allSourcesList = sources || [];
+  }catch(e){
+    await loadRegions();
+  }
+  renderSourceTabs();
   renderRegionList();
   openModal('newExitModal');
 };
@@ -1289,7 +1326,7 @@ async function createWARPDirectly(){
     toast('正在调用 Cloudflare 官方 API 为本机申请免费 WARP 账号…');
     const res = await api('/api/custom/warp/generate', {method:'POST'});
     toast(res.message || 'WARP 账号创建成功！');
-    regionList = await api('/api/regions?type=' + encodeURIComponent(currentPoolType)) || [];
+    await loadRegions();
     renderRegionList();
   }catch(err){
     toast('创建失败: ' + err.message, true);
@@ -1344,10 +1381,14 @@ function renderRegionList(){
     }
 
     const srcNames = {windscribe:'Windscribe', opera:'Opera', proton:'Proton'};
-    const name = srcNames[currentSourceCategory] || '该源';
+    const customSrc = (allSourcesList || []).find(s => s.id === currentSourceCategory);
+    const name = customSrc ? customSrc.name : (srcNames[currentSourceCategory] || '该源');
+    const tipMsg = customSrc
+      ? '请在主界面右上角「订阅源」中检查该源是否已启用或更新订阅。'
+      : ('请在主界面右上角「订阅源」中为 ' + esc(name) + ' 填入订阅链接并启用。');
     $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:22px 14px;text-align:center;background:#12151a;border:1px dashed var(--line);border-radius:6px">'
       + '<div style="font-weight:600;font-size:13px;color:var(--text);margin-bottom:6px">当前「' + esc(name) + '」暂无可用节点</div>'
-      + '<div style="font-size:12px;color:var(--dim);margin-bottom:14px">请在主界面右上角「订阅源」中为 ' + esc(name) + ' 填入订阅链接并启用。</div>'
+      + '<div style="font-size:12px;color:var(--dim);margin-bottom:14px">' + tipMsg + '</div>'
       + '<button class="chip-btn" id="goCustomSourceBtn" style="padding:6px 14px;background:#238636;color:#fff">前往「订阅源」配置</button>'
       + '</div>';
     const g = $('#goCustomSourceBtn');
@@ -1821,6 +1862,8 @@ async function loadSourcesList(){
   const box = $('#sourcesContainer');
   try{
     const list = await api('/api/custom/source/list');
+    allSourcesList = list || [];
+    renderSourceTabs();
     if(!list || !list.length){
       box.innerHTML = '<div style="color:var(--dim);font-size:12px;text-align:center;padding:12px">暂无订阅源，请在上方添加在线订阅或批量导入节点</div>';
       return;
@@ -2051,6 +2094,7 @@ $('#copyLogsBtn').onclick = () => {
 
 poll();
 setInterval(poll, 3000);
+api('/api/custom/source/list').then(l => { allSourcesList = l || []; renderSourceTabs(); }).catch(() => {});
 </script>
 </body>
 </html>`
