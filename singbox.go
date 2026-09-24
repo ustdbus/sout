@@ -77,12 +77,15 @@ func (sb *SingBox) branchBindingsPath() string {
 func (sb *SingBox) loadBranchBindings() []branchBinding {
 	blob, err := os.ReadFile(sb.branchBindingsPath())
 	if err != nil {
-		// 首次运行如果不存在，尝试平滑迁移旧的通用 branch_bindings.json
-		legacyBlob, err2 := os.ReadFile(filepath.Join(sb.workDir, "branch_bindings.json"))
+		legacyPath := filepath.Join(sb.workDir, "branch_bindings.json")
+		legacyBlob, err2 := os.ReadFile(legacyPath)
 		if err2 == nil {
 			var legacyList []branchBinding
-			_ = json.Unmarshal(legacyBlob, &legacyList)
-			return legacyList
+			if err3 := json.Unmarshal(legacyBlob, &legacyList); err3 == nil {
+				_ = os.WriteFile(sb.branchBindingsPath(), legacyBlob, 0600)
+				_ = os.Rename(legacyPath, legacyPath+".migrated")
+				return legacyList
+			}
 		}
 		return nil
 	}

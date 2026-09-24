@@ -1063,20 +1063,26 @@ func branchBindingsPath(workDir string) string {
 	if workDir == "" {
 		workDir = "/var/lib/sout"
 	}
-	suiPath := filepath.Join(workDir, "sui_branch_bindings.json")
-	if _, err := os.Stat(suiPath); err == nil {
-		return suiPath
-	}
-	legacyPath := filepath.Join(workDir, "branch_bindings.json")
-	if _, err := os.Stat(legacyPath); err == nil {
-		return legacyPath
-	}
-	return suiPath
+	return filepath.Join(workDir, "sui_branch_bindings.json")
 }
 
 func loadBranchBindings(workDir string) []branchBinding {
-	blob, err := os.ReadFile(branchBindingsPath(workDir))
+	p := branchBindingsPath(workDir)
+	blob, err := os.ReadFile(p)
 	if err != nil {
+		// 首次运行如果 sui 专属文件不存在，尝试从旧的通用 branch_bindings.json 迁移
+		if workDir == "" {
+			workDir = "/var/lib/sout"
+		}
+		legacyPath := filepath.Join(workDir, "branch_bindings.json")
+		if legacyBlob, err2 := os.ReadFile(legacyPath); err2 == nil {
+			var legacyList []branchBinding
+			if err3 := json.Unmarshal(legacyBlob, &legacyList); err3 == nil {
+				_ = os.WriteFile(p, legacyBlob, 0600)
+				_ = os.Rename(legacyPath, legacyPath+".migrated")
+				return legacyList
+			}
+		}
 		return nil
 	}
 	var list []branchBinding
