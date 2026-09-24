@@ -217,28 +217,50 @@ func applyUpdate() error {
 }
 
 func downloadFile(url, dst string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return err
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			cancel()
+			return err
+		}
+		req.Header.Set("User-Agent", "fanout-updater")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			cancel()
+			lastErr = err
+			time.Sleep(time.Duration(attempt) * time.Second)
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			cancel()
+			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+			if resp.StatusCode >= 500 {
+				time.Sleep(time.Duration(attempt) * time.Second)
+				continue
+			}
+			return lastErr
+		}
+		f, err := os.Create(dst)
+		if err != nil {
+			resp.Body.Close()
+			cancel()
+			return err
+		}
+		_, err = io.Copy(f, resp.Body)
+		f.Close()
+		resp.Body.Close()
+		cancel()
+		if err != nil {
+			lastErr = err
+			time.Sleep(time.Duration(attempt) * time.Second)
+			continue
+		}
+		return nil
 	}
-	req.Header.Set("User-Agent", "fanout-updater")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	f, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
-	return err
+	return lastErr
 }
 
 func verifyChecksum(path, name, sumsURL string) error {

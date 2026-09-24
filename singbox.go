@@ -407,12 +407,23 @@ func (sb *SingBox) Inbounds(live map[string]bool) ([]Inbound, error) {
 				if live != nil && boundHost != "" {
 					boundUp = live[sanitizeTag(boundHost)]
 				}
-				cRemark := boundHost
+				cRemark := ""
 				bindings := sb.loadBranchBindings()
 				for _, b := range bindings {
 					if b.TemplateID == baseID && (b.Host == boundHost || sanitizeTag(b.Host) == boundHost || strings.Contains(userName, sanitizeTag(b.Host))) {
-						cRemark = formatExitRemark(b.Region, b.PoolType, b.Host)
-						break
+						rem := formatExitRemark(b.Region, b.PoolType, b.Host)
+						if rem != "" && rem != "出站出口" && !strings.Contains(rem, "totallyacdn") {
+							cRemark = rem
+							break
+						}
+					}
+				}
+				if cRemark == "" || cRemark == "出站出口" || strings.Contains(cRemark, "totallyacdn") {
+					rem := formatExitRemark("", "datacenter", boundHost)
+					if rem != "" && rem != "出站出口" && rem != "出口机房" && !strings.Contains(rem, "totallyacdn") {
+						cRemark = rem
+					} else {
+						cRemark = "出口分流"
 					}
 				}
 				branchTag := fmt.Sprintf("%s (%s)", tag, cRemark)
@@ -634,19 +645,31 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 	// 确定基础备注名
 	baseRemark := tag
 	if strings.HasPrefix(uName, "soutu") {
-		branchName := uName
+		matchedRemark := ""
 		bindings := sb.loadBranchBindings()
-		matchedRegion := ""
 		for _, b := range bindings {
 			if b.Host != "" && strings.Contains(uName, sanitizeTag(b.Host)) {
-				matchedRegion = fmt.Sprintf("(%s)", formatExitRemark(b.Region, b.PoolType, b.Host))
-				break
+				rem := formatExitRemark(b.Region, b.PoolType, b.Host)
+				if rem != "" && rem != "出站出口" && !strings.Contains(rem, "totallyacdn") {
+					matchedRemark = rem
+					break
+				}
 			}
 		}
-		if matchedRegion != "" {
-			baseRemark = fmt.Sprintf("%s %s", tag, matchedRegion)
+		if matchedRemark == "" {
+			rawHost := strings.TrimPrefix(uName, "soutu")
+			for len(rawHost) > 0 && rawHost[0] >= '0' && rawHost[0] <= '9' {
+				rawHost = rawHost[1:]
+			}
+			rem := formatExitRemark("", "datacenter", rawHost)
+			if rem != "" && rem != "出站出口" && rem != "出口机房" && !strings.Contains(rem, "totallyacdn") {
+				matchedRemark = rem
+			}
+		}
+		if matchedRemark != "" {
+			baseRemark = fmt.Sprintf("%s (%s)", tag, matchedRemark)
 		} else {
-			baseRemark = fmt.Sprintf("%s (%s)", tag, branchName)
+			baseRemark = fmt.Sprintf("%s (出口分流)", tag)
 		}
 	}
 
@@ -771,7 +794,7 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 	}
 
 	var links []string
-	for _, item := range addrs {
+	for addrIdx, item := range addrs {
 		connectHost := strings.TrimSpace(item.Server)
 		if connectHost == "" {
 			connectHost = defaultHost
@@ -782,6 +805,13 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 		}
 
 		remark := baseRemark
+		if len(addrs) > 1 {
+			if item.Remark != "" {
+				remark = fmt.Sprintf("%s - %s", baseRemark, item.Remark)
+			} else {
+				remark = fmt.Sprintf("%s - 优选%d", baseRemark, addrIdx+1)
+			}
+		}
 
 		// 判定该节点是否启用 TLS 以及提取 SNI/uTLS/ALPN
 		itemSNI := serverSNI
@@ -1445,6 +1475,7 @@ func (sb *SingBox) DeleteBranchesByHost(host string, tunnels []*Tunnel) error {
 		}
 	}
 
+	sb.removeBranchBinding(0, host)
 	removeBranchBinding(sb.workDir, 0, host, 0)
 	sb.syncOutboundsInternal(cfg, tunnels)
 	return sb.saveConfig(cfg)
@@ -1860,10 +1891,6 @@ func (sb *SingBox) OnTunnelsChanged(tunnels []*Tunnel) error {
 			for _, t := range tunnels {
 				if t.Status == "up" {
 					if b.Host != "" && (t.Node.HostName == b.Host || sanitizeTag(t.Node.HostName) == sanitizeTag(b.Host)) {
-						targetTunnel = t
-						break
-					}
-					if b.Slot > 0 && t.Slot == b.Slot {
 						targetTunnel = t
 						break
 					}
