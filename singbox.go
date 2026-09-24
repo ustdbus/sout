@@ -638,7 +638,7 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 		bindings := sb.loadBranchBindings()
 		matchedRegion := ""
 		for _, b := range bindings {
-			if (b.TemplateID == id || b.TemplateID == (id/1000)*1000) && (b.Host != "" && strings.Contains(uName, sanitizeTag(b.Host))) {
+			if b.Host != "" && strings.Contains(uName, sanitizeTag(b.Host)) {
 				matchedRegion = fmt.Sprintf("(%s)", formatExitRemark(b.Region, b.PoolType, b.Host))
 				break
 			}
