@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
@@ -20,7 +21,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v3.3.5"
+var version = "v3.3.6"
 
 func initLowMemoryProtection() {
 	if os.Getenv("GOMEMLIMIT") == "" {
@@ -448,9 +449,15 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 				}
 			}
 			if in.BasePath != nil {
-				if _, err := setBasePath(*in.BasePath); err != nil {
+				oldBP := strings.Trim(currentBasePath(), "/")
+				newBP, err := setBasePath(*in.BasePath)
+				if err != nil {
 					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 					return
+				}
+				cleanNewBP := strings.Trim(newBP, "/")
+				if oldBP != "" && cleanNewBP != "" && oldBP != cleanNewBP {
+					syncCaddyBasePath(*workDir, oldBP, cleanNewBP)
 				}
 			}
 			if in.PanelURL != nil {
@@ -509,8 +516,46 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 			"password": auth.currentPassword(),
 			"version":      version,
 		})
+}
+
+func syncCaddyBasePath(dir, oldBP, newBP string) {
+	if oldBP == "" || newBP == "" || oldBP == newBP {
+		return
+	}
+	// 1. 同步更新 caddy_meta.json
+	metaPath := filepath.Join(dir, "caddy_meta.json")
+	if data, err := os.ReadFile(metaPath); err == nil {
+		var meta map[string]any
+		if err := json.Unmarshal(data, &meta); err == nil {
+			if cur, _ := meta["sout_path"].(string); cur == oldBP {
+				meta["sout_path"] = newBP
+				if out, err := json.MarshalIndent(meta, "", "  "); err == nil {
+					_ = os.WriteFile(metaPath, out, 0600)
+				}
+			}
+		}
+	}
+
+	// 2. 检查并同步替换 Caddyfile 中的旧路径并重载
+	caddyCandidates := []string{"/etc/caddy/Caddyfile", "/usr/local/caddy/Caddyfile"}
+	for _, cPath := range caddyCandidates {
+		content, err := os.ReadFile(cPath)
+		if err != nil {
+			continue
+		}
+		s := string(content)
+		oldSub := "/" + oldBP
+		newSub := "/" + newBP
+		if strings.Contains(s, oldSub) {
+			s = strings.ReplaceAll(s, oldSub, newSub)
+			if err := os.WriteFile(cPath, []byte(s), 0644); err == nil {
+				log.Printf("已同步更新 Caddy 反代路径配置: %s -> %s (%s)", oldBP, newBP, cPath)
+				_ = exec.Command("caddy", "reload", "--config", cPath).Run()
+			}
+		}
 	}
 }
+
 
 func apiUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	st, err := checkUpdate()

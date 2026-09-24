@@ -486,10 +486,13 @@ option{background:#161b22;color:var(--text);padding:8px}
       <button class="icon" data-close="settingsModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
     <div class="body">
+      <!-- 隐藏 dummy input 阻止浏览器密码管理器自动将用户名填入后续文本框 -->
+      <input type="text" style="display:none" autocomplete="username">
       <label class="f"><span>访问口令</span>
-        <input id="setPw" type="password" placeholder="留空则不修改"></label>
-      <label class="f"><span>访问路径</span>
-        <input id="setPath" type="text" placeholder="留空去掉前缀"></label>
+        <input id="setPw" type="password" placeholder="留空则不修改" autocomplete="new-password"></label>
+      <label class="f"><span>访问路径 (URL 前缀)</span>
+        <input id="setPath" type="text" placeholder="如 soute1e47086 (留空则无前缀)" autocomplete="off">
+        <span style="font-size:11px;color:var(--dim);margin-top:2px">⚠️ 提示：若使用反向代理（域名/Caddy）访问，请勿随意修改此项，否则将导致反代失效出现 404</span></label>
       <label class="f"><span>管理端口</span>
         <input id="setPort" type="text" inputmode="numeric"></label>
       <label class="f"><span>监听地址</span>
@@ -1570,11 +1573,15 @@ $('#setSSLEnabled').onchange = () => {
   $('#sslConfigBox').style.display = $('#setSSLEnabled').checked ? 'block' : 'none';
 };
 
+let initialBasePath = '';
+
 $('#settingsBtn').onclick = async () => {
   openModal('settingsModal');
+  $('#setPw').value = '';
   try{
     const s = await api('/api/settings');
-    $('#setPath').value = (s.base_path || '').replace(/^\//, '');
+    initialBasePath = (s.base_path || '').replace(/^\/+|\/+$/g, '');
+    $('#setPath').value = initialBasePath;
     $('#setPort').value = s.port || '';
     $('#setListen').value = (s.listen_addr === '127.0.0.1') ? '127.0.0.1' : '0.0.0.0';
     $('#setPanelUrl').value = s.panel_url || '';
@@ -1587,11 +1594,19 @@ $('#settingsBtn').onclick = async () => {
 };
 
 $('#saveSettingsBtn').onclick = async e => {
-  e.target.disabled = true;
-  const body = {};
   const pw = $('#setPw').value.trim();
+  const currentInputPath = $('#setPath').value.trim().replace(/^\/+|\/+$/g, '');
+  const body = {};
+
   if(pw) body.password = pw;
-  body.base_path = $('#setPath').value.trim();
+  if(currentInputPath !== initialBasePath) {
+    if(!confirm('⚠️ 警告：检测到您修改了【访问路径】！\n\n修改路径会导致当前面板 URL 立即变更！\n若您正在使用域名或 Caddy/Nginx 反向代理，请确保反向代理规则已同步修改，否则会导致 404 无法访问！\n\n确定要保存新的访问路径吗？')){
+      return;
+    }
+    body.base_path = currentInputPath;
+  }
+
+  e.target.disabled = true;
   const port = parseInt($('#setPort').value.trim(), 10);
   if(port) body.port = port;
   body.listen_addr = $('#setListen').value;
@@ -1608,11 +1623,18 @@ $('#saveSettingsBtn').onclick = async e => {
     });
     toast('设置已保存');
     closeModal('settingsModal');
+    if(body.base_path !== undefined && body.base_path !== initialBasePath) {
+      setTimeout(() => {
+        const bp = (body.base_path ? '/' + body.base_path : '') + '/';
+        location.href = location.origin + bp;
+      }, 1000);
+      return;
+    }
     if(body.ssl_enabled && location.protocol === 'http:'){
       setTimeout(() => {
         const host = body.ssl_domain || location.hostname;
         const p = body.port || location.port;
-        const bp = (body.base_path ? '/' + body.base_path.replace(/^\/+|\/+$/g, '') : '') + '/';
+        const bp = (currentInputPath ? '/' + currentInputPath : '') + '/';
         location.href = 'https://' + host + (p && p != 443 ? ':' + p : '') + bp;
       }, 1200);
     }
