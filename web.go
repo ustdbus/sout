@@ -1009,8 +1009,66 @@ document.addEventListener('click', async e => {
       $('#noExitsBox').style.display = 'none';
       $('#confirmChooseExitBtn').disabled = false;
       sel.innerHTML = upExits.map(x => {
-        const pUpper = (x.protocol || (x.kind === 'custom' ? 'SOCKS5' : 'OpenVPN')).toUpperCase();
-        return '<option value="' + esc(x.host) + '">' + esc((x.country || x.region) + ' [' + pUpper + '] (' + (x.exit_ip || x.host) + ' · 内部端口:' + x.port + ')') + '</option>';
+        let src = x.source_name || '';
+        const hostLower = (x.host || '').toLowerCase();
+        const countryLower = (x.country || '').toLowerCase();
+        const regLower = (x.region || '').toLowerCase();
+        const rmkLower = (x.remark || '').toLowerCase();
+
+        if(!src || src === '自定义订阅' || src === '自定义'){
+          if(hostLower.includes('cloudflareclient.com') || hostLower.includes('warp') || countryLower.includes('warp') || regLower.includes('warp')){
+            src = 'WARP';
+          } else if(hostLower.includes('windscribe') || hostLower.includes('totallyacdn.com') || rmkLower.includes('windscribe')){
+            src = 'Windscribe';
+          } else if(hostLower.includes('proton') || rmkLower.includes('proton')){
+            src = 'Proton';
+          } else if(hostLower.includes('opera') || rmkLower.includes('opera')){
+            src = 'Opera';
+          } else if(x.kind === 'vpngate'){
+            src = 'VPN Gate';
+          } else {
+            src = x.kind === 'custom' ? '自定义' : 'VPN Gate';
+          }
+        }
+
+        // 解析地址 (如 local, Hongkong, Japan 等)
+        let addr = '';
+        if(src.toUpperCase() === 'WARP' || countryLower.includes('warp') || regLower === 'cf' || regLower === 'all'){
+          addr = 'local';
+        } else {
+          const rawLoc = x.country || x.region || '';
+          const locLower = rawLoc.toLowerCase();
+          if(locLower.includes('香港') || locLower.includes('hk') || locLower.includes('hongkong') || locLower.includes('hong kong')){
+            addr = 'Hongkong';
+          } else if(locLower.includes('日本') || locLower.includes('jp') || locLower.includes('japan')){
+            addr = 'Japan';
+          } else if(locLower.includes('美国') || locLower.includes('us') || locLower.includes('united states')){
+            addr = 'US';
+          } else if(locLower.includes('新加坡') || locLower.includes('sg') || locLower.includes('singapore')){
+            addr = 'Singapore';
+          } else if(locLower.includes('英国') || locLower.includes('gb') || locLower.includes('uk') || locLower.includes('united kingdom')){
+            addr = 'UK';
+          } else if(locLower.includes('德国') || locLower.includes('de') || locLower.includes('germany')){
+            addr = 'Germany';
+          } else if(locLower.includes('荷兰') || locLower.includes('nl') || locLower.includes('netherlands')){
+            addr = 'Netherlands';
+          } else if(locLower.includes('加拿大') || locLower.includes('ca') || locLower.includes('canada')){
+            addr = 'Canada';
+          } else if(locLower.includes('韩国') || locLower.includes('kr') || locLower.includes('korea')){
+            addr = 'Korea';
+          } else if(locLower.includes('台湾') || locLower.includes('tw') || locLower.includes('taiwan')){
+            addr = 'Taiwan';
+          } else if(locLower.includes('法国') || locLower.includes('fr') || locLower.includes('france')){
+            addr = 'France';
+          } else if(locLower.includes('澳大利亚') || locLower.includes('au') || locLower.includes('australia')){
+            addr = 'Australia';
+          } else {
+            addr = rawLoc.replace(/^SRC:[^:]+:/i, '').replace(/[\(\)\[\]]/g, '').trim() || 'local';
+          }
+        }
+
+        const label = src + '[' + addr + '] (' + (x.exit_ip || x.host) + ' · 内部端口:' + x.port + ')';
+        return '<option value="' + esc(x.host) + '">' + esc(label) + '</option>';
       }).join('');
     }
     openModal('chooseExitModal');

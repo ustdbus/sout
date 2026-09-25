@@ -205,6 +205,15 @@ func (m *Manager) ExitsOf() ExitsView {
 				globalCustomStore.mu.RLock()
 				if s, ok := globalCustomStore.Sources[srcID]; ok && s.Name != "" {
 					sourceName = s.Name
+				} else if s, ok := globalCustomStore.Sources["preset-"+srcID]; ok && s.Name != "" {
+					sourceName = s.Name
+				} else if idx := strings.Index(srcID, ":"); idx > 0 {
+					prefix := srcID[:idx]
+					if s, ok := globalCustomStore.Sources["preset-"+prefix]; ok && s.Name != "" {
+						sourceName = s.Name
+					} else if s, ok := globalCustomStore.Sources[prefix]; ok && s.Name != "" {
+						sourceName = s.Name
+					}
 				}
 				globalCustomStore.mu.RUnlock()
 			}
@@ -213,6 +222,8 @@ func (m *Manager) ExitsOf() ExitsView {
 					sourceName = "Windscribe"
 				} else if strings.Contains(rmkLower, "warp") || strings.Contains(rmkLower, "cloudflare") || strings.Contains(hostLower, "warp") || strings.Contains(hostLower, "cloudflareclient.com") {
 					sourceName = "WARP"
+				} else if strings.Contains(rmkLower, "proton") || strings.Contains(hostLower, "proton") || strings.Contains(strings.ToLower(t.TargetSourceID), "proton") {
+					sourceName = "Proton"
 				} else if strings.Contains(rmkLower, "opera") || strings.Contains(hostLower, "opera") {
 					sourceName = "Opera"
 				} else if t.Node.Remark != "" && t.Node.Remark != t.Node.IP {
