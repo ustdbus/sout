@@ -808,12 +808,8 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 		}
 
 		remark := baseRemark
-		if len(addrs) > 1 {
-			if item.Remark != "" {
-				remark = fmt.Sprintf("%s - %s", baseRemark, item.Remark)
-			} else {
-				remark = fmt.Sprintf("%s - 优选%d", baseRemark, addrIdx+1)
-			}
+		if item.Remark != "" {
+			remark = fmt.Sprintf("%s - %s", baseRemark, item.Remark)
 		}
 
 		// 判定该节点是否启用 TLS 以及提取 SNI/uTLS/ALPN
