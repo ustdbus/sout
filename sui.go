@@ -664,11 +664,11 @@ func (s *SUI) Inbounds(live map[string]bool) ([]Inbound, error) {
 			branchTag := item.Tag
 			if !isBase {
 				if c.Remark != "" {
-					branchTag = fmt.Sprintf("%s (%s)", item.Tag, c.Remark)
+					branchTag = fmt.Sprintf("%s (%s)", item.Tag, cleanRemarkTitle(c.Remark))
 				} else if boundHost != "" {
-					branchTag = fmt.Sprintf("%s (%s)", item.Tag, boundHost)
+					branchTag = fmt.Sprintf("%s (%s)", item.Tag, cleanRemarkTitle(boundHost))
 				} else {
-					branchTag = fmt.Sprintf("%s (%s)", item.Tag, c.Name)
+					branchTag = fmt.Sprintf("%s (出口分流)", item.Tag)
 				}
 			}
 
@@ -946,7 +946,73 @@ func countryNameCN(code, name string) string {
 	}
 }
 
-// formatExitRemark 将 region, poolType, host 转换为人类友好的出口描述，杜绝内部代码和机房家宽混淆
+// cleanSubRegion 从 region 或 SRC 字符串中提取纯净的人类可读国家/地区名称
+func cleanSubRegion(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "ALL" || raw == "CUSTOM" {
+		return ""
+	}
+	if strings.HasPrefix(raw, "SRC:") {
+		parts := strings.Split(raw, ":")
+		if len(parts) >= 3 {
+			raw = parts[2]
+		} else {
+			return ""
+		}
+	}
+	if raw == "ALL" || raw == "" {
+		return ""
+	}
+	cn := countryNameCN(raw, "")
+	if cn != "" && cn != "海外" && !strings.HasPrefix(cn, "SRC:") {
+		return cn
+	}
+	if !strings.HasPrefix(raw, "SRC:") {
+		return raw
+	}
+	return ""
+}
+
+// cleanRemarkTitle 清洗节点名称，剔除类似 (SRC:proton:日本) 等内部变量，规范化括号层级
+func cleanRemarkTitle(rem string) string {
+	rem = strings.TrimSpace(rem)
+	if rem == "" {
+		return ""
+	}
+	for strings.Contains(rem, "SRC:") {
+		idx := strings.Index(rem, "SRC:")
+		endIdx := strings.IndexAny(rem[idx:], ") ]}")
+		var fullSRC string
+		if endIdx != -1 {
+			fullSRC = rem[idx : idx+endIdx]
+		} else {
+			fullSRC = rem[idx:]
+		}
+		parts := strings.Split(fullSRC, ":")
+		sub := ""
+		if len(parts) >= 3 && parts[2] != "ALL" && parts[2] != "" {
+			sub = cleanSubRegion(parts[2])
+		}
+		rem = strings.Replace(rem, "("+fullSRC+")", sub, 1)
+		rem = strings.Replace(rem, fullSRC, sub, 1)
+	}
+	for _, brand := range []string{"Proton", "Windscribe", "Opera", "WARP"} {
+		prefix := brand + " ("
+		if strings.Contains(rem, prefix) && strings.Contains(rem, ") 机房") {
+			rem = strings.Replace(rem, prefix, brand+" ", 1)
+			rem = strings.Replace(rem, ") 机房", "机房", 1)
+		}
+	}
+	for strings.Contains(rem, "((") && strings.Contains(rem, "))") {
+		rem = strings.ReplaceAll(rem, "((", "(")
+		rem = strings.ReplaceAll(rem, "))", ")")
+	}
+	rem = strings.ReplaceAll(rem, "()", "")
+	rem = strings.ReplaceAll(rem, "( )", "")
+	return strings.TrimSpace(strings.Join(strings.Fields(rem), " "))
+}
+
+// formatExitRemark 将 region, poolType, host 转换为人类友好的出口描述，严格参考 WARP 标准杜绝嵌套括号与内部变量
 func formatExitRemark(region, poolType, host string) string {
 	lowerReg := strings.ToLower(region)
 	lowerHost := strings.ToLower(host)
@@ -959,7 +1025,7 @@ func formatExitRemark(region, poolType, host string) string {
 	// 2. Windscribe 出口
 	if strings.Contains(lowerReg, "windscribe") || strings.Contains(lowerHost, "windscribe") || strings.Contains(lowerHost, "totallyacdn.com") {
 		city := ""
-		for _, c := range []string{"洛杉矶", "西雅图", "纽约", "芝加哥", "温哥华", "多伦多", "蒙特利尔", "伦敦", "法兰克福", "巴黎", "阿姆斯特丹", "苏黎世", "香港"} {
+		for _, c := range []string{"洛杉矶", "西雅图", "纽约", "芝加哥", "温哥华", "多伦多", "蒙特利尔", "伦敦", "法兰克福", "巴黎", "阿姆斯特丹", "苏黎世", "香港", "日本"} {
 			if strings.Contains(region, c) || strings.Contains(host, c) {
 				city = c
 				break
@@ -975,34 +1041,42 @@ func formatExitRemark(region, poolType, host string) string {
 			}
 		}
 		if city != "" {
-			return fmt.Sprintf("Windscribe (%s) 机房", city)
+			return fmt.Sprintf("Windscribe %s机房", city)
 		}
 		return "Windscribe 机房"
 	}
 
 	// 3. Proton 出口
 	if strings.Contains(lowerReg, "proton") || strings.Contains(lowerHost, "proton") {
-		cName := countryNameCN(region, "")
-		if cName == "" || cName == "海外" {
-			if strings.Contains(region, "日本") || strings.Contains(lowerHost, "jp") {
-				cName = "日本"
-			} else if strings.Contains(region, "新加坡") || strings.Contains(lowerHost, "sg") {
-				cName = "新加坡"
-			} else if strings.Contains(region, "美国") || strings.Contains(lowerHost, "us") {
-				cName = "美国"
+		sub := cleanSubRegion(region)
+		if sub == "" {
+			for _, c := range []string{"日本", "新加坡", "美国", "香港", "英国", "德国", "荷兰"} {
+				if strings.Contains(region, c) || strings.Contains(host, c) {
+					sub = c
+					break
+				}
+			}
+			if sub == "" {
+				if strings.Contains(lowerHost, "jp") {
+					sub = "日本"
+				} else if strings.Contains(lowerHost, "sg") {
+					sub = "新加坡"
+				} else if strings.Contains(lowerHost, "us") {
+					sub = "美国"
+				}
 			}
 		}
-		if cName != "" && cName != "海外" {
-			return fmt.Sprintf("Proton (%s) 机房", cName)
+		if sub != "" {
+			return fmt.Sprintf("Proton %s机房", sub)
 		}
 		return "Proton 机房"
 	}
 
 	// 4. Opera 出口
 	if strings.Contains(lowerReg, "opera") || strings.Contains(lowerHost, "opera") {
-		cName := countryNameCN(region, "")
-		if cName != "" && cName != "海外" {
-			return fmt.Sprintf("Opera (%s) 机房", cName)
+		sub := cleanSubRegion(region)
+		if sub != "" {
+			return fmt.Sprintf("Opera %s机房", sub)
 		}
 		return "Opera 机房"
 	}
@@ -1011,7 +1085,6 @@ func formatExitRemark(region, poolType, host string) string {
 	if strings.HasPrefix(region, "SRC:") {
 		parts := strings.Split(region, ":")
 		srcName := "自定义"
-		subRegion := ""
 		if len(parts) >= 2 {
 			srcID := parts[1]
 			if globalCustomStore != nil {
@@ -1025,11 +1098,9 @@ func formatExitRemark(region, poolType, host string) string {
 				srcName = strings.ToUpper(srcID[:1]) + srcID[1:]
 			}
 		}
-		if len(parts) >= 3 && parts[2] != "ALL" && parts[2] != "" {
-			subRegion = countryNameCN(parts[2], "")
-		}
-		if subRegion != "" {
-			return fmt.Sprintf("%s (%s) 机房", srcName, subRegion)
+		sub := cleanSubRegion(region)
+		if sub != "" {
+			return fmt.Sprintf("%s %s机房", srcName, sub)
 		}
 		return fmt.Sprintf("%s 机房", srcName)
 	}
@@ -2247,10 +2318,10 @@ func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, 
 		}
 	}
 
-	// 4. 格式化链接与备注（保持节点导出名称纯净，不在客户端节点名称中拼接优选地址备注）
+	// 4. 格式化链接与备注（保持节点导出名称纯净，规范化括号与备注）
 	if len(matchedURIs) > 0 {
 		var finalLinks []string
-		tagToUse := branchTag
+		tagToUse := cleanRemarkTitle(branchTag)
 		if tagToUse == "" {
 			tagToUse = inbTag
 		}
