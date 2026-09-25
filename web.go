@@ -1330,7 +1330,20 @@ function renderSourceTabs(){
   }
   container.innerHTML = allTabs.map(t => {
     const active = (t.id === currentSourceCategory) ? ' active' : '';
-    return '<button type="button" class="tab-pill' + active + '" data-src="' + esc(t.id) + '">' + esc(t.name) + '</button>';
+    let countBadge = '';
+    if(t.id === 'vpngate'){
+      const vgCount = currentPoolType === 'datacenter' ? 0 : regionList.filter(r => (r.category || 'vpngate') === 'vpngate').reduce((acc, r) => acc + (r.count || 0), 0);
+      countBadge = ' <span style="font-size:11px;opacity:0.8">(' + vgCount + ')</span>';
+    } else {
+      const srcObj = (allSourcesList || []).find(s => s.id === t.id || s.id === 'preset-' + t.id);
+      if(srcObj && srcObj.count > 0){
+        let c = srcObj.count;
+        if(currentPoolType === 'residential') c = srcObj.residential_count || 0;
+        else if(currentPoolType === 'datacenter') c = srcObj.datacenter_count || 0;
+        countBadge = ' <span style="font-size:11px;opacity:0.8">(' + c + ')</span>';
+      }
+    }
+    return '<button type="button" class="tab-pill' + active + '" data-src="' + esc(t.id) + '">' + esc(t.name) + countBadge + '</button>';
   }).join('');
 }
 
@@ -1347,6 +1360,7 @@ $('#poolTabs').onclick = async e => {
     btn.classList.add('active');
     currentPoolType = btn.dataset.pool;
     await loadRegions();
+    renderSourceTabs();
     renderRegionList();
   }
 };
@@ -1413,7 +1427,26 @@ function renderRegionList(){
 
   // 2. 若当前分类下暂无节点，显示针对性引导卡片
   if(!catRegions || !catRegions.length){
+    const poolTitle = currentPoolType === 'residential' ? '家宽池' : (currentPoolType === 'datacenter' ? '机房池' : '全部节点');
+
+    // 2.1 VPN Gate
     if(currentSourceCategory === 'vpngate'){
+      if(currentPoolType === 'datacenter'){
+        // VPN Gate 切换到机房池：明确显示为 0 节点！
+        $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:26px 14px;text-align:center;background:#12151a;border:1px dashed var(--line);border-radius:6px">'
+          + '<div style="font-size:24px;font-weight:700;color:var(--dim);margin-bottom:4px">0 个节点</div>'
+          + '<div style="font-weight:600;font-size:13px;color:var(--text);margin-bottom:6px">当前「机房池」中 VPN Gate 共有 0 个可用节点</div>'
+          + '<div style="font-size:12px;color:var(--dim);margin-bottom:16px;line-height:1.5">VPN Gate 官方节点均为真实志愿者的住宅网络（家宽），全部归属于「家宽池」。</div>'
+          + '<button class="primary" id="switchToResPoolBtn" style="padding:6px 16px">' + ICON.redo + ' 切换至「家宽池」查看节点</button>'
+          + '</div>';
+        const swBtn = $('#switchToResPoolBtn');
+        if(swBtn) swBtn.onclick = () => {
+          const resTab = document.querySelector('#poolTabs [data-pool="residential"]');
+          if(resTab) resTab.click();
+        };
+        return;
+      }
+
       $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:22px 14px;text-align:center;background:#12151a;border:1px dashed var(--line);border-radius:6px">'
         + '<div style="font-weight:600;font-size:13px;color:var(--text);margin-bottom:6px">当前「VPN Gate」官方节点池暂无可用节点</div>'
         + '<div style="font-size:12px;color:var(--dim);margin-bottom:14px;line-height:1.5">VPN Gate 为系统内置全球家宽源，无需配置订阅链接。<br>若刚启动或已被禁用，请点击下方按钮立即刷新节点池，或前往「订阅源」检查启用状态。</div>'
@@ -1441,9 +1474,60 @@ function renderRegionList(){
       return;
     }
 
-    const srcNames = {windscribe:'Windscribe', opera:'Opera', proton:'Proton'};
-    const customSrc = (allSourcesList || []).find(s => s.id === currentSourceCategory);
+    // 2.2 WARP
+    if(currentSourceCategory === 'warp'){
+      if(currentPoolType === 'residential'){
+        $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:26px 14px;text-align:center;background:#12151a;border:1px dashed var(--line);border-radius:6px">'
+          + '<div style="font-size:24px;font-weight:700;color:var(--dim);margin-bottom:4px">0 个节点</div>'
+          + '<div style="font-weight:600;font-size:13px;color:var(--text);margin-bottom:6px">当前「家宽池」中 WARP 共有 0 个可用节点</div>'
+          + '<div style="font-size:12px;color:var(--dim);margin-bottom:16px;line-height:1.5">Cloudflare WARP 为官方机房出站网络，全部归属于「机房池」。</div>'
+          + '<button class="primary" id="switchToDcPoolBtn" style="padding:6px 16px">切换至「机房池」查看节点</button>'
+          + '</div>';
+        const swBtn = $('#switchToDcPoolBtn');
+        if(swBtn) swBtn.onclick = () => {
+          const dcTab = document.querySelector('#poolTabs [data-pool="datacenter"]');
+          if(dcTab) dcTab.click();
+        };
+        return;
+      }
+    }
+
+    // 2.3 自定义订阅源与其它预设源（Windscribe, Opera, Proton, hide 等）
+    const srcNames = {windscribe:'Windscribe', opera:'Opera', proton:'Proton', warp:'WARP'};
+    const customSrc = (allSourcesList || []).find(s => s.id === currentSourceCategory || s.id === 'preset-' + currentSourceCategory);
     const name = customSrc ? customSrc.name : (srcNames[currentSourceCategory] || '该源');
+    const totalCount = customSrc ? (customSrc.count || 0) : 0;
+    const resCount = customSrc ? (customSrc.residential_count || 0) : 0;
+    const dcCount = customSrc ? (customSrc.datacenter_count || 0) : 0;
+
+    // 若该订阅源在系统中存在且有节点，但当前分类下为 0：明确显示 0 节点并提供一键切换！
+    if(totalCount > 0){
+      const otherPool = currentPoolType === 'residential' ? '机房池' : '家宽池';
+      const targetPoolKey = currentPoolType === 'residential' ? 'datacenter' : 'residential';
+      const otherCount = currentPoolType === 'residential' ? dcCount : resCount;
+
+      $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:26px 14px;text-align:center;background:#12151a;border:1px dashed var(--line);border-radius:6px">'
+        + '<div style="font-size:24px;font-weight:700;color:var(--dim);margin-bottom:4px">0 个节点</div>'
+        + '<div style="font-weight:600;font-size:13px;color:var(--text);margin-bottom:6px">当前「' + esc(poolTitle) + '」中 ' + esc(name) + ' 共有 0 个可用节点</div>'
+        + '<div style="font-size:12px;color:var(--dim);margin-bottom:16px;line-height:1.5">该订阅源共包含 ' + totalCount + ' 个节点（' + esc(otherPool) + ' ' + (otherCount || totalCount) + ' 个）。<br>您可以直接切换分类查看并选择拉取。</div>'
+        + '<div style="display:flex;gap:8px;justify-content:center">'
+        +   '<button class="primary" id="switchToOtherPoolBtn" style="padding:6px 16px">切换至「' + esc(otherPool) + '」查看</button>'
+        +   '<button class="chip-btn" id="switchToAllPoolBtn" style="padding:6px 14px">查看全部节点 (' + totalCount + ')</button>'
+        + '</div>'
+        + '</div>';
+      const oBtn = $('#switchToOtherPoolBtn');
+      if(oBtn) oBtn.onclick = () => {
+        const targetTab = document.querySelector('#poolTabs [data-pool="' + targetPoolKey + '"]');
+        if(targetTab) targetTab.click();
+      };
+      const aBtn = $('#switchToAllPoolBtn');
+      if(aBtn) aBtn.onclick = () => {
+        const allTab = document.querySelector('#poolTabs [data-pool="all"]');
+        if(allTab) allTab.click();
+      };
+      return;
+    }
+
     const tipMsg = customSrc
       ? '请在主界面右上角「订阅源」中检查该源是否已启用或更新订阅。'
       : ('请在主界面右上角「订阅源」中为 ' + esc(name) + ' 填入订阅链接并启用。');
