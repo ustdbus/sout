@@ -797,7 +797,7 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 	}
 
 	var links []string
-	for addrIdx, item := range addrs {
+	for _, item := range addrs {
 		connectHost := strings.TrimSpace(item.Server)
 		if connectHost == "" {
 			connectHost = defaultHost
