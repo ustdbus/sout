@@ -1517,19 +1517,17 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 	return createdPorts, nil
 }
 
-// syncSUIDatabaseLinks 通过 s-ui API 重新保存分流客户端，让 s-ui 自己生成权威订阅链接
+// syncSUIDatabaseLinks 通过 s-ui API 重新保存分流客户端，让 s-ui 自己生成权威订阅链接，并自动净化默认用户的冗余前缀
 func (s *SUI) syncSUIDatabaseLinks(publicHost string) {
 	// s-ui 自身会在 /apiv2/save object=clients 时自动生成 clients.links（含 ed/fp 等参数）。
-	// 这里只对旧的/直连 SQLite 插入过的分流客户端做一次 API 重保存迁移，让 s-ui 重新生成权威链接。
+	// 这里对旧的/直连 SQLite 插入过的分流客户端做一次 API 重保存迁移，让 s-ui 重新生成权威链接；
+	// 同时对主用户的「默认用户-」前缀进行自动净化，避免原生 s-ui 订阅名称被污染。
 	allClients, err := s.apiClients(0)
 	if err != nil {
 		return
 	}
 	for _, raw := range allClients {
 		name, _ := raw["name"].(string)
-		if !isSplitUser(name) {
-			continue
-		}
 		idVal, _ := raw["id"].(float64)
 		id := int(idVal)
 		if id <= 0 {
@@ -1540,6 +1538,42 @@ func (s *SUI) syncSUIDatabaseLinks(publicHost string) {
 			continue
 		}
 		client := full[0]
+
+		if !isSplitUser(name) {
+			// 原生/主客户端净化：若 remark 为"默认用户"，自动清空；并清洗 links 中的「默认用户-」
+			rmk, _ := client["remark"].(string)
+			needSave := false
+			if rmk == "默认用户" {
+				client["remark"] = ""
+				needSave = true
+			}
+			if links, ok := client["links"].([]any); ok {
+				for _, item := range links {
+					if m, ok := item.(map[string]any); ok {
+						if u, ok := m["uri"].(string); ok {
+							cleaned := cleanDefaultUserPrefix(u)
+							if cleaned != u {
+								m["uri"] = cleaned
+								needSave = true
+							}
+						}
+						if r, ok := m["remark"].(string); ok && strings.HasPrefix(r, "默认用户-") {
+							m["remark"] = strings.TrimPrefix(r, "默认用户-")
+							needSave = true
+						}
+					}
+				}
+			}
+			if needSave {
+				if err := s.apiSaveClient("edit", client); err != nil {
+					log.Printf("去除主用户 %s 的默认用户前缀失败: %v", name, err)
+				} else {
+					log.Printf("已自动净化主用户 %s 的节点链接（移除「默认用户-」前缀）", name)
+				}
+			}
+			continue
+		}
+
 		// 保留非 local 链接（外部/订阅链接），local 部分交给 s-ui 重新生成
 		if links, ok := client["links"].([]any); ok {
 			var preserved []any
@@ -2148,7 +2182,51 @@ func replaceLinkCredential(uri string, proto string, oldClientCfg, newClientCfg 
 	return uri
 }
 
+// cleanDefaultUserPrefix 净化 URI 中的「默认用户-」前缀
+func cleanDefaultUserPrefix(uri string) string {
+	if strings.HasPrefix(uri, "vmess://") {
+		b64Part := strings.TrimPrefix(uri, "vmess://")
+		if idx := strings.Index(b64Part, "#"); idx != -1 {
+			b64Part = b64Part[:idx]
+		}
+		var jsonBytes []byte
+		for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.RawURLEncoding} {
+			b, err := enc.DecodeString(b64Part)
+			if err == nil && len(b) > 0 {
+				jsonBytes = b
+				break
+			}
+		}
+		if len(jsonBytes) > 0 {
+			var vmessMap map[string]any
+			if err := json.Unmarshal(jsonBytes, &vmessMap); err == nil {
+				if ps, ok := vmessMap["ps"].(string); ok && strings.HasPrefix(ps, "默认用户-") {
+					vmessMap["ps"] = strings.TrimPrefix(ps, "默认用户-")
+					newJSON, _ := json.Marshal(vmessMap)
+					return "vmess://" + base64.StdEncoding.EncodeToString(newJSON)
+				}
+			}
+		}
+		return uri
+	}
+
+	if idx := strings.Index(uri, "#"); idx != -1 {
+		basePart := uri[:idx]
+		frag := uri[idx+1:]
+		decoded, err := url.PathUnescape(frag)
+		if err != nil {
+			decoded = frag
+		}
+		if strings.HasPrefix(decoded, "默认用户-") {
+			cleanFrag := strings.TrimPrefix(decoded, "默认用户-")
+			return fmt.Sprintf("%s#%s", basePart, url.PathEscape(cleanFrag))
+		}
+	}
+	return uri
+}
+
 func formatNodeURI(uri string, tagToUse string) string {
+	uri = cleanDefaultUserPrefix(uri)
 	if strings.HasPrefix(uri, "vmess://") {
 		b64Part := strings.TrimPrefix(uri, "vmess://")
 		if idx := strings.Index(b64Part, "#"); idx != -1 {
