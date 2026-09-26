@@ -18,6 +18,7 @@ type persistedTunnel struct {
 	Ping        int     `json:"ping,omitempty"`
 	SpeedMbps   float64 `json:"speed_mbps,omitempty"`
 	Config      string  `json:"config"`
+	Remark      string  `json:"remark,omitempty"`
 	// SOCKS5 凭据
 	SocksUser  string `json:"socks_user,omitempty"`
 	SocksPass  string `json:"socks_pass,omitempty"`
@@ -59,6 +60,7 @@ func (m *Manager) saveState() error {
 			Ping:           t.Node.Ping,
 			SpeedMbps:      t.Node.SpeedMbps,
 			Config:         t.Node.Config,
+			Remark:         t.Node.Remark,
 			SocksUser:      t.Cred.User,
 			SocksPass:      t.Cred.Pass,
 			Kind:           t.Kind,
@@ -141,6 +143,7 @@ func (m *Manager) restoreState() (int, error) {
 				Protocol:    p.CustomProto,
 				IPType:      p.IPType,
 				ISP:         p.ISP,
+				Remark:      p.Remark,
 			}
 		} else {
 			if node.Kind == "" {
@@ -167,6 +170,16 @@ func (m *Manager) restoreState() (int, error) {
 			if node.ISP == "" && p.ISP != "" {
 				node.ISP = p.ISP
 			}
+			if node.Remark == "" && p.Remark != "" {
+				node.Remark = p.Remark
+			}
+		}
+		if node.Remark == "" && globalCustomStore != nil {
+			globalCustomStore.mu.RLock()
+			if cn, ok := globalCustomStore.Nodes[p.HostName]; ok && cn.Remark != "" {
+				node.Remark = cn.Remark
+			}
+			globalCustomStore.mu.RUnlock()
 		}
 		if p.Kind == "" {
 			p.Kind = kind

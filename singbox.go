@@ -424,12 +424,32 @@ func (sb *SingBox) Inbounds(live map[string]bool) ([]Inbound, error) {
 							cRemark = b.Remark
 							break
 						}
+						if globalCustomStore != nil {
+							globalCustomStore.mu.RLock()
+							if cn, ok := globalCustomStore.Nodes[b.Host]; ok && cn.Remark != "" {
+								cRemark = cn.Remark
+							}
+							globalCustomStore.mu.RUnlock()
+							if cRemark != "" {
+								break
+							}
+						}
 						rem := formatExitRemark(b.Region, b.PoolType, b.Host)
 						if rem != "" && rem != "出站出口" && !strings.Contains(rem, "totallyacdn") {
 							cRemark = rem
 							break
 						}
 					}
+				}
+				if cRemark == "" && globalCustomStore != nil {
+					globalCustomStore.mu.RLock()
+					for h, cn := range globalCustomStore.Nodes {
+						if (h == boundHost || sanitizeTag(h) == boundHost || strings.Contains(userName, sanitizeTag(h))) && cn.Remark != "" {
+							cRemark = cn.Remark
+							break
+						}
+					}
+					globalCustomStore.mu.RUnlock()
 				}
 				if cRemark == "" || cRemark == "出站出口" || strings.Contains(cRemark, "totallyacdn") {
 					rem := formatExitRemark("", "datacenter", boundHost)
@@ -666,12 +686,32 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 					matchedRemark = b.Remark
 					break
 				}
+				if globalCustomStore != nil {
+					globalCustomStore.mu.RLock()
+					if cn, ok := globalCustomStore.Nodes[b.Host]; ok && cn.Remark != "" {
+						matchedRemark = cn.Remark
+					}
+					globalCustomStore.mu.RUnlock()
+					if matchedRemark != "" {
+						break
+					}
+				}
 				rem := formatExitRemark(b.Region, b.PoolType, b.Host)
 				if rem != "" && rem != "出站出口" && !strings.Contains(rem, "totallyacdn") {
 					matchedRemark = rem
 					break
 				}
 			}
+		}
+		if matchedRemark == "" && globalCustomStore != nil {
+			globalCustomStore.mu.RLock()
+			for h, cn := range globalCustomStore.Nodes {
+				if strings.Contains(uName, sanitizeTag(h)) && cn.Remark != "" {
+					matchedRemark = cn.Remark
+					break
+				}
+			}
+			globalCustomStore.mu.RUnlock()
 		}
 		if matchedRemark == "" {
 			rawHost := strings.TrimPrefix(uName, "soutu")
