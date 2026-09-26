@@ -420,6 +420,10 @@ func (sb *SingBox) Inbounds(live map[string]bool) ([]Inbound, error) {
 				bindings := sb.loadBranchBindings()
 				for _, b := range bindings {
 					if b.TemplateID == baseID && (b.Host == boundHost || sanitizeTag(b.Host) == boundHost || strings.Contains(userName, sanitizeTag(b.Host))) {
+						if b.Remark != "" {
+							cRemark = b.Remark
+							break
+						}
 						rem := formatExitRemark(b.Region, b.PoolType, b.Host)
 						if rem != "" && rem != "出站出口" && !strings.Contains(rem, "totallyacdn") {
 							cRemark = rem
@@ -658,6 +662,10 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 		bindings := sb.loadBranchBindings()
 		for _, b := range bindings {
 			if b.Host != "" && strings.Contains(uName, sanitizeTag(b.Host)) {
+				if b.Remark != "" {
+					matchedRemark = b.Remark
+					break
+				}
 				rem := formatExitRemark(b.Region, b.PoolType, b.Host)
 				if rem != "" && rem != "出站出口" && !strings.Contains(rem, "totallyacdn") {
 					matchedRemark = rem
@@ -1070,6 +1078,7 @@ func (sb *SingBox) CloneToTunnels(templateID int, hosts []string, tunnels []*Tun
 		slot := 0
 		region := ""
 		poolType := ""
+		clientRemark := ""
 		if targetTunnel != nil {
 			slot = targetTunnel.Slot
 			region = targetTunnel.TargetRegion
@@ -1080,6 +1089,13 @@ func (sb *SingBox) CloneToTunnels(templateID int, hosts []string, tunnels []*Tun
 			if poolType == "" {
 				poolType = targetTunnel.IPType
 			}
+			if targetTunnel.Kind == "custom" && targetTunnel.Node.Remark != "" && targetTunnel.Node.Remark != targetTunnel.Node.IP {
+				clientRemark = targetTunnel.Node.Remark
+			} else if targetTunnel.Node.Remark != "" && !strings.Contains(targetTunnel.Node.Remark, "://") && !strings.Contains(targetTunnel.Node.Remark, "@") && targetTunnel.Node.Remark != targetTunnel.Node.IP {
+				clientRemark = targetTunnel.Node.Remark
+			} else {
+				clientRemark = formatExitRemark(region, poolType, targetTunnel.Node.HostName)
+			}
 		}
 
 		// 持久化保存分流绑定记录，重启或隧道切换时自动自愈
@@ -1089,6 +1105,7 @@ func (sb *SingBox) CloneToTunnels(templateID int, hosts []string, tunnels []*Tun
 			Host:       host,
 			Region:     region,
 			PoolType:   poolType,
+			Remark:     clientRemark,
 		})
 
 		hTag := sanitizeTag(host)

@@ -664,8 +664,25 @@ func (s *SUI) Inbounds(live map[string]bool) ([]Inbound, error) {
 			isBase := !isFanoutClient && boundHost == ""
 			branchTag := item.Tag
 			if !isBase {
-				if c.Remark != "" {
-					branchTag = fmt.Sprintf("%s (%s)", item.Tag, cleanRemarkTitle(c.Remark))
+				cRem := cleanRemarkTitle(c.Remark)
+				if cRem == "" || cRem == "出口机房" || cRem == "出站出口" || cRem == "出口分流" || (!strings.Contains(cRem, "家宽") && strings.Contains(cRem, "机房")) {
+					bindings := loadBranchBindings(s.workDir)
+					for _, b := range bindings {
+						if b.TemplateID == item.ID && (b.Host == boundHost || sanitizeTag(b.Host) == sanitizeTag(boundHost) || strings.Contains(c.Name, sanitizeTag(b.Host))) {
+							if b.Remark != "" {
+								cRem = cleanRemarkTitle(b.Remark)
+								break
+							}
+							rem := formatExitRemark(b.Region, b.PoolType, b.Host)
+							if rem != "" && rem != "出站出口" && rem != "出口分流" {
+								cRem = rem
+								break
+							}
+						}
+					}
+				}
+				if cRem != "" {
+					branchTag = fmt.Sprintf("%s (%s)", item.Tag, cRem)
 				} else if boundHost != "" {
 					branchTag = fmt.Sprintf("%s (%s)", item.Tag, cleanRemarkTitle(boundHost))
 				} else {
@@ -1001,8 +1018,22 @@ func cleanRemarkTitle(rem string) string {
 		prefix := brand + " ("
 		if strings.Contains(rem, prefix) && strings.Contains(rem, ") 机房") {
 			rem = strings.Replace(rem, prefix, brand+" ", 1)
-			rem = strings.Replace(rem, ") 机房", "机房", 1)
+			rem = strings.Replace(rem, ") 机房", "", 1)
 		}
+	}
+	// 去除非家宽节点的残留“机房”二字
+	if strings.Contains(rem, "WARP 机房") {
+		rem = strings.ReplaceAll(rem, "WARP 机房", "WARP")
+	}
+	if strings.Contains(rem, "WARP机房") {
+		rem = strings.ReplaceAll(rem, "WARP机房", "WARP")
+	}
+	if strings.Contains(rem, "出口机房") {
+		rem = strings.ReplaceAll(rem, "出口机房", "出口分流")
+	}
+	if !strings.Contains(rem, "家宽") && strings.HasSuffix(rem, "机房") {
+		rem = strings.TrimSuffix(rem, "机房")
+		rem = strings.TrimSpace(rem)
 	}
 	for strings.Contains(rem, "((") && strings.Contains(rem, "))") {
 		rem = strings.ReplaceAll(rem, "((", "(")
@@ -1020,7 +1051,7 @@ func formatExitRemark(region, poolType, host string) string {
 
 	// 1. WARP 官方/原生出站
 	if strings.Contains(lowerReg, "warp") || strings.Contains(lowerHost, "warp") || strings.Contains(lowerHost, "cloudflare") {
-		return "WARP 机房"
+		return "WARP"
 	}
 
 	// 2. Windscribe 出口
@@ -1042,9 +1073,9 @@ func formatExitRemark(region, poolType, host string) string {
 			}
 		}
 		if city != "" {
-			return fmt.Sprintf("Windscribe %s机房", city)
+			return fmt.Sprintf("Windscribe %s", city)
 		}
-		return "Windscribe 机房"
+		return "Windscribe"
 	}
 
 	// 3. Proton 出口
@@ -1068,18 +1099,18 @@ func formatExitRemark(region, poolType, host string) string {
 			}
 		}
 		if sub != "" {
-			return fmt.Sprintf("Proton %s机房", sub)
+			return fmt.Sprintf("Proton %s", sub)
 		}
-		return "Proton 机房"
+		return "Proton"
 	}
 
 	// 4. Opera 出口
 	if strings.Contains(lowerReg, "opera") || strings.Contains(lowerHost, "opera") {
 		sub := cleanSubRegion(region)
 		if sub != "" {
-			return fmt.Sprintf("Opera %s机房", sub)
+			return fmt.Sprintf("Opera %s", sub)
 		}
-		return "Opera 机房"
+		return "Opera"
 	}
 
 	// 5. 自定义订阅源 SRC:<sourceID>:<subRegion>
@@ -1101,26 +1132,24 @@ func formatExitRemark(region, poolType, host string) string {
 		}
 		sub := cleanSubRegion(region)
 		if sub != "" {
-			return fmt.Sprintf("%s %s机房", srcName, sub)
+			return fmt.Sprintf("%s %s", srcName, sub)
 		}
-		return fmt.Sprintf("%s 机房", srcName)
+		return srcName
 	}
 
 	// 6. VPN Gate 或标准国家/地区出口
 	if region != "" && !strings.HasPrefix(region, "SRC:") && region != "CUSTOM" {
-		pName := "家宽"
-		if poolType == "datacenter" {
-			pName = "机房"
-		}
 		cName := countryNameCN(region, "")
-		return fmt.Sprintf("%s%s", cName, pName)
+		if poolType == "residential" {
+			return fmt.Sprintf("%s家宽", cName)
+		}
+		return cName
 	}
 
-	pName := "机房"
 	if poolType == "residential" {
-		pName = "家宽"
+		return "出口家宽"
 	}
-	return fmt.Sprintf("出口%s", pName)
+	return "出口分流"
 }
 
 type branchBinding struct {
@@ -1129,6 +1158,7 @@ type branchBinding struct {
 	Host       string `json:"host,omitempty"`
 	Region     string `json:"region,omitempty"`
 	PoolType   string `json:"pool_type,omitempty"`
+	Remark     string `json:"remark,omitempty"`
 }
 
 func branchBindingsPath(workDir string) string {
@@ -1364,8 +1394,6 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 			}
 		}
 
-		cName := "海外"
-		poolName := "家宽"
 		slot := 0
 		region := ""
 		poolType := ""
@@ -1374,13 +1402,20 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 			slot = targetTunnel.Slot
 			region = targetTunnel.TargetRegion
 			poolType = targetTunnel.TargetPoolType
-			clientRemark = formatExitRemark(region, targetTunnel.IPType, targetTunnel.Node.HostName)
-			if clientRemark == "" {
-				cName = countryNameCN(targetTunnel.Node.CountryCode, targetTunnel.Node.Country)
-				if targetTunnel.IPType == "datacenter" {
-					poolName = "机房"
+			if targetTunnel.Kind == "custom" && targetTunnel.Node.Remark != "" && targetTunnel.Node.Remark != targetTunnel.Node.IP {
+				clientRemark = targetTunnel.Node.Remark
+			} else if targetTunnel.Node.Remark != "" && !strings.Contains(targetTunnel.Node.Remark, "://") && !strings.Contains(targetTunnel.Node.Remark, "@") && targetTunnel.Node.Remark != targetTunnel.Node.IP {
+				clientRemark = targetTunnel.Node.Remark
+			} else {
+				clientRemark = formatExitRemark(region, targetTunnel.IPType, targetTunnel.Node.HostName)
+			}
+			if clientRemark == "" || clientRemark == "出站出口" || clientRemark == "出口分流" {
+				cName := countryNameCN(targetTunnel.Node.CountryCode, targetTunnel.Node.Country)
+				if targetTunnel.IPType == "residential" {
+					clientRemark = fmt.Sprintf("%s家宽", cName)
+				} else if cName != "" && cName != "海外" {
+					clientRemark = cName
 				}
-				clientRemark = fmt.Sprintf("%s%s", cName, poolName)
 			}
 		}
 
@@ -1391,6 +1426,7 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 			Host:       host,
 			Region:     region,
 			PoolType:   poolType,
+			Remark:     clientRemark,
 		})
 
 		clientName := fmt.Sprintf("soutu%d%s", templateID, sanitizeTag(host))
@@ -1602,14 +1638,23 @@ func (s *SUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
 	}
 	oldHostTag := sanitizeTag(oldHost)
 
-	newRemark := formatExitRemark(target.TargetRegion, target.IPType, target.Node.HostName)
-	if newRemark == "" {
+	newRemark := ""
+	if target.Kind == "custom" && target.Node.Remark != "" && target.Node.Remark != target.Node.IP {
+		newRemark = target.Node.Remark
+	} else if target.Node.Remark != "" && !strings.Contains(target.Node.Remark, "://") && !strings.Contains(target.Node.Remark, "@") && target.Node.Remark != target.Node.IP {
+		newRemark = target.Node.Remark
+	} else {
+		newRemark = formatExitRemark(target.TargetRegion, target.IPType, target.Node.HostName)
+	}
+	if newRemark == "" || newRemark == "出站出口" || newRemark == "出口分流" {
 		cName := countryNameCN(target.Node.CountryCode, target.Node.Country)
-		poolName := "家宽"
-		if target.IPType == "datacenter" {
-			poolName = "机房"
+		if target.IPType == "residential" {
+			newRemark = fmt.Sprintf("%s家宽", cName)
+		} else if cName != "" && cName != "海外" {
+			newRemark = cName
+		} else {
+			newRemark = "出口分流"
 		}
-		newRemark = fmt.Sprintf("%s%s", cName, poolName)
 	}
 
 	for userName, host := range boundMap {

@@ -322,6 +322,43 @@ func (m *Manager) ExitsOf() ExitsView {
 		if ib.ClientID > 0 {
 			targetID = ib.ClientID
 		}
+		boundLabel := "直连"
+		if ib.BoundTo != "" {
+			if t, ok := hostToTunnel[ib.BoundTo]; ok {
+				exitIP := t.ExitIP
+				if exitIP == "" {
+					exitIP = "连接中"
+				}
+				exitName := ""
+				if t.Kind == "custom" && t.Node.Remark != "" && t.Node.Remark != t.Node.IP {
+					exitName = t.Node.Remark
+				} else if t.Node.Remark != "" && !strings.Contains(t.Node.Remark, "://") && !strings.Contains(t.Node.Remark, "@") && t.Node.Remark != t.Node.IP {
+					exitName = t.Node.Remark
+				} else {
+					exitName = formatExitRemark(t.Node.CountryCode, t.IPType, t.Node.HostName)
+					if exitName == "" || exitName == "出站出口" || exitName == "出口分流" {
+						if t.Node.Country != "" && t.Node.Country != "自定义" {
+							exitName = t.Node.Country
+						} else {
+							exitName = "出口分流"
+						}
+					}
+				}
+				boundLabel = fmt.Sprintf("%s (%s · SOCKS5:%d)", exitName, exitIP, t.Port)
+
+				if !ib.IsBase && exitName != "" {
+					baseTag := getBaseTag(ib.Tag)
+					ib.Tag = fmt.Sprintf("%s (%s)", baseTag, exitName)
+				}
+			} else {
+				if !ib.IsBase {
+					// 绑定的出口隧道已在隧道池中彻底删除，跳过该失效孤儿分支，避免前端残留
+					continue
+				}
+				boundLabel = fmt.Sprintf("出口 (%s)", ib.BoundTo)
+			}
+		}
+
 		var links []string
 		if sui, ok := p.(*SUI); ok {
 			links = sui.InboundBranchLinks(ib.ID, ib.ClientID, ib.Tag, publicHost)
@@ -330,35 +367,6 @@ func (m *Manager) ExitsOf() ExitsView {
 		} else if p != nil {
 			if l, err := p.InboundLinks([]int{targetID}, publicHost); err == nil {
 				links = l
-			}
-		}
-
-		boundLabel := "直连"
-		if ib.BoundTo != "" {
-			if t, ok := hostToTunnel[ib.BoundTo]; ok {
-				exitIP := t.ExitIP
-				if exitIP == "" {
-					exitIP = "连接中"
-				}
-				if t.Kind == "custom" {
-					tag := formatExitRemark(t.TargetRegion, t.IPType, t.Node.HostName)
-					if tag == "" || tag == "出站出口" {
-						tag = t.Node.Country
-						if tag == "" {
-							tag = "自定义出口"
-						}
-					}
-					boundLabel = fmt.Sprintf("%s (%s · SOCKS5:%d)", tag, exitIP, t.Port)
-				} else {
-					exitRemark := formatExitRemark(t.Node.CountryCode, t.IPType, t.Node.HostName)
-					boundLabel = fmt.Sprintf("%s (%s · SOCKS5:%d)", exitRemark, exitIP, t.Port)
-				}
-			} else {
-				if !ib.IsBase {
-					// 绑定的出口隧道已在隧道池中彻底删除，跳过该失效孤儿分支，避免前端残留
-					continue
-				}
-				boundLabel = fmt.Sprintf("出口 (%s)", ib.BoundTo)
 			}
 		}
 
