@@ -33,7 +33,7 @@ import (
 	"github.com/sagernet/sing-box/dns/transport/local"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/protocol/direct"
-	"github.com/sagernet/sing-box/protocol/http"
+	sbhttp "github.com/sagernet/sing-box/protocol/http"
 	"github.com/sagernet/sing-box/protocol/hysteria2"
 	"github.com/sagernet/sing-box/protocol/openvpn"
 	"github.com/sagernet/sing-box/protocol/shadowsocks"
@@ -57,7 +57,7 @@ func newCustomSingBoxContext(parentCtx context.Context) context.Context {
 
 	direct.RegisterOutbound(outboundRegistry)
 	socks.RegisterOutbound(outboundRegistry)
-	http.RegisterOutbound(outboundRegistry)
+	sbhttp.RegisterOutbound(outboundRegistry)
 	shadowsocks.RegisterOutbound(outboundRegistry)
 	vmess.RegisterOutbound(outboundRegistry)
 	trojan.RegisterOutbound(outboundRegistry)
