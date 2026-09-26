@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -1630,6 +1631,7 @@ func (s *SUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
 
 // DeleteBranchesByHost 当出口隧道被删除/停止时，级联删除绑定到该出口上的所有分流分支客户端及路由规则
 func (s *SUI) DeleteBranchesByHost(host string, tunnels []*Tunnel) error {
+	host = strings.TrimSpace(host)
 	if host == "" {
 		return nil
 	}
@@ -1638,6 +1640,18 @@ func (s *SUI) DeleteBranchesByHost(host string, tunnels []*Tunnel) error {
 		return err
 	}
 	oldHostTag := sanitizeTag(host)
+
+	targetTags := map[string]bool{
+		host:       true,
+		oldHostTag: true,
+	}
+	for _, part := range strings.Split(host, "-") {
+		part = strings.TrimSpace(part)
+		if net.ParseIP(part) != nil {
+			targetTags[part] = true
+			targetTags[sanitizeTag(part)] = true
+		}
+	}
 
 	deleteByName := func(userName string) {
 		if client, ok, err := s.apiClientByName(userName); err != nil {
@@ -1652,20 +1666,30 @@ func (s *SUI) DeleteBranchesByHost(host string, tunnels []*Tunnel) error {
 	}
 
 	removeBranchBinding(s.workDir, 0, host, 0)
+	removeBranchBinding(s.workDir, 0, oldHostTag, 0)
 	for userName, boundHost := range boundMap {
-		if boundHost == host || boundHost == oldHostTag {
+		if targetTags[boundHost] || targetTags[sanitizeTag(boundHost)] {
 			deleteByName(userName)
 		}
 	}
 
-	// 双重保障：通过 s-ui API 清理以该 hostTag 结尾的所有 sout/fanout client
+	// 双重保障：通过 s-ui API 清理以该 hostTag 结尾或包含的分流 client
 	clients, err := s.apiClients(0)
 	if err == nil {
 		for _, c := range clients {
 			name, _ := c["name"].(string)
-			if isSplitUser(name) && strings.HasSuffix(name, oldHostTag) {
-				if idVal, ok := c["id"].(float64); ok {
-					_ = s.apiDeleteClient(int(idVal))
+			if isSplitUser(name) {
+				match := false
+				for tag := range targetTags {
+					if tag != "" && (strings.HasSuffix(name, tag) || strings.Contains(name, tag)) {
+						match = true
+						break
+					}
+				}
+				if match {
+					if idVal, ok := c["id"].(float64); ok {
+						_ = s.apiDeleteClient(int(idVal))
+					}
 				}
 			}
 		}

@@ -545,8 +545,26 @@ func (m *Manager) Stop(slot int) error {
 	}
 	m.notifyPanel()
 
-	// 级联清理：提取该隧道当前节点及所有历史绑定过的节点，全量清理分流管理中的分支与路由规则
-	hosts := append([]string{t.Node.HostName}, t.HistoryHosts...)
+	// 级联清理：提取该隧道当前节点及所有历史绑定过的节点（包括主机名、IP、自定义Host、出口IP等别名），全量清理分流管理中的分支与路由规则
+	hostSet := make(map[string]bool)
+	addHost := func(h string) {
+		h = strings.TrimSpace(h)
+		if h != "" {
+			hostSet[h] = true
+		}
+	}
+	addHost(t.Node.HostName)
+	addHost(t.Node.IP)
+	addHost(t.CustomHost)
+	addHost(t.ExitIP)
+	addHost(t.Hostname)
+	for _, hh := range t.HistoryHosts {
+		addHost(hh)
+	}
+	var hosts []string
+	for h := range hostSet {
+		hosts = append(hosts, h)
+	}
 	go m.cleanupBoundBranches(hosts...)
 
 	return nil
@@ -770,9 +788,6 @@ func (m *Manager) resync(t *Tunnel) error {
 }
 
 func (m *Manager) cleanupBoundBranches(hosts ...string) {
-	if len(hosts) == 0 {
-		return
-	}
 	p, err := openPanel()
 	if err != nil {
 		return
@@ -782,6 +797,8 @@ func (m *Manager) cleanupBoundBranches(hosts ...string) {
 			_ = p.DeleteBranchesByHost(h, m.Tunnels())
 		}
 	}
+	_ = p.OnTunnelsChanged(m.Tunnels())
+	invalidateInbounds()
 }
 
 func (m *Manager) notifyPanel() {

@@ -405,10 +405,16 @@ func (sb *SingBox) Inbounds(live map[string]bool) ([]Inbound, error) {
 			userName, _ := uMap["name"].(string)
 			if strings.HasPrefix(userName, "soutu") {
 				outboundTag := userRouteMap[userName]
+				if outboundTag == "" {
+					continue
+				}
 				boundHost := strings.TrimPrefix(outboundTag, "sout")
+				if boundHost == "" {
+					continue
+				}
 				boundUp := false
 				if live != nil && boundHost != "" {
-					boundUp = live[sanitizeTag(boundHost)]
+					boundUp = live[boundHost] || live[sanitizeTag(boundHost)]
 				}
 				cRemark := ""
 				bindings := sb.loadBranchBindings()
@@ -1308,8 +1314,27 @@ func (sb *SingBox) syncOutboundsInternal(cfg map[string]any, tunnels []*Tunnel) 
 		}
 	}
 
-	// 针对每一个处于 up 状态的隧道增加 SOCKS5 出站
+	// 收集当前活跃或存在的所有有效 sout 出口 tag
+	validSoutTags := make(map[string]bool)
 	for _, t := range tunnels {
+		addValidTag := func(h string) {
+			h = strings.TrimSpace(h)
+			if h != "" {
+				validSoutTags["sout"+sanitizeTag(h)] = true
+				validSoutTags["sout"+h] = true
+			}
+		}
+		addValidTag(t.Node.HostName)
+		addValidTag(t.Node.IP)
+		addValidTag(t.CustomHost)
+		addValidTag(t.ExitIP)
+		addValidTag(t.Hostname)
+		for _, part := range strings.Split(t.Node.HostName, "-") {
+			if net.ParseIP(part) != nil {
+				addValidTag(part)
+			}
+		}
+
 		if t.Status != "up" {
 			continue
 		}
@@ -1330,6 +1355,74 @@ func (sb *SingBox) syncOutboundsInternal(cfg map[string]any, tunnels []*Tunnel) 
 	}
 
 	cfg["outbounds"] = newOutbounds
+
+	// 孤儿分流清理与自愈：
+	// 如果某条路由规则指向的 outbound 为 "sout" 开头，但不在任何有效隧道中，说明该出口已被彻底删除
+	orphanUsers := make(map[string]bool)
+	routeRaw, _ := cfg["route"].(map[string]any)
+	if routeRaw != nil {
+		rulesRaw, _ := routeRaw["rules"].([]any)
+		var keptRules []any
+		for _, r := range rulesRaw {
+			if rMap, ok := r.(map[string]any); ok {
+				ob, _ := rMap["outbound"].(string)
+				if strings.HasPrefix(ob, "sout") && !validSoutTags[ob] {
+					// 孤儿规则：收集待清理的用户
+					if authUsers, ok := rMap["auth_user"].([]any); ok {
+						for _, u := range authUsers {
+							if uStr, ok := u.(string); ok {
+								orphanUsers[uStr] = true
+							}
+						}
+					}
+					continue // 丢弃孤儿路由规则
+				}
+			}
+			keptRules = append(keptRules, r)
+		}
+		routeRaw["rules"] = keptRules
+	}
+
+	// 建立有效用户路由映射
+	validRoutedUsers := make(map[string]bool)
+	if routeRaw != nil {
+		if rulesRaw, ok := routeRaw["rules"].([]any); ok {
+			for _, r := range rulesRaw {
+				if rMap, ok := r.(map[string]any); ok {
+					if authUsers, ok := rMap["auth_user"].([]any); ok {
+						for _, u := range authUsers {
+							if uStr, ok := u.(string); ok {
+								validRoutedUsers[uStr] = true
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 从 inbounds 中彻底剔除孤儿用户（被判为孤儿、或者以 soutu 开头却没有对应有效路由规则的用户）
+	inboundsRaw, _ := cfg["inbounds"].([]any)
+	for _, ib := range inboundsRaw {
+		if ibMap, ok := ib.(map[string]any); ok {
+			usersRaw, _ := ibMap["users"].([]any)
+			var keptUsers []any
+			for _, u := range usersRaw {
+				if uMap, ok := u.(map[string]any); ok {
+					uName, _ := uMap["name"].(string)
+					if orphanUsers[uName] {
+						continue
+					}
+					// 如果是分流分支用户 soutu...，但没有任何指向它的有效路由，说明已无对应出口，作为孤儿清理
+					if strings.HasPrefix(uName, "soutu") && !validRoutedUsers[uName] {
+						continue
+					}
+					keptUsers = append(keptUsers, u)
+				}
+			}
+			ibMap["users"] = keptUsers
+		}
+	}
 }
 
 // DeleteInbounds 删除指定入站或其派生的 Client
@@ -1430,9 +1523,26 @@ func (sb *SingBox) DeleteBranchesByHost(host string, tunnels []*Tunnel) error {
 		return err
 	}
 
-	targetOutbound := "sout" + sanitizeTag(host)
+	hClean := strings.TrimSpace(host)
+	if hClean == "" {
+		return nil
+	}
+	hTag := sanitizeTag(hClean)
 
-	// 1. 查找所有指向该 outbound 的 auth_user
+	targetTags := map[string]bool{
+		"sout" + hTag:   true,
+		"sout" + hClean: true,
+	}
+
+	// 尝试从 host 中提取 IPv4 地址
+	for _, part := range strings.Split(hClean, "-") {
+		part = strings.TrimSpace(part)
+		if net.ParseIP(part) != nil {
+			targetTags["sout"+sanitizeTag(part)] = true
+		}
+	}
+
+	// 1. 查找所有指向被删除 outbound 的 auth_user 并移除对应路由规则
 	targetUsers := make(map[string]bool)
 	routeRaw, _ := cfg["route"].(map[string]any)
 	if routeRaw != nil {
@@ -1440,7 +1550,8 @@ func (sb *SingBox) DeleteBranchesByHost(host string, tunnels []*Tunnel) error {
 		var keptRules []any
 		for _, r := range rulesRaw {
 			if rMap, ok := r.(map[string]any); ok {
-				if rMap["outbound"] == targetOutbound {
+				ob, _ := rMap["outbound"].(string)
+				if targetTags[ob] {
 					if authUsers, ok := rMap["auth_user"].([]any); ok {
 						for _, u := range authUsers {
 							if uStr, ok := u.(string); ok {
@@ -1465,18 +1576,24 @@ func (sb *SingBox) DeleteBranchesByHost(host string, tunnels []*Tunnel) error {
 			for _, u := range usersRaw {
 				if uMap, ok := u.(map[string]any); ok {
 					uName, _ := uMap["name"].(string)
-					if !targetUsers[uName] {
-						keptUsers = append(keptUsers, u)
+					// 如果命中 targetUsers，或者为 soutu 分流用户且包含 hTag
+					if targetUsers[uName] || (strings.HasPrefix(uName, "soutu") && hTag != "" && strings.Contains(uName, hTag)) {
+						continue
 					}
+					keptUsers = append(keptUsers, u)
 				}
 			}
 			ibMap["users"] = keptUsers
 		}
 	}
 
-	sb.removeBranchBinding(0, host)
-	removeBranchBinding(sb.workDir, 0, host, 0)
+	sb.removeBranchBinding(0, hClean)
+	sb.removeBranchBinding(0, hTag)
+	removeBranchBinding(sb.workDir, 0, hClean, 0)
+	removeBranchBinding(sb.workDir, 0, hTag, 0)
+
 	sb.syncOutboundsInternal(cfg, tunnels)
+	invalidateInbounds()
 	return sb.saveConfig(cfg)
 }
 

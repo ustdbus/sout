@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -142,16 +143,48 @@ func (m *Manager) ExitsOf() ExitsView {
 	live := map[string]bool{}
 	for _, t := range tunnels {
 		if t.Status == "up" {
-			live[sanitizeTag(t.Node.HostName)] = true
+			addLive := func(h string) {
+				h = strings.TrimSpace(h)
+				if h != "" {
+					live[h] = true
+					live[sanitizeTag(h)] = true
+				}
+			}
+			addLive(t.Node.HostName)
+			addLive(t.Node.IP)
+			addLive(t.CustomHost)
+			addLive(t.ExitIP)
+			addLive(t.Hostname)
+			for _, part := range strings.Split(t.Node.HostName, "-") {
+				if net.ParseIP(part) != nil {
+					addLive(part)
+				}
+			}
 		}
 	}
 
 	byHost := map[string]int{}
 	hostToTunnel := map[string]*Tunnel{}
 	for i, t := range tunnels {
-		sTag := sanitizeTag(t.Node.HostName)
-		byHost[sTag] = i
-		hostToTunnel[sTag] = t
+		addMap := func(h string) {
+			h = strings.TrimSpace(h)
+			if h != "" {
+				byHost[h] = i
+				byHost[sanitizeTag(h)] = i
+				hostToTunnel[h] = t
+				hostToTunnel[sanitizeTag(h)] = t
+			}
+		}
+		addMap(t.Node.HostName)
+		addMap(t.Node.IP)
+		addMap(t.CustomHost)
+		addMap(t.ExitIP)
+		addMap(t.Hostname)
+		for _, part := range strings.Split(t.Node.HostName, "-") {
+			if net.ParseIP(part) != nil {
+				addMap(part)
+			}
+		}
 		cred := t.credential()
 		hostLower := strings.ToLower(t.Node.HostName)
 		rmkLower := strings.ToLower(t.Node.Remark)
@@ -323,6 +356,10 @@ func (m *Manager) ExitsOf() ExitsView {
 					boundLabel = fmt.Sprintf("%s (%s · SOCKS5:%d)", exitRemark, exitIP, t.Port)
 				}
 			} else {
+				if !ib.IsBase {
+					// 绑定的出口隧道已在隧道池中彻底删除，跳过该失效孤儿分支，避免前端残留
+					continue
+				}
 				boundLabel = fmt.Sprintf("出口 (%s)", ib.BoundTo)
 			}
 		}
