@@ -14,7 +14,6 @@ import (
 	"time"
 
 	sbox "github.com/sagernet/sing-box"
-	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/option"
 	SBJSON "github.com/sagernet/sing/common/json"
 )
@@ -343,7 +342,7 @@ func (t *Tunnel) startSingBoxCustom() error {
 		},
 	}
 
-	ctx := include.Context(context.Background())
+	ctx := newCustomSingBoxContext(context.Background())
 	var opt option.Options
 	blob, err := json.Marshal(boxConfig)
 	if err != nil {

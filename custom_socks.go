@@ -24,10 +24,54 @@ import (
 	"time"
 
 	sbox "github.com/sagernet/sing-box"
-	"github.com/sagernet/sing-box/include"
+	sbcertificate "github.com/sagernet/sing-box/adapter/certificate"
+	sbendpoint "github.com/sagernet/sing-box/adapter/endpoint"
+	sbinbound "github.com/sagernet/sing-box/adapter/inbound"
+	sboutbound "github.com/sagernet/sing-box/adapter/outbound"
+	sbservice "github.com/sagernet/sing-box/adapter/service"
+	sbdns "github.com/sagernet/sing-box/dns"
+	"github.com/sagernet/sing-box/dns/transport/local"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/direct"
+	"github.com/sagernet/sing-box/protocol/http"
+	"github.com/sagernet/sing-box/protocol/hysteria2"
+	"github.com/sagernet/sing-box/protocol/openvpn"
+	"github.com/sagernet/sing-box/protocol/shadowsocks"
+	"github.com/sagernet/sing-box/protocol/socks"
+	"github.com/sagernet/sing-box/protocol/trojan"
+	"github.com/sagernet/sing-box/protocol/tuic"
+	"github.com/sagernet/sing-box/protocol/vless"
+	"github.com/sagernet/sing-box/protocol/vmess"
+	"github.com/sagernet/sing-box/protocol/wireguard"
 	SBJSON "github.com/sagernet/sing/common/json"
 )
+
+// newCustomSingBoxContext 创建完备的 sing-box 上下文，按需注册所有主流科学上网出站与入站协议
+func newCustomSingBoxContext(parentCtx context.Context) context.Context {
+	inboundRegistry := sbinbound.NewRegistry()
+	outboundRegistry := sboutbound.NewRegistry()
+	endpointRegistry := sbendpoint.NewRegistry()
+	dnsRegistry := sbdns.NewTransportRegistry()
+
+	socks.RegisterInbound(inboundRegistry)
+
+	direct.RegisterOutbound(outboundRegistry)
+	socks.RegisterOutbound(outboundRegistry)
+	http.RegisterOutbound(outboundRegistry)
+	shadowsocks.RegisterOutbound(outboundRegistry)
+	vmess.RegisterOutbound(outboundRegistry)
+	trojan.RegisterOutbound(outboundRegistry)
+	vless.RegisterOutbound(outboundRegistry)
+	tuic.RegisterOutbound(outboundRegistry)
+	hysteria2.RegisterOutbound(outboundRegistry)
+
+	wireguard.RegisterEndpoint(endpointRegistry)
+	openvpn.RegisterEndpoint(endpointRegistry)
+	local.RegisterTransport(dnsRegistry)
+
+	return sbox.Context(parentCtx, inboundRegistry, outboundRegistry, endpointRegistry,
+		dnsRegistry, sbservice.NewRegistry(), sbcertificate.NewRegistry())
+}
 
 // CustomNode 记录一个用户自定义的 SOCKS5 / HTTP 出口节点
 type CustomNode struct {
@@ -1793,7 +1837,7 @@ func ProbeAnyNode(node *CustomNode, timeout time.Duration) (exitIP string, ping 
 		},
 	}
 
-	ctx := include.Context(context.Background())
+	ctx := newCustomSingBoxContext(context.Background())
 	var opt option.Options
 	blob, err := json.Marshal(boxConfig)
 	if err != nil {
