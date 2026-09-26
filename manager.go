@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -557,7 +558,11 @@ func (m *Manager) Stop(slot int) error {
 	addHost(t.Node.IP)
 	addHost(t.CustomHost)
 	addHost(t.ExitIP)
-	addHost(t.Hostname)
+	for _, part := range strings.Split(t.Node.HostName, "-") {
+		if net.ParseIP(part) != nil {
+			addHost(part)
+		}
+	}
 	for _, hh := range t.HistoryHosts {
 		addHost(hh)
 	}

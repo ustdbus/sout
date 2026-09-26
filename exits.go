@@ -154,7 +154,6 @@ func (m *Manager) ExitsOf() ExitsView {
 			addLive(t.Node.IP)
 			addLive(t.CustomHost)
 			addLive(t.ExitIP)
-			addLive(t.Hostname)
 			for _, part := range strings.Split(t.Node.HostName, "-") {
 				if net.ParseIP(part) != nil {
 					addLive(part)
@@ -179,7 +178,6 @@ func (m *Manager) ExitsOf() ExitsView {
 		addMap(t.Node.IP)
 		addMap(t.CustomHost)
 		addMap(t.ExitIP)
-		addMap(t.Hostname)
 		for _, part := range strings.Split(t.Node.HostName, "-") {
 			if net.ParseIP(part) != nil {
 				addMap(part)

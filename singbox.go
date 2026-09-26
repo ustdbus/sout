@@ -1328,7 +1328,6 @@ func (sb *SingBox) syncOutboundsInternal(cfg map[string]any, tunnels []*Tunnel) 
 		addValidTag(t.Node.IP)
 		addValidTag(t.CustomHost)
 		addValidTag(t.ExitIP)
-		addValidTag(t.Hostname)
 		for _, part := range strings.Split(t.Node.HostName, "-") {
 			if net.ParseIP(part) != nil {
 				addValidTag(part)
