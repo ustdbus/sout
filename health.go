@@ -49,6 +49,14 @@ func (m *Manager) WatchHealth() {
 				continue
 			}
 
+			if t.Kind == "custom" && (t.TargetSourceID == "" || t.TargetSourceID == "custom") {
+				log.Printf("自定义隧道 %d (%s) 探测未通过，正在原地重新建立连接...", t.Slot, t.Node.HostName)
+				fails[t.Slot] = 0
+				t.stop()
+				go m.bringUp(t, false)
+				continue
+			}
+
 			log.Printf("隧道 %d (%s) 已掉线，正在换节点重连", t.Slot, t.Node.HostName)
 			fails[t.Slot] = 0
 			m.reconnect(t, t.Node.HostName)
@@ -57,29 +65,23 @@ func (m *Manager) WatchHealth() {
 }
 
 // tunnelHealthy 判断隧道是否还真的走在指定出口上。
-//
-// 必须比对出口 IP 是否仍是建立隧道时拿到的那个，
-// 避免隧道断开后回退到母机原生网络。
+// 统一通过各隧道本地监听端口端到端探测出口 IP，
+// 避免因协议差异（Shadowsocks/WireGuard/VLESS等）误发纯 SOCKS5 握手导致误判掉线。
 func (m *Manager) tunnelHealthy(t *Tunnel) bool {
-	if t.Kind == "custom" {
-		remoteAddr := fmt.Sprintf("%s:%d", t.CustomHost, t.CustomPort)
-		ip, _, _, _, err := ProbeCustomSocks(remoteAddr, t.CustomUser, t.CustomPass, healthTimeout)
-		if err != nil {
-			return false
-		}
-		if t.ExitIP != "" && ip != t.ExitIP {
-			t.mu.Lock()
-			t.ExitIP = ip
-			t.mu.Unlock()
-		}
-		return true
-	}
 	got, err := t.probeExitIP(healthTimeout)
-	if err != nil {
+	if err != nil || got == "" {
 		return false
 	}
-	// 出口 IP 变了说明 VPN 已经断开，流量退回了母机
-	return got == t.ExitIP
+	// 出口 IP 退回母机原生 IP，说明隧道已穿透失败
+	if m.publicIP != "" && got == m.publicIP {
+		return false
+	}
+	if t.ExitIP != "" && got != t.ExitIP {
+		t.mu.Lock()
+		t.ExitIP = got
+		t.mu.Unlock()
+	}
+	return true
 }
 
 // reconnect 就地把一条隧道换到别的节点上，保持槽位与端口不变，
