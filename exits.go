@@ -408,7 +408,7 @@ func (m *Manager) ExitsOf() ExitsView {
 		if sui, ok := p.(*SUI); ok {
 			links = sui.InboundBranchLinks(ib.ID, ib.ClientID, ib.Tag, publicHost)
 		} else if sb, ok := p.(*SingBox); ok {
-			links = sb.InboundBranchLinks(ib.ID, ib.ClientID, ib.Remark, publicHost)
+			links = sb.InboundBranchLinks(ib.ID, ib.ClientID, ib.Tag, publicHost)
 		} else if p != nil {
 			if l, err := p.InboundLinks([]int{targetID}, publicHost); err == nil {
 				links = l

@@ -534,7 +534,7 @@ func (sb *SingBox) InboundBranchLinks(baseID int, clientID int, clientTag string
 		}
 
 		if match {
-			return sb.buildLinksForUser(proto, tag, port, ibMap, uMap, publicHost, addrs)
+			return sb.buildLinksForUser(proto, tag, port, ibMap, uMap, publicHost, addrs, clientTag)
 		}
 	}
 
@@ -659,7 +659,7 @@ func (sb *SingBox) InboundLinks(ids []int, publicHost string) ([]string, error) 
 	return allLinks, nil
 }
 
-func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, uMap map[string]any, publicHost string, addrs []NodeAddrItem) []string {
+func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, uMap map[string]any, publicHost string, addrs []NodeAddrItem, explicitTag ...string) []string {
 	if listenPort == 0 {
 		return nil
 	}
@@ -677,7 +677,9 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 
 	// 确定基础备注名
 	baseRemark := tag
-	if strings.HasPrefix(uName, "soutu") {
+	if len(explicitTag) > 0 && explicitTag[0] != "" {
+		baseRemark = cleanRemarkTitle(explicitTag[0])
+	} else if strings.HasPrefix(uName, "soutu") {
 		matchedRemark := ""
 		bindings := sb.loadBranchBindings()
 		for _, b := range bindings {
