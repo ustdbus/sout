@@ -21,7 +21,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v3.4.2"
+var version = "v3.5.0"
 
 func initLowMemoryProtection() {
 	if os.Getenv("GOMEMLIMIT") == "" {
@@ -1211,68 +1211,59 @@ func apiCustomSocksTest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if req.Content != "" {
-		trimmed := strings.TrimSpace(req.Content)
-		if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
-			nodes, err := ParseSubscriptionContent(trimmed)
-			if err != nil || len(nodes) == 0 {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("解析节点配置失败: %v", err)})
-				return
-			}
-			n := nodes[0]
-			req.Protocol, req.Host, req.Port, req.User, req.Pass = n.Protocol, n.Host, n.Port, n.User, n.Pass
-		} else {
-			req.RawURL = trimmed
-		}
+
+	input := strings.TrimSpace(req.Content)
+	if input == "" {
+		input = strings.TrimSpace(req.RawURL)
 	}
-	proto, h, p, u, pwd := req.Protocol, req.Host, req.Port, req.User, req.Pass
-	if proto == "" {
-		proto = "socks5"
-	}
-	if req.RawURL != "" {
-		parsedProto, parsedH, parsedP, parsedU, parsedPwd, _, err := ParseProxyURL(req.RawURL)
+
+	var node *CustomNode
+	var err error
+	if input != "" {
+		node, err = ParseAnyNode(input)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("解析节点失败: %v", err)})
 			return
 		}
-		proto, h, p, u, pwd = parsedProto, parsedH, parsedP, parsedU, parsedPwd
+	} else {
+		proto := strings.ToLower(strings.TrimSpace(req.Protocol))
+		if proto == "" {
+			proto = "socks5"
+		}
+		if req.Host == "" || req.Port <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "主机地址与端口不能为空"})
+			return
+		}
+		raw := fmt.Sprintf("%s://%s:%d", proto, req.Host, req.Port)
+		if req.User != "" || req.Pass != "" {
+			raw = fmt.Sprintf("%s://%s:%s@%s:%d", proto, url.QueryEscape(req.User), url.QueryEscape(req.Pass), req.Host, req.Port)
+		}
+		node, err = ParseAnyNode(raw)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("解析节点配置失败: %v", err)})
+			return
+		}
 	}
-	if h == "" || p <= 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "主机地址与端口不能为空"})
-		return
-	}
-	if proto == "wireguard" {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":       true,
-			"exit_ip":  h,
-			"ping":     45,
-			"ip_type":  "datacenter",
-			"isp":      "Cloudflare, Inc.",
-			"host":     h,
-			"port":     p,
-			"user":     u,
-			"pass":     pwd,
-			"protocol": proto,
-		})
-		return
-	}
-	remoteAddr := fmt.Sprintf("%s:%d", h, p)
-	exitIP, ping, ipType, isp, err := ProbeCustomProxy(remoteAddr, proto, u, pwd, 8*time.Second)
+
+	exitIP, ping, ipType, isp, err := ProbeAnyNode(node, 12*time.Second)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("连通性测试失败: %v", err)})
 		return
 	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":       true,
-		"exit_ip":  exitIP,
-		"ping":     ping,
-		"ip_type":  ipType,
-		"isp":      isp,
-		"host":     h,
-		"port":     p,
-		"user":     u,
-		"pass":     pwd,
-		"protocol": proto,
+		"ok":           true,
+		"exit_ip":      exitIP,
+		"ping":         ping,
+		"ip_type":      ipType,
+		"isp":          isp,
+		"host":         node.Host,
+		"port":         node.Port,
+		"user":         node.User,
+		"pass":         node.Pass,
+		"protocol":     node.Protocol,
+		"country":      node.Country,
+		"country_code": node.CountryCode,
 	})
 }
 
@@ -1299,114 +1290,79 @@ func apiCustomSocksAdd(m *Manager) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		if req.Content != "" {
-			trimmed := strings.TrimSpace(req.Content)
-			if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
-				nodes, err := ParseSubscriptionContent(trimmed)
-				if err != nil || len(nodes) == 0 {
-					writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("解析节点配置失败: %v", err)})
-					return
-				}
-				n := nodes[0]
-				req.Protocol, req.Host, req.Port, req.User, req.Pass = n.Protocol, n.Host, n.Port, n.User, n.Pass
-				if req.Remark == "" {
-					req.Remark = n.Remark
-				}
-				if req.Config == "" {
-					req.Config = n.Config
-				}
-				if req.Country == "" {
-					req.Country = n.Country
-					req.CountryCode = n.CountryCode
-				}
-			} else {
-				req.RawURL = trimmed
-			}
+
+		input := strings.TrimSpace(req.Content)
+		if input == "" {
+			input = strings.TrimSpace(req.RawURL)
 		}
-		proto, h, p, u, pwd, remark := req.Protocol, req.Host, req.Port, req.User, req.Pass, req.Remark
-		if proto == "" {
-			proto = "socks5"
-		}
-		if req.RawURL != "" {
-			parsedProto, parsedH, parsedP, parsedU, parsedPwd, parsedRemark, err := ParseProxyURL(req.RawURL)
+
+		var node *CustomNode
+		var err error
+		if input != "" {
+			node, err = ParseAnyNode(input)
 			if err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("解析节点失败: %v", err)})
 				return
 			}
-			proto, h, p, u, pwd = parsedProto, parsedH, parsedP, parsedU, parsedPwd
-			if remark == "" {
-				remark = parsedRemark
+		} else {
+			proto := strings.ToLower(strings.TrimSpace(req.Protocol))
+			if proto == "" {
+				proto = "socks5"
+			}
+			if req.Host == "" || req.Port <= 0 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "主机地址与端口不能为空"})
+				return
+			}
+			raw := fmt.Sprintf("%s://%s:%d", proto, req.Host, req.Port)
+			if req.User != "" || req.Pass != "" {
+				raw = fmt.Sprintf("%s://%s:%s@%s:%d", proto, url.QueryEscape(req.User), url.QueryEscape(req.Pass), req.Host, req.Port)
+			}
+			node, err = ParseAnyNode(raw)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("解析节点配置失败: %v", err)})
+				return
 			}
 		}
-		if h == "" || p <= 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "主机地址与端口不能为空"})
+
+		if req.Remark != "" {
+			node.Remark = req.Remark
+		}
+		if req.Country != "" {
+			node.Country = req.Country
+			node.CountryCode = req.CountryCode
+		}
+
+		exitIP, ping, ipType, isp, err := ProbeAnyNode(node, 12*time.Second)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("连接节点失败: %v", err)})
 			return
 		}
-		if remark == "" {
-			remark = h
-		}
-		var cfgJSON string
-		var exitIP string
-		var ping int
-		var ipType string
-		var isp string
-		if proto == "wireguard" {
-			if req.RawURL != "" && strings.HasPrefix(req.RawURL, "wireguard://") {
-				if wgNode, err := parseWireGuardURL(req.RawURL); err == nil && wgNode != nil {
-					cfgJSON = wgNode.Config
-				}
-			}
-			if cfgJSON == "" && req.Config != "" {
-				cfgJSON = req.Config
-			}
-			exitIP = h
-			ping = 50
-			ipType = "datacenter"
-			isp = "Cloudflare, Inc."
-		} else {
-			remoteAddr := fmt.Sprintf("%s:%d", h, p)
-			var err error
-			exitIP, ping, ipType, isp, err = ProbeCustomProxy(remoteAddr, proto, u, pwd, 10*time.Second)
-			if err != nil {
-				writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("连接代理失败: %v", err)})
-				return
-			}
-		}
 
-		country := req.Country
-		countryCode := req.CountryCode
-		if country == "" || country == "自定义" {
-			infC, infCC := inferCountryFromRemark(remark)
+		if node.Country == "" || node.Country == "自定义" {
+			infC, infCC := inferCountryFromRemark(node.Remark)
 			if infC != "自定义" {
-				country = infC
-				countryCode = infCC
+				node.Country = infC
+				node.CountryCode = infCC
 			} else {
-				country = "自定义"
-				countryCode = "CUSTOM"
+				node.Country = "自定义"
+				node.CountryCode = "CUSTOM"
 			}
 		}
 
-		nodeID := makeCustomNodeID(proto, h, p, u, remark)
-		node := CustomNode{
-			ID:          nodeID,
-			HostName:    nodeID,
-			Host:        h,
-			Port:        p,
-			User:        u,
-			Pass:        pwd,
-			Protocol:    proto,
-			Country:     country,
-			CountryCode: countryCode,
-			Remark:      remark,
-			Ping:        ping,
-			SpeedMbps:   100.0,
-			ExitIP:      exitIP,
-			IPType:      ipType,
-			ISP:         isp,
-			Config:      cfgJSON,
+		node.ExitIP = exitIP
+		node.Ping = ping
+		node.IPType = ipType
+		node.ISP = isp
+
+		nodeCopy := *node
+		if globalCustomStore != nil {
+			globalCustomStore.mu.Lock()
+			globalCustomStore.Nodes[nodeCopy.ID] = &nodeCopy
+			globalCustomStore.mu.Unlock()
+			_ = globalCustomStore.save()
 		}
 
-		t, err := m.AddCustomExit(node)
+		t, err := m.AddCustomExit(nodeCopy)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -1418,7 +1374,7 @@ func apiCustomSocksAdd(m *Manager) http.HandlerFunc {
 			"exit_ip":  exitIP,
 			"ip_type":  ipType,
 			"isp":      isp,
-			"protocol": proto,
+			"protocol": node.Protocol,
 		})
 	}
 }

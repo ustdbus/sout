@@ -12,6 +12,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	sbox "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/option"
+	SBJSON "github.com/sagernet/sing/common/json"
 )
 
 // SocksCred 是一条隧道的 SOCKS5 访问凭据。
@@ -44,9 +49,10 @@ type Tunnel struct {
 	TargetSourceID string    `json:"target_source_id,omitempty"` // 源 ID
 	HistoryHosts   []string  `json:"history_hosts,omitempty"`
 
-	engine   *embeddedEngine
-	listener net.Listener
-	mu       sync.Mutex
+	engine      *embeddedEngine
+	listener    net.Listener
+	boxInstance *sbox.Box
+	mu          sync.Mutex
 }
 
 func (t *Tunnel) setEngine(engine *embeddedEngine) {
@@ -173,6 +179,11 @@ func (t *Tunnel) stop() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	if t.boxInstance != nil {
+		_ = t.boxInstance.Close()
+		t.boxInstance = nil
+	}
+
 	if t.Kind == "custom" && t.CustomProto != "wireguard" && t.Node.Protocol != "wireguard" {
 		if t.listener != nil {
 			_ = t.listener.Close()
@@ -295,7 +306,102 @@ func (t *Tunnel) probeCustomExitIP() (string, error) {
 	return "", fmt.Errorf("自定义代理探测出口 IP 失败")
 }
 
+func (t *Tunnel) startSingBoxCustom() error {
+	var obMap map[string]any
+	if err := json.Unmarshal([]byte(t.Node.Config), &obMap); err != nil {
+		t.Status = "failed"
+		t.Err = fmt.Sprintf("解析 sing-box 配置失败: %v", err)
+		return err
+	}
+
+	tag := fmt.Sprintf("custom-out-%d", t.Slot)
+	obMap["tag"] = tag
+
+	inboundMap := map[string]any{
+		"type":        "socks",
+		"tag":         fmt.Sprintf("socks-in-%d", t.Slot),
+		"listen":      "127.0.0.1",
+		"listen_port": t.Port,
+	}
+	if t.Cred.User != "" && t.Cred.Pass != "" {
+		inboundMap["users"] = []any{
+			map[string]any{
+				"username": t.Cred.User,
+				"password": t.Cred.Pass,
+			},
+		}
+	}
+
+	boxConfig := map[string]any{
+		"log": map[string]any{
+			"level": "warn",
+		},
+		"inbounds":  []any{inboundMap},
+		"outbounds": []any{obMap},
+		"route": map[string]any{
+			"final": tag,
+		},
+	}
+
+	ctx := include.Context(context.Background())
+	var opt option.Options
+	blob, err := json.Marshal(boxConfig)
+	if err != nil {
+		t.Status = "failed"
+		t.Err = err.Error()
+		return err
+	}
+	if err := SBJSON.UnmarshalContext(ctx, blob, &opt); err != nil {
+		t.Status = "failed"
+		t.Err = fmt.Sprintf("配置转换失败: %v", err)
+		return err
+	}
+
+	boxInstance, err := sbox.New(sbox.Options{
+		Context: ctx,
+		Options: opt,
+	})
+	if err != nil {
+		t.Status = "failed"
+		t.Err = fmt.Sprintf("创建 sing-box 失败: %v", err)
+		return err
+	}
+
+	if err := boxInstance.Start(); err != nil {
+		return fmt.Errorf("启动 sing-box 失败: %w", err)
+	}
+
+	t.mu.Lock()
+	if t.boxInstance != nil {
+		_ = t.boxInstance.Close()
+	}
+	t.boxInstance = boxInstance
+	t.mu.Unlock()
+
+	exitIP, err := t.waitExitIP(15 * time.Second)
+	if err != nil {
+		t.stop()
+		t.mu.Lock()
+		t.Status = "failed"
+		t.Err = fmt.Sprintf("探测出口 IP 失败: %v", err)
+		t.mu.Unlock()
+		return err
+	}
+
+	t.mu.Lock()
+	t.ExitIP = exitIP
+	t.Status = "up"
+	t.Since = time.Now()
+	t.Err = ""
+	t.mu.Unlock()
+	return nil
+}
+
 func (t *Tunnel) startCustom() error {
+	if t.Node.Config != "" {
+		return t.startSingBoxCustom()
+	}
+
 	addr := fmt.Sprintf("127.0.0.1:%d", t.Port)
 	l, err := net.Listen("tcp", addr)
 	if err != nil {

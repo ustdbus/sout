@@ -549,7 +549,7 @@ option{background:#161b22;color:var(--text);padding:8px}
     <div class="body">
       <label class="f" style="margin-bottom:12px">
         <span style="font-weight:600;margin-bottom:6px">直接粘贴 sing-box 支持的协议节点配置</span>
-        <textarea id="csNodeText" rows="6" spellcheck="false" placeholder="直接粘贴 sing-box 节点链接或 Outbound 配置 JSON：&#10;• 单行链接：wireguard://... 或 socks5://user:pass@1.2.3.4:1080#备注 或 https://...&#10;• sing-box Outbound JSON：&#10;  {&quot;type&quot;: &quot;wireguard&quot;, &quot;server&quot;: &quot;engage.cloudflareclient.com&quot;, &quot;server_port&quot;: 2408, ...}&#10;  {&quot;type&quot;: &quot;socks&quot;, &quot;server&quot;: &quot;1.2.3.4&quot;, &quot;server_port&quot;: 1080, ...}&#10;  {&quot;type&quot;: &quot;http&quot;, &quot;server&quot;: &quot;1.2.3.4&quot;, &quot;server_port&quot;: 443, &quot;tls&quot;: {&quot;enabled&quot;: true}, ...}" style="width:100%;border:1px solid var(--line);background:#0d1117;color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5;padding:10px;border-radius:6px;resize:vertical;min-height:130px"></textarea>
+        <textarea id="csNodeText" rows="6" spellcheck="false" placeholder="直接粘贴 sing-box 支持的各类节点协议链接或 Outbound 配置 JSON：&#10;• 协议链接：tuic://..., hysteria2://... (hy2), vless://..., vmess://..., trojan://..., ss://..., wireguard://..., socks5://...&#10;• sing-box Outbound JSON：&#10;  {&quot;type&quot;: &quot;tuic&quot;, &quot;server&quot;: &quot;1.2.3.4&quot;, &quot;server_port&quot;: 443, ...}&#10;  {&quot;type&quot;: &quot;vless&quot;, &quot;server&quot;: &quot;1.2.3.4&quot;, &quot;server_port&quot;: 443, ...}&#10;  {&quot;type&quot;: &quot;hysteria2&quot;, &quot;server&quot;: &quot;1.2.3.4&quot;, &quot;server_port&quot;: 443, ...}&#10;  {&quot;type&quot;: &quot;wireguard&quot;, &quot;server&quot;: &quot;...&quot;, &quot;server_port&quot;: 2408, ...}" style="width:100%;border:1px solid var(--line);background:#0d1117;color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5;padding:10px;border-radius:6px;resize:vertical;min-height:130px"></textarea>
       </label>
 
       <!-- 智能解析预览条目 -->
@@ -749,7 +749,19 @@ function renderExits(){
     // 真实远端出站协议徽标
     let protoBadge = '';
     const p = (e.protocol || (e.kind === 'custom' ? 'socks5' : 'openvpn')).toLowerCase();
-    if(p === 'wireguard'){
+    if(p === 'tuic'){
+      protoBadge = '<span class="source-tag" style="background:#8a63d2;color:#fff;font-weight:600" title="出站协议: TUIC v5 QUIC 隧道">⚡ TUIC</span>';
+    } else if(p === 'hysteria2' || p === 'hy2'){
+      protoBadge = '<span class="source-tag" style="background:#ea4aaa;color:#fff;font-weight:600" title="出站协议: Hysteria 2 UDP 隧道">🚀 Hy2</span>';
+    } else if(p === 'vless'){
+      protoBadge = '<span class="source-tag" style="background:#00bcd4;color:#0d1117;font-weight:600" title="出站协议: VLESS">🛡️ VLESS</span>';
+    } else if(p === 'vmess'){
+      protoBadge = '<span class="source-tag" style="background:#ff9800;color:#0d1117;font-weight:600" title="出站协议: VMess">📦 VMess</span>';
+    } else if(p === 'trojan'){
+      protoBadge = '<span class="source-tag" style="background:#f85149;color:#fff;font-weight:600" title="出站协议: Trojan">🔒 Trojan</span>';
+    } else if(p === 'shadowsocks' || p === 'ss'){
+      protoBadge = '<span class="source-tag" style="background:#6e7681;color:#fff;font-weight:600" title="出站协议: Shadowsocks">👥 SS</span>';
+    } else if(p === 'wireguard'){
       protoBadge = '<span class="source-tag" style="background:#0969da;color:#fff;font-weight:600" title="公网出站协议: WireGuard UDP 隧道">⚡ WireGuard</span>';
     } else if(p === 'https'){
       protoBadge = '<span class="source-tag" style="background:#2ea043;color:#fff;font-weight:600" title="公网出站协议: HTTPS CONNECT 安全代理">🔒 HTTPS</span>';
@@ -1838,7 +1850,43 @@ function parseNodePreview(raw){
       if(Array.isArray(obj)) obj = obj[0] || {};
       if(obj.outbounds && Array.isArray(obj.outbounds)) obj = obj.outbounds[0] || {};
       const t = (obj.type || '').toLowerCase();
-      if(t === 'wireguard'){
+      if(t === 'tuic'){
+        proto = 'TUIC';
+        host = obj.server || '-';
+        port = obj.server_port || 443;
+        remark = obj.tag || host;
+        auth = obj.uuid ? ('UUID: ' + esc(obj.uuid)) : '无';
+      } else if(t === 'hysteria2' || t === 'hy2'){
+        proto = 'Hysteria2';
+        host = obj.server || '-';
+        port = obj.server_port || 443;
+        remark = obj.tag || host;
+        auth = '密码认证';
+      } else if(t === 'vless'){
+        proto = 'VLESS';
+        host = obj.server || '-';
+        port = obj.server_port || 443;
+        remark = obj.tag || host;
+        auth = obj.uuid ? ('UUID: ' + esc(obj.uuid)) : '无';
+      } else if(t === 'vmess'){
+        proto = 'VMess';
+        host = obj.server || '-';
+        port = obj.server_port || 443;
+        remark = obj.tag || host;
+        auth = obj.uuid ? ('UUID: ' + esc(obj.uuid)) : '无';
+      } else if(t === 'trojan'){
+        proto = 'Trojan';
+        host = obj.server || '-';
+        port = obj.server_port || 443;
+        remark = obj.tag || host;
+        auth = '密码认证';
+      } else if(t === 'shadowsocks' || t === 'ss'){
+        proto = 'Shadowsocks';
+        host = obj.server || '-';
+        port = obj.server_port || 8388;
+        remark = obj.tag || host;
+        auth = obj.method ? ('加密: ' + esc(obj.method)) : '密码认证';
+      } else if(t === 'wireguard'){
         proto = 'WireGuard';
         host = obj.server || 'engage.cloudflareclient.com';
         port = obj.server_port || 2408;
@@ -1861,6 +1909,111 @@ function parseNodePreview(raw){
         host = obj.server || '-';
         port = obj.server_port || '-';
         remark = obj.tag || '-';
+      }
+    } catch(e){}
+  } else if(raw.startsWith('tuic://')){
+    proto = 'TUIC';
+    try {
+      const u = new URL(raw);
+      host = u.hostname;
+      port = u.port || 443;
+      if(u.username) auth = 'UUID: ' + decodeURIComponent(u.username);
+      if(u.hash) remark = decodeURIComponent(u.hash.replace(/^#/, ''));
+    } catch(e){
+      // 容错解析
+      const m = raw.match(/tuic:\/\/([^:@]+)(?::([^@]+))?@([^:/?#]+)(?::(\d+))?/i);
+      if(m){
+        auth = 'UUID: ' + m[1];
+        host = m[3];
+        port = m[4] || 443;
+      }
+      if(raw.includes('#')) remark = decodeURIComponent(raw.split('#')[1]);
+    }
+  } else if(raw.startsWith('hysteria2://') || raw.startsWith('hy2://')){
+    proto = 'Hysteria2';
+    try {
+      const u = new URL(raw);
+      host = u.hostname;
+      port = u.port || 443;
+      auth = '密码认证';
+      if(u.hash) remark = decodeURIComponent(u.hash.replace(/^#/, ''));
+    } catch(e){
+      const m = raw.match(/hy(?:steria)?2:\/\/([^@]+)@([^:/?#]+)(?::(\d+))?/i);
+      if(m){
+        host = m[2];
+        port = m[3] || 443;
+        auth = '密码认证';
+      }
+      if(raw.includes('#')) remark = decodeURIComponent(raw.split('#')[1]);
+    }
+  } else if(raw.startsWith('vless://')){
+    proto = 'VLESS';
+    try {
+      const u = new URL(raw);
+      host = u.hostname;
+      port = u.port || 443;
+      if(u.username) auth = 'UUID: ' + decodeURIComponent(u.username);
+      if(u.hash) remark = decodeURIComponent(u.hash.replace(/^#/, ''));
+    } catch(e){
+      const m = raw.match(/vless:\/\/([^@]+)@([^:/?#]+)(?::(\d+))?/i);
+      if(m){
+        auth = 'UUID: ' + m[1];
+        host = m[2];
+        port = m[3] || 443;
+      }
+      if(raw.includes('#')) remark = decodeURIComponent(raw.split('#')[1]);
+    }
+  } else if(raw.startsWith('vmess://')){
+    proto = 'VMess';
+    try {
+      let b64 = raw.replace(/^vmess:\/\//, '');
+      if(b64.includes('#')) b64 = b64.split('#')[0];
+      const jsonStr = atob(b64.replace(/-/g, '+').replace(/_/g, '/'));
+      const v = JSON.parse(jsonStr);
+      host = v.add || '-';
+      port = v.port || 443;
+      remark = v.ps || host;
+      if(v.id) auth = 'UUID: ' + v.id;
+    } catch(e){}
+  } else if(raw.startsWith('trojan://')){
+    proto = 'Trojan';
+    try {
+      const u = new URL(raw);
+      host = u.hostname;
+      port = u.port || 443;
+      auth = '密码认证';
+      if(u.hash) remark = decodeURIComponent(u.hash.replace(/^#/, ''));
+    } catch(e){
+      const m = raw.match(/trojan:\/\/([^@]+)@([^:/?#]+)(?::(\d+))?/i);
+      if(m){
+        host = m[2];
+        port = m[3] || 443;
+        auth = '密码认证';
+      }
+      if(raw.includes('#')) remark = decodeURIComponent(raw.split('#')[1]);
+    }
+  } else if(raw.startsWith('ss://')){
+    proto = 'Shadowsocks';
+    try {
+      if(raw.includes('@')){
+        const u = new URL(raw);
+        host = u.hostname;
+        port = u.port || 8388;
+        if(u.hash) remark = decodeURIComponent(u.hash.replace(/^#/, ''));
+        auth = '加密认证';
+      } else {
+        let body = raw.replace(/^ss:\/\//, '');
+        if(body.includes('#')){
+          remark = decodeURIComponent(body.split('#')[1]);
+          body = body.split('#')[0];
+        }
+        const dec = atob(body.replace(/-/g, '+').replace(/_/g, '/'));
+        if(dec.includes('@')){
+          const hp = dec.split('@')[1].split(':');
+          host = hp[0];
+          port = hp[1] || 8388;
+          auth = '加密: ' + dec.split('@')[0].split(':')[0];
+        }
       }
     } catch(e){}
   } else if(raw.startsWith('wireguard://')){
@@ -1901,11 +2054,18 @@ function parseNodePreview(raw){
   }
 
   box.style.display = 'block';
-  $('#csParsedProtoBadge').textContent = proto;
-  if(proto === 'WireGuard') $('#csParsedProtoBadge').style.background = '#0969da';
-  else if(proto === 'HTTPS') $('#csParsedProtoBadge').style.background = '#2ea043';
-  else if(proto === 'HTTP') $('#csParsedProtoBadge').style.background = '#d29922';
-  else $('#csParsedProtoBadge').style.background = '#1f6feb';
+  const badge = $('#csParsedProtoBadge');
+  badge.textContent = proto;
+  if(proto === 'TUIC') badge.style.background = '#8a63d2';
+  else if(proto === 'Hysteria2') badge.style.background = '#ea4aaa';
+  else if(proto === 'VLESS') badge.style.background = '#00bcd4';
+  else if(proto === 'VMess') badge.style.background = '#ff9800';
+  else if(proto === 'Trojan') badge.style.background = '#f85149';
+  else if(proto === 'Shadowsocks') badge.style.background = '#6e7681';
+  else if(proto === 'WireGuard') badge.style.background = '#0969da';
+  else if(proto === 'HTTPS') badge.style.background = '#2ea043';
+  else if(proto === 'HTTP') badge.style.background = '#d29922';
+  else badge.style.background = '#1f6feb';
 
   $('#csParsedHost').textContent = host;
   $('#csParsedPort').textContent = port;

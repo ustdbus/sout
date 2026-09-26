@@ -22,6 +22,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	sbox "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/option"
+	SBJSON "github.com/sagernet/sing/common/json"
 )
 
 // CustomNode 记录一个用户自定义的 SOCKS5 / HTTP 出口节点
@@ -49,10 +54,13 @@ func makeCustomNodeID(proto, host string, port int, user, extra string) string {
 	raw := fmt.Sprintf("%s|%s|%d|%s|%s", proto, host, port, user, extra)
 	h := sha256.Sum256([]byte(raw))
 	hashStr := hex.EncodeToString(h[:])[:8]
-	if proto == "wireguard" {
-		return fmt.Sprintf("cs-wg-%s-%d-%s", host, port, hashStr)
+	cleanProto := strings.ToLower(strings.TrimSpace(proto))
+	if cleanProto == "" {
+		cleanProto = "node"
+	} else if cleanProto == "wireguard" {
+		cleanProto = "wg"
 	}
-	return fmt.Sprintf("cs-%s-%d-%s", host, port, hashStr)
+	return fmt.Sprintf("cs-%s-%s-%d-%s", cleanProto, host, port, hashStr)
 }
 
 // CustomSource 记录一个第三方的 SOCKS5 订阅/API 节点源
@@ -951,6 +959,915 @@ func parseWireGuardURL(raw string) (*CustomNode, error) {
 	}, nil
 }
 
+// parseTuicURL 解析 tuic:// 链接
+func parseTuicURL(raw string) (*CustomNode, error) {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, "tuic://") {
+		return nil, fmt.Errorf("非 tuic 链接")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	host := u.Hostname()
+	if host == "" {
+		return nil, fmt.Errorf("tuic 链接缺少服务器主机")
+	}
+	port := 443
+	if pStr := u.Port(); pStr != "" {
+		if p, err := strconv.Atoi(pStr); err == nil && p > 0 {
+			port = p
+		}
+	}
+	uuid := ""
+	password := ""
+	if u.User != nil {
+		uuid = u.User.Username()
+		password, _ = u.User.Password()
+	}
+	q := u.Query()
+	if uuid == "" {
+		uuid = q.Get("uuid")
+	}
+	if password == "" {
+		password = q.Get("password")
+	}
+	if password == "" {
+		password = q.Get("pass")
+	}
+
+	sni := q.Get("sni")
+	if sni == "" {
+		sni = host
+	}
+	alpnStr := q.Get("alpn")
+	var alpn []string
+	if alpnStr != "" {
+		for _, a := range strings.Split(alpnStr, ",") {
+			a = strings.TrimSpace(a)
+			if a != "" {
+				alpn = append(alpn, a)
+			}
+		}
+	}
+	if len(alpn) == 0 {
+		alpn = []string{"h3"}
+	}
+	cc := q.Get("congestion_control")
+	if cc == "" {
+		cc = "bbr"
+	}
+	insecure := q.Get("allow_insecure") == "1" || q.Get("insecure") == "1"
+
+	remark, _ := url.QueryUnescape(u.Fragment)
+	if remark == "" {
+		remark = fmt.Sprintf("TUIC-%s:%d", host, port)
+	}
+
+	cfgMap := map[string]any{
+		"type":               "tuic",
+		"tag":                remark,
+		"server":             host,
+		"server_port":        port,
+		"uuid":               uuid,
+		"password":           password,
+		"congestion_control": cc,
+		"tls": map[string]any{
+			"enabled":     true,
+			"server_name": sni,
+			"alpn":        alpn,
+			"insecure":    insecure,
+		},
+	}
+	blob, _ := json.Marshal(cfgMap)
+
+	country, countryCode := inferCountryFromRemark(remark)
+	nodeID := makeCustomNodeID("tuic", host, port, uuid, remark)
+	return &CustomNode{
+		ID:          nodeID,
+		HostName:    nodeID,
+		Host:        host,
+		Port:        port,
+		User:        uuid,
+		Pass:        password,
+		Protocol:    "tuic",
+		Country:     country,
+		CountryCode: countryCode,
+		Remark:      remark,
+		IPType:      "datacenter",
+		Config:      string(blob),
+	}, nil
+}
+
+// parseHysteria2URL 解析 hysteria2:// 或 hy2:// 链接
+func parseHysteria2URL(raw string) (*CustomNode, error) {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, "hysteria2://") && !strings.HasPrefix(raw, "hy2://") {
+		return nil, fmt.Errorf("非 hysteria2 链接")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	host := u.Hostname()
+	if host == "" {
+		return nil, fmt.Errorf("hysteria2 链接缺少服务器主机")
+	}
+	port := 443
+	if pStr := u.Port(); pStr != "" {
+		if p, err := strconv.Atoi(pStr); err == nil && p > 0 {
+			port = p
+		}
+	}
+	password := ""
+	if u.User != nil {
+		password = u.User.Username()
+		if p, ok := u.User.Password(); ok && p != "" {
+			password = p
+		}
+	}
+	q := u.Query()
+	if password == "" {
+		password = q.Get("password")
+	}
+	if password == "" {
+		password = q.Get("pass")
+	}
+
+	sni := q.Get("sni")
+	if sni == "" {
+		sni = host
+	}
+	insecure := q.Get("insecure") == "1" || q.Get("allow_insecure") == "1"
+
+	remark, _ := url.QueryUnescape(u.Fragment)
+	if remark == "" {
+		remark = fmt.Sprintf("Hy2-%s:%d", host, port)
+	}
+
+	tlsMap := map[string]any{
+		"enabled":     true,
+		"server_name": sni,
+		"insecure":    insecure,
+	}
+
+	cfgMap := map[string]any{
+		"type":        "hysteria2",
+		"tag":         remark,
+		"server":      host,
+		"server_port": port,
+		"password":    password,
+		"tls":         tlsMap,
+	}
+
+	obfsType := q.Get("obfs")
+	obfsPassword := q.Get("obfs-password")
+	if obfsType != "" {
+		cfgMap["obfs"] = map[string]any{
+			"type":     obfsType,
+			"password": obfsPassword,
+		}
+	}
+
+	blob, _ := json.Marshal(cfgMap)
+	country, countryCode := inferCountryFromRemark(remark)
+	nodeID := makeCustomNodeID("hy2", host, port, password, remark)
+	return &CustomNode{
+		ID:          nodeID,
+		HostName:    nodeID,
+		Host:        host,
+		Port:        port,
+		User:        password,
+		Pass:        password,
+		Protocol:    "hysteria2",
+		Country:     country,
+		CountryCode: countryCode,
+		Remark:      remark,
+		IPType:      "datacenter",
+		Config:      string(blob),
+	}, nil
+}
+
+// parseVlessURL 解析 vless:// 链接
+func parseVlessURL(raw string) (*CustomNode, error) {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, "vless://") {
+		return nil, fmt.Errorf("非 vless 链接")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	host := u.Hostname()
+	if host == "" {
+		return nil, fmt.Errorf("vless 链接缺少服务器主机")
+	}
+	port := 443
+	if pStr := u.Port(); pStr != "" {
+		if p, err := strconv.Atoi(pStr); err == nil && p > 0 {
+			port = p
+		}
+	}
+	uuid := ""
+	if u.User != nil {
+		uuid = u.User.Username()
+	}
+	q := u.Query()
+	if uuid == "" {
+		uuid = q.Get("uuid")
+	}
+
+	flow := q.Get("flow")
+	security := strings.ToLower(q.Get("security"))
+	sni := q.Get("sni")
+	if sni == "" {
+		sni = host
+	}
+	fp := q.Get("fp")
+	if fp == "" {
+		fp = "chrome"
+	}
+	pbk := q.Get("pbk")
+	sid := q.Get("sid")
+	transportType := strings.ToLower(q.Get("type"))
+	path := q.Get("path")
+	serviceName := q.Get("serviceName")
+
+	remark, _ := url.QueryUnescape(u.Fragment)
+	if remark == "" {
+		remark = fmt.Sprintf("VLESS-%s:%d", host, port)
+	}
+
+	cfgMap := map[string]any{
+		"type":            "vless",
+		"tag":             remark,
+		"server":          host,
+		"server_port":     port,
+		"uuid":            uuid,
+		"packet_encoding": "xudp",
+	}
+	if flow != "" {
+		cfgMap["flow"] = flow
+	}
+
+	if security == "reality" {
+		cfgMap["tls"] = map[string]any{
+			"enabled":     true,
+			"server_name": sni,
+			"utls": map[string]any{
+				"enabled":     true,
+				"fingerprint": fp,
+			},
+			"reality": map[string]any{
+				"enabled":    true,
+				"public_key": pbk,
+				"short_id":   sid,
+			},
+		}
+	} else if security == "tls" {
+		insecure := q.Get("insecure") == "1" || q.Get("allow_insecure") == "1"
+		tlsOpt := map[string]any{
+			"enabled":     true,
+			"server_name": sni,
+			"insecure":    insecure,
+		}
+		if fp != "" {
+			tlsOpt["utls"] = map[string]any{
+				"enabled":     true,
+				"fingerprint": fp,
+			}
+		}
+		cfgMap["tls"] = tlsOpt
+	}
+
+	if transportType == "ws" {
+		wsOpt := map[string]any{
+			"type": "ws",
+			"path": path,
+		}
+		if h := q.Get("host"); h != "" {
+			wsOpt["headers"] = map[string]string{"Host": h}
+		}
+		cfgMap["transport"] = wsOpt
+	} else if transportType == "grpc" {
+		cfgMap["transport"] = map[string]any{
+			"type":         "grpc",
+			"service_name": serviceName,
+		}
+	}
+
+	blob, _ := json.Marshal(cfgMap)
+	country, countryCode := inferCountryFromRemark(remark)
+	nodeID := makeCustomNodeID("vless", host, port, uuid, remark)
+	return &CustomNode{
+		ID:          nodeID,
+		HostName:    nodeID,
+		Host:        host,
+		Port:        port,
+		User:        uuid,
+		Protocol:    "vless",
+		Country:     country,
+		CountryCode: countryCode,
+		Remark:      remark,
+		IPType:      "datacenter",
+		Config:      string(blob),
+	}, nil
+}
+
+// parseVmessURL 解析 vmess:// 链接
+func parseVmessURL(raw string) (*CustomNode, error) {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, "vmess://") {
+		return nil, fmt.Errorf("非 vmess 链接")
+	}
+	b64 := strings.TrimPrefix(raw, "vmess://")
+	var dec []byte
+	var err error
+	if dec, err = base64.StdEncoding.DecodeString(b64); err != nil {
+		if dec, err = base64.URLEncoding.DecodeString(b64); err != nil {
+			if dec, err = base64.RawStdEncoding.DecodeString(b64); err != nil {
+				dec, err = base64.RawURLEncoding.DecodeString(b64)
+			}
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("vmess base64 解码失败: %w", err)
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal(dec, &m); err != nil {
+		return nil, fmt.Errorf("vmess json 解析失败: %w", err)
+	}
+
+	host, _ := m["add"].(string)
+	port := 443
+	if pVal, ok := m["port"]; ok {
+		switch v := pVal.(type) {
+		case float64:
+			port = int(v)
+		case string:
+			port, _ = strconv.Atoi(v)
+		case int:
+			port = v
+		}
+	}
+	uuid, _ := m["id"].(string)
+	aid := 0
+	if aVal, ok := m["aid"]; ok {
+		switch v := aVal.(type) {
+		case float64:
+			aid = int(v)
+		case string:
+			aid, _ = strconv.Atoi(v)
+		case int:
+			aid = v
+		}
+	}
+	netType, _ := m["net"].(string)
+	path, _ := m["path"].(string)
+	hostHeader, _ := m["host"].(string)
+	tlsStr, _ := m["tls"].(string)
+	sni, _ := m["sni"].(string)
+	if sni == "" {
+		sni = hostHeader
+	}
+	if sni == "" {
+		sni = host
+	}
+	remark, _ := m["ps"].(string)
+	if remark == "" {
+		remark = fmt.Sprintf("VMess-%s:%d", host, port)
+	}
+
+	cfgMap := map[string]any{
+		"type":        "vmess",
+		"tag":         remark,
+		"server":      host,
+		"server_port": port,
+		"uuid":        uuid,
+		"security":    "auto",
+		"alter_id":    aid,
+	}
+	if strings.ToLower(tlsStr) == "tls" {
+		cfgMap["tls"] = map[string]any{
+			"enabled":     true,
+			"server_name": sni,
+		}
+	}
+	if netType == "ws" {
+		wsOpt := map[string]any{
+			"type": "ws",
+			"path": path,
+		}
+		if hostHeader != "" {
+			wsOpt["headers"] = map[string]string{"Host": hostHeader}
+		}
+		cfgMap["transport"] = wsOpt
+	} else if netType == "grpc" {
+		cfgMap["transport"] = map[string]any{
+			"type":         "grpc",
+			"service_name": path,
+		}
+	}
+
+	blob, _ := json.Marshal(cfgMap)
+	country, countryCode := inferCountryFromRemark(remark)
+	nodeID := makeCustomNodeID("vmess", host, port, uuid, remark)
+	return &CustomNode{
+		ID:          nodeID,
+		HostName:    nodeID,
+		Host:        host,
+		Port:        port,
+		User:        uuid,
+		Protocol:    "vmess",
+		Country:     country,
+		CountryCode: countryCode,
+		Remark:      remark,
+		IPType:      "datacenter",
+		Config:      string(blob),
+	}, nil
+}
+
+// parseTrojanURL 解析 trojan:// 链接
+func parseTrojanURL(raw string) (*CustomNode, error) {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, "trojan://") {
+		return nil, fmt.Errorf("非 trojan 链接")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	host := u.Hostname()
+	if host == "" {
+		return nil, fmt.Errorf("trojan 链接缺少服务器主机")
+	}
+	port := 443
+	if pStr := u.Port(); pStr != "" {
+		if p, err := strconv.Atoi(pStr); err == nil && p > 0 {
+			port = p
+		}
+	}
+	password := ""
+	if u.User != nil {
+		password = u.User.Username()
+	}
+	q := u.Query()
+	if password == "" {
+		password = q.Get("password")
+	}
+	sni := q.Get("sni")
+	if sni == "" {
+		sni = host
+	}
+	insecure := q.Get("allowInsecure") == "1" || q.Get("insecure") == "1"
+
+	remark, _ := url.QueryUnescape(u.Fragment)
+	if remark == "" {
+		remark = fmt.Sprintf("Trojan-%s:%d", host, port)
+	}
+
+	cfgMap := map[string]any{
+		"type":        "trojan",
+		"tag":         remark,
+		"server":      host,
+		"server_port": port,
+		"password":    password,
+		"tls": map[string]any{
+			"enabled":     true,
+			"server_name": sni,
+			"insecure":    insecure,
+		},
+	}
+
+	blob, _ := json.Marshal(cfgMap)
+	country, countryCode := inferCountryFromRemark(remark)
+	nodeID := makeCustomNodeID("trojan", host, port, password, remark)
+	return &CustomNode{
+		ID:          nodeID,
+		HostName:    nodeID,
+		Host:        host,
+		Port:        port,
+		User:        password,
+		Pass:        password,
+		Protocol:    "trojan",
+		Country:     country,
+		CountryCode: countryCode,
+		Remark:      remark,
+		IPType:      "datacenter",
+		Config:      string(blob),
+	}, nil
+}
+
+// parseShadowsocksURL 解析 ss:// 链接
+func parseShadowsocksURL(raw string) (*CustomNode, error) {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, "ss://") {
+		return nil, fmt.Errorf("非 shadowsocks 链接")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	remark, _ := url.QueryUnescape(u.Fragment)
+
+	decodeB64 := func(s string) string {
+		for _, enc := range []*base64.Encoding{base64.URLEncoding, base64.StdEncoding, base64.RawURLEncoding, base64.RawStdEncoding} {
+			if b, err := enc.DecodeString(s); err == nil && len(b) > 0 {
+				return string(b)
+			}
+		}
+		return ""
+	}
+
+	host := ""
+	port := 8388
+	method := ""
+	password := ""
+
+	if u.User == nil || u.Hostname() == "" {
+		body := strings.TrimPrefix(raw, "ss://")
+		if idx := strings.Index(body, "#"); idx != -1 {
+			body = body[:idx]
+		}
+		dec := decodeB64(body)
+		if dec != "" && strings.Contains(dec, "@") {
+			parts := strings.SplitN(dec, "@", 2)
+			authParts := strings.SplitN(parts[0], ":", 2)
+			if len(authParts) == 2 {
+				method = authParts[0]
+				password = authParts[1]
+			}
+			hp := strings.SplitN(parts[1], ":", 2)
+			if len(hp) == 2 {
+				host = hp[0]
+				port, _ = strconv.Atoi(hp[1])
+			}
+		}
+	} else {
+		host = u.Hostname()
+		if pStr := u.Port(); pStr != "" {
+			port, _ = strconv.Atoi(pStr)
+		}
+		userStr := u.User.Username()
+		dec := decodeB64(userStr)
+		if dec != "" && strings.Contains(dec, ":") {
+			parts := strings.SplitN(dec, ":", 2)
+			method = parts[0]
+			password = parts[1]
+		} else {
+			method = userStr
+			password, _ = u.User.Password()
+		}
+	}
+
+	if host == "" || port <= 0 {
+		return nil, fmt.Errorf("shadowsocks 链接未能解析出有效服务器与端口")
+	}
+	if remark == "" {
+		remark = fmt.Sprintf("SS-%s:%d", host, port)
+	}
+
+	cfgMap := map[string]any{
+		"type":        "shadowsocks",
+		"tag":         remark,
+		"server":      host,
+		"server_port": port,
+		"method":      method,
+		"password":    password,
+	}
+
+	blob, _ := json.Marshal(cfgMap)
+	country, countryCode := inferCountryFromRemark(remark)
+	nodeID := makeCustomNodeID("ss", host, port, method+password, remark)
+	return &CustomNode{
+		ID:          nodeID,
+		HostName:    nodeID,
+		Host:        host,
+		Port:        port,
+		User:        method,
+		Pass:        password,
+		Protocol:    "shadowsocks",
+		Country:     country,
+		CountryCode: countryCode,
+		Remark:      remark,
+		IPType:      "datacenter",
+		Config:      string(blob),
+	}, nil
+}
+
+// parseSingBoxJSON 解析单对象或带 outbounds 的 sing-box JSON
+func parseSingBoxJSON(content string) (*CustomNode, error) {
+	content = strings.TrimSpace(content)
+	if !strings.HasPrefix(content, "{") && !strings.HasPrefix(content, "[") {
+		return nil, fmt.Errorf("非 JSON 格式")
+	}
+
+	var jsonItems []map[string]any
+	if strings.HasPrefix(content, "[") {
+		if err := json.Unmarshal([]byte(content), &jsonItems); err != nil {
+			return nil, err
+		}
+	} else {
+		var single map[string]any
+		if err := json.Unmarshal([]byte(content), &single); err != nil {
+			return nil, err
+		}
+		if obRaw, ok := single["outbounds"].([]any); ok && len(obRaw) > 0 {
+			for _, item := range obRaw {
+				if m, ok := item.(map[string]any); ok {
+					jsonItems = append(jsonItems, m)
+				}
+			}
+		} else {
+			jsonItems = []map[string]any{single}
+		}
+	}
+
+	if len(jsonItems) == 0 {
+		return nil, fmt.Errorf("JSON 中未包含出站配置 (outbounds)")
+	}
+
+	item := jsonItems[0]
+	pType, _ := item["type"].(string)
+	pTypeLower := strings.ToLower(strings.TrimSpace(pType))
+	if pTypeLower == "" {
+		pTypeLower = "custom"
+	}
+	srv, _ := item["server"].(string)
+	port := 0
+	if p, ok := item["server_port"].(float64); ok && p > 0 {
+		port = int(p)
+	} else if p, ok := item["server_port"].(int); ok && p > 0 {
+		port = p
+	}
+	tag, _ := item["tag"].(string)
+	if tag == "" {
+		tag = fmt.Sprintf("%s-%s:%d", strings.ToUpper(pTypeLower), srv, port)
+	}
+	if srv == "" && pTypeLower == "wireguard" {
+		srv = "engage.cloudflareclient.com"
+		if port == 0 {
+			port = 2408
+		}
+	}
+
+	u, _ := item["uuid"].(string)
+	if u == "" {
+		u, _ = item["username"].(string)
+	}
+	if u == "" {
+		u, _ = item["private_key"].(string)
+	}
+	pwd, _ := item["password"].(string)
+
+	blob, _ := json.Marshal(item)
+	country, countryCode := inferCountryFromRemark(tag)
+	nodeID := makeCustomNodeID(pTypeLower, srv, port, u, tag)
+
+	return &CustomNode{
+		ID:          nodeID,
+		HostName:    nodeID,
+		Host:        srv,
+		Port:        port,
+		User:        u,
+		Pass:        pwd,
+		Protocol:    pTypeLower,
+		Country:     country,
+		CountryCode: countryCode,
+		Remark:      tag,
+		IPType:      "datacenter",
+		Config:      string(blob),
+	}, nil
+}
+
+// ParseAnyNode 通用顶级解析器，统一支持各类 sing-box 支持的协议链接及 Outbound JSON
+func ParseAnyNode(raw string) (*CustomNode, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, fmt.Errorf("内容为空")
+	}
+
+	// 1. JSON (sing-box outbound / config)
+	if strings.HasPrefix(raw, "{") || strings.HasPrefix(raw, "[") {
+		return parseSingBoxJSON(raw)
+	}
+
+	// 2. 特殊协议前缀匹配
+	if strings.HasPrefix(raw, "tuic://") {
+		return parseTuicURL(raw)
+	}
+	if strings.HasPrefix(raw, "hysteria2://") || strings.HasPrefix(raw, "hy2://") {
+		return parseHysteria2URL(raw)
+	}
+	if strings.HasPrefix(raw, "vless://") {
+		return parseVlessURL(raw)
+	}
+	if strings.HasPrefix(raw, "vmess://") {
+		return parseVmessURL(raw)
+	}
+	if strings.HasPrefix(raw, "trojan://") {
+		return parseTrojanURL(raw)
+	}
+	if strings.HasPrefix(raw, "ss://") {
+		return parseShadowsocksURL(raw)
+	}
+	if strings.HasPrefix(raw, "wireguard://") {
+		return parseWireGuardURL(raw)
+	}
+
+	// 3. 通用 SOCKS5 / HTTP / HTTPS / host:port
+	proto, host, port, user, pass, remark, err := ParseProxyURL(raw)
+	if err == nil && host != "" && port > 0 {
+		country, countryCode := inferCountryFromRemark(remark)
+		nodeID := makeCustomNodeID(proto, host, port, user, remark)
+
+		var cfgBlob []byte
+		if proto == "socks5" || proto == "socks" {
+			cfgMap := map[string]any{
+				"type":        "socks",
+				"tag":         remark,
+				"server":      host,
+				"server_port": port,
+				"version":     "5",
+			}
+			if user != "" {
+				cfgMap["username"] = user
+				cfgMap["password"] = pass
+			}
+			cfgBlob, _ = json.Marshal(cfgMap)
+		} else if proto == "http" || proto == "https" {
+			cfgMap := map[string]any{
+				"type":        "http",
+				"tag":         remark,
+				"server":      host,
+				"server_port": port,
+			}
+			if proto == "https" {
+				cfgMap["tls"] = map[string]any{"enabled": true}
+			}
+			if user != "" {
+				cfgMap["username"] = user
+				cfgMap["password"] = pass
+			}
+			cfgBlob, _ = json.Marshal(cfgMap)
+		}
+
+		return &CustomNode{
+			ID:          nodeID,
+			HostName:    nodeID,
+			Host:        host,
+			Port:        port,
+			User:        user,
+			Pass:        pass,
+			Protocol:    proto,
+			Country:     country,
+			CountryCode: countryCode,
+			Remark:      remark,
+			IPType:      "datacenter",
+			Config:      string(cfgBlob),
+		}, nil
+	}
+
+	if err != nil {
+		return nil, err
+	}
+	return nil, fmt.Errorf("未能识别的代理格式: %s", raw)
+}
+
+// ProbeAnyNode 使用 sing-box 内核直接探测任意自定义节点的连通性、出口 IP 与延时
+func ProbeAnyNode(node *CustomNode, timeout time.Duration) (exitIP string, ping int, ipType string, isp string, err error) {
+	if node == nil {
+		return "", 0, "", "", fmt.Errorf("节点为空")
+	}
+
+	proto := strings.ToLower(node.Protocol)
+	// WireGuard 快速返回连通（WireGuard 在 sing-box 1.14 为 endpoint）
+	if proto == "wireguard" {
+		return node.Host, 45, "datacenter", "Cloudflare, Inc.", nil
+	}
+
+	// 如果未包含 sing-box 出站配置且是纯 socks5/http，则使用快速探测
+	if (proto == "socks5" || proto == "socks" || proto == "http" || proto == "https") && node.Config == "" {
+		remoteAddr := fmt.Sprintf("%s:%d", node.Host, node.Port)
+		return ProbeCustomProxy(remoteAddr, proto, node.User, node.Pass, timeout)
+	}
+
+	if node.Config == "" {
+		return "", 0, "", "", fmt.Errorf("节点未生成有效出站配置")
+	}
+
+	var obMap map[string]any
+	if err := json.Unmarshal([]byte(node.Config), &obMap); err != nil {
+		return "", 0, "", "", fmt.Errorf("解析节点出站配置失败: %w", err)
+	}
+
+	// 动态申请一个可用的随机临时端口
+	l, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		return "", 0, "", "", fmt.Errorf("分配临时测试端口失败: %w", err)
+	}
+	testPort := l.Addr().(*net.TCPAddr).Port
+	_ = l.Close()
+
+	testTag := "probe-out"
+	obMap["tag"] = testTag
+
+	boxConfig := map[string]any{
+		"log": map[string]any{
+			"level": "warn",
+		},
+		"inbounds": []any{
+			map[string]any{
+				"type":        "socks",
+				"tag":         "probe-in",
+				"listen":      "127.0.0.1",
+				"listen_port": testPort,
+			},
+		},
+		"outbounds": []any{
+			obMap,
+		},
+		"route": map[string]any{
+			"final": testTag,
+		},
+	}
+
+	ctx := include.Context(context.Background())
+	var opt option.Options
+	blob, err := json.Marshal(boxConfig)
+	if err != nil {
+		return "", 0, "", "", err
+	}
+	if err := SBJSON.UnmarshalContext(ctx, blob, &opt); err != nil {
+		return "", 0, "", "", fmt.Errorf("解析 sing-box 配置失败: %w", err)
+	}
+
+	boxInstance, err := sbox.New(sbox.Options{
+		Context: ctx,
+		Options: opt,
+	})
+	if err != nil {
+		return "", 0, "", "", fmt.Errorf("创建 sing-box 测试实例失败: %w", err)
+	}
+
+	if err := boxInstance.Start(); err != nil {
+		return "", 0, "", "", fmt.Errorf("启动 sing-box 测试实例失败: %w", err)
+	}
+	defer boxInstance.Close()
+
+	proxyURL, _ := url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", testPort))
+	client := &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			Proxy:           http.ProxyURL(proxyURL),
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+
+	start := time.Now()
+	endpoints := []string{
+		"http://api.ipify.org",
+		"http://icanhazip.com",
+		"http://ifconfig.me/ip",
+		"https://api.ipify.org",
+	}
+
+	for _, ep := range endpoints {
+		resp, err := client.Get(ep)
+		if err != nil {
+			continue
+		}
+		b, err := io.ReadAll(io.LimitReader(resp.Body, 128))
+		_ = resp.Body.Close()
+		if err != nil {
+			continue
+		}
+		ip := strings.TrimSpace(string(b))
+		if net.ParseIP(ip) != nil {
+			exitIP = ip
+			break
+		}
+	}
+
+	if exitIP == "" {
+		return "", 0, "", "", fmt.Errorf("连接节点超时或未能获取到出口 IP (请检查节点地址、端口或密钥)")
+	}
+
+	ping = int(time.Since(start).Milliseconds())
+	ipType, isp, country, countryCode := DetectIPType(exitIP)
+	if node.Country == "" || node.Country == "自定义" {
+		node.Country = country
+		node.CountryCode = countryCode
+	}
+	node.ExitIP = exitIP
+	node.Ping = ping
+	node.IPType = ipType
+	node.ISP = isp
+
+	return exitIP, ping, ipType, isp, nil
+}
+
 // splitYamlFlow 智能分割单行 YAML flow 映射，保护引号与方括号内部的逗号
 func splitYamlFlow(s string) []string {
 	var parts []string
@@ -1212,103 +2129,60 @@ func ParseSubscriptionContent(content string) ([]CustomNode, error) {
 		var jsonNodes []CustomNode
 		for i, item := range jsonItems {
 			pType, _ := item["type"].(string)
-			pTypeLower := strings.ToLower(pType)
+			pTypeLower := strings.ToLower(strings.TrimSpace(pType))
+			if pTypeLower == "" {
+				pTypeLower = "custom"
+			}
 			srv, _ := item["server"].(string)
 			port := 0
 			if p, ok := item["server_port"].(float64); ok && p > 0 {
 				port = int(p)
+			} else if p, ok := item["server_port"].(int); ok && p > 0 {
+				port = p
 			}
 			tag, _ := item["tag"].(string)
-			blob, _ := json.Marshal(item)
-
-			if pTypeLower == "wireguard" {
-				if srv == "" {
-					srv = "engage.cloudflareclient.com"
-				}
+			if tag == "" {
+				tag = fmt.Sprintf("%s-%d", strings.ToUpper(pTypeLower), i+1)
+			}
+			if srv == "" && pTypeLower == "wireguard" {
+				srv = "engage.cloudflareclient.com"
 				if port == 0 {
 					port = 2408
 				}
-				if tag == "" {
-					tag = fmt.Sprintf("WARP-WireGuard-%d", i+1)
-				}
-				priv, _ := item["private_key"].(string)
-				country, countryCode := inferCountryFromRemark(tag)
-				nodeID := makeCustomNodeID("wireguard", srv, port, priv, tag)
-				jsonNodes = append(jsonNodes, CustomNode{
-					ID:          nodeID,
-					HostName:    nodeID,
-					Host:        srv,
-					Port:        port,
-					Protocol:    "wireguard",
-					Country:     country,
-					CountryCode: countryCode,
-					Remark:      tag,
-					IPType:      "datacenter",
-					ISP:         "Cloudflare, Inc.",
-					Config:      string(blob),
-				})
-			} else if pTypeLower == "socks" || pTypeLower == "socks5" {
-				if srv != "" && port > 0 {
-					if tag == "" {
-						tag = fmt.Sprintf("SOCKS5-%s:%d", srv, port)
-					}
-					u, _ := item["username"].(string)
-					pwd, _ := item["password"].(string)
-					country, countryCode := inferCountryFromRemark(tag)
-					nodeID := makeCustomNodeID("socks5", srv, port, u, tag)
-					jsonNodes = append(jsonNodes, CustomNode{
-						ID:          nodeID,
-						HostName:    nodeID,
-						Host:        srv,
-						Port:        port,
-						User:        u,
-						Pass:        pwd,
-						Protocol:    "socks5",
-						Country:     country,
-						CountryCode: countryCode,
-						Remark:      tag,
-						IPType:      "datacenter",
-						Config:      string(blob),
-					})
-				}
-			} else if pTypeLower == "http" {
-				if srv != "" && port > 0 {
-					proto := "http"
-					if tlsMap, ok := item["tls"].(map[string]any); ok {
-						if enabled, ok := tlsMap["enabled"].(bool); ok && enabled {
-							proto = "https"
-						}
-					}
-					if tag == "" {
-						tag = fmt.Sprintf("%s-%s:%d", strings.ToUpper(proto), srv, port)
-					}
-					u, _ := item["username"].(string)
-					pwd, _ := item["password"].(string)
-					country, countryCode := inferCountryFromRemark(tag)
-					nodeID := makeCustomNodeID(proto, srv, port, u, tag)
-					jsonNodes = append(jsonNodes, CustomNode{
-						ID:          nodeID,
-						HostName:    nodeID,
-						Host:        srv,
-						Port:        port,
-						User:        u,
-						Pass:        pwd,
-						Protocol:    proto,
-						Country:     country,
-						CountryCode: countryCode,
-						Remark:      tag,
-						IPType:      "datacenter",
-						Config:      string(blob),
-					})
-				}
 			}
+			blob, _ := json.Marshal(item)
+
+			u, _ := item["uuid"].(string)
+			if u == "" {
+				u, _ = item["username"].(string)
+			}
+			if u == "" {
+				u, _ = item["private_key"].(string)
+			}
+			pwd, _ := item["password"].(string)
+			country, countryCode := inferCountryFromRemark(tag)
+			nodeID := makeCustomNodeID(pTypeLower, srv, port, u, tag)
+			jsonNodes = append(jsonNodes, CustomNode{
+				ID:          nodeID,
+				HostName:    nodeID,
+				Host:        srv,
+				Port:        port,
+				User:        u,
+				Pass:        pwd,
+				Protocol:    pTypeLower,
+				Country:     country,
+				CountryCode: countryCode,
+				Remark:      tag,
+				IPType:      "datacenter",
+				Config:      string(blob),
+			})
 		}
 		if len(jsonNodes) > 0 {
 			return jsonNodes, nil
 		}
 	}
 
-	// 3. 按行解析多行链接 (包含 wireguard:// 以及 SOCKS/HTTP)
+	// 3. 按行解析多行链接 (统一使用 ParseAnyNode 支持 tuic, vless, vmess, hysteria2, trojan, ss, wireguard, socks5 等)
 	var nodes []CustomNode
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
@@ -1317,41 +2191,17 @@ func ParseSubscriptionContent(content string) ([]CustomNode, error) {
 			continue
 		}
 
-		// 单独支持 wireguard:// 链接
-		if strings.HasPrefix(line, "wireguard://") {
-			wgNode, err := parseWireGuardURL(line)
-			if err == nil && wgNode != nil {
-				nodes = append(nodes, *wgNode)
-				continue
+		node, err := ParseAnyNode(line)
+		if err == nil && node != nil && node.Host != "" && node.Port > 0 {
+			if node.Remark == "" || node.Remark == node.Host {
+				node.Remark = fmt.Sprintf("节点-%d", i+1)
 			}
+			nodes = append(nodes, *node)
 		}
-
-		proto, h, p, u, pwd, remark, err := ParseProxyURL(line)
-		if err != nil || h == "" || p <= 0 {
-			continue
-		}
-		if remark == "" {
-			remark = fmt.Sprintf("节点-%d", i+1)
-		}
-		country, countryCode := inferCountryFromRemark(remark)
-		nodeID := makeCustomNodeID(proto, h, p, u, remark)
-		nodes = append(nodes, CustomNode{
-			ID:          nodeID,
-			HostName:    nodeID,
-			Host:        h,
-			Port:        p,
-			User:        u,
-			Pass:        pwd,
-			Protocol:    proto,
-			Country:     country,
-			CountryCode: countryCode,
-			Remark:      remark,
-			IPType:      "datacenter",
-		})
 	}
 
 	if len(nodes) == 0 {
-		return nil, fmt.Errorf("未能从内容中解析出有效代理节点 (支持 WireGuard / SOCKS5 / HTTP / HTTPS 链接及 Clash YAML / sing-box JSON)")
+		return nil, fmt.Errorf("未能从内容中解析出有效代理节点 (支持各类 sing-box 协议链接及 Clash YAML / sing-box JSON)")
 	}
 
 	ptrs := make([]*CustomNode, len(nodes))
