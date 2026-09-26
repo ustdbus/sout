@@ -51,6 +51,7 @@ jobs:
           if [ -z "$TAG" ] || [ "$TAG" = "main" ]; then
             TAG="v1.0.0"
           fi
+          go mod tidy
           mkdir -p dist/${{ matrix.pkg_name }}
           go build -trimpath -tags "with_gvisor with_quic netgo osusergo" -ldflags "-s -w -X main.version=${TAG}" -o dist/${{ matrix.pkg_name }}/sout-server .
           cp dist/${{ matrix.pkg_name }}/sout-server dist/${{ matrix.pkg_name }}/fanout
