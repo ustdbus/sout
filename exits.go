@@ -89,23 +89,30 @@ var ibCache inboundCache
 
 func cachedInbounds(live map[string]bool) ([]Inbound, error) {
 	ibCache.mu.Lock()
-	defer ibCache.mu.Unlock()
-	if time.Since(ibCache.at) < inboundCacheTTL {
-		return ibCache.list, ibCache.err
+	if time.Since(ibCache.at) < inboundCacheTTL && ibCache.list != nil {
+		list, err := ibCache.list, ibCache.err
+		ibCache.mu.Unlock()
+		return list, err
 	}
+	ibCache.mu.Unlock()
 
 	var list []Inbound
 	x, err := openPanel()
 	if err == nil {
 		list, err = x.Inbounds(live)
 	}
+
+	ibCache.mu.Lock()
 	ibCache.at, ibCache.list, ibCache.err = time.Now(), list, err
+	ibCache.mu.Unlock()
+
 	return list, err
 }
 
 func invalidateInbounds() {
 	ibCache.mu.Lock()
 	ibCache.at = time.Time{}
+	ibCache.list = nil
 	ibCache.mu.Unlock()
 }
 
