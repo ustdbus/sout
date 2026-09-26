@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"time"
 )
@@ -73,7 +72,7 @@ func (m *Manager) tunnelHealthy(t *Tunnel) bool {
 		return false
 	}
 	// 出口 IP 退回母机原生 IP，说明隧道已穿透失败
-	if m.publicIP != "" && got == m.publicIP {
+	if hostIP := hostPublicIP(); hostIP != "" && got == hostIP {
 		return false
 	}
 	if t.ExitIP != "" && got != t.ExitIP {
