@@ -217,7 +217,7 @@ func (t *Tunnel) probeExitIP(timeout time.Duration) (string, error) {
 		Timeout:   timeout,
 	}
 
-	for _, u := range []string{"http://api.ipify.org", "http://ifconfig.me/ip", "http://icanhazip.com"} {
+	for _, u := range []string{"http://checkip.amazonaws.com", "http://ifconfig.me/ip", "http://icanhazip.com", "http://api.ipify.org"} {
 		resp, err := client.Get(u)
 		if err != nil {
 			continue
@@ -279,7 +279,7 @@ func (t *Tunnel) probeCustomExitIP() (string, error) {
 		Timeout:   10 * time.Second,
 	}
 
-	for _, u := range []string{"https://api.ipify.org", "http://api.ipify.org", "http://ifconfig.me", "http://icanhazip.com"} {
+	for _, u := range []string{"http://checkip.amazonaws.com", "https://checkip.amazonaws.com", "http://ifconfig.me", "http://icanhazip.com", "http://api.ipify.org"} {
 		resp, err := client.Get(u)
 		if err != nil {
 			continue

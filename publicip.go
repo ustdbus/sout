@@ -10,9 +10,11 @@ import (
 
 // publicIPSources 是几个只回一行纯 IPv4 的接口，任意一个先返回就用它。
 var publicIPSources = []string{
-	"https://api.ipify.org",
+	"https://checkip.amazonaws.com",
+	"http://checkip.amazonaws.com",
 	"https://ipv4.icanhazip.com",
 	"https://ifconfig.me/ip",
+	"https://api.ipify.org",
 }
 
 var (

@@ -472,7 +472,7 @@ web_basepath() {
 
 public_ip() {
   local ip
-  ip=$(curl -s4m 3 https://api.ipify.org || curl -s4m 3 https://ifconfig.me || echo "127.0.0.1")
+  ip=$(curl -s4m 3 https://checkip.amazonaws.com || curl -s4m 3 https://api.ipify.org || curl -s4m 3 https://ifconfig.me || echo "127.0.0.1")
   echo "$ip"
 }
 
@@ -1067,7 +1067,7 @@ uninstall_sout_only() {
 
   # 3. 恢复 s-ui 监听与配置 (优先从备份还原，若端口被占用则自动随机空闲端口)
   local public_ip
-  public_ip=$(curl -s4m 2 https://api.ipify.org 2>/dev/null || curl -s4m 2 https://icanhazip.com 2>/dev/null || curl -s4m 2 https://ifconfig.me 2>/dev/null || true)
+  public_ip=$(curl -s4m 2 https://checkip.amazonaws.com 2>/dev/null || curl -s4m 2 https://api.ipify.org 2>/dev/null || curl -s4m 2 https://icanhazip.com 2>/dev/null || curl -s4m 2 https://ifconfig.me 2>/dev/null || true)
   public_ip=$(echo "$public_ip" | tr -d ' \r\n')
   [[ -z "$public_ip" ]] && public_ip="服务器公网IP"
 
@@ -1850,7 +1850,7 @@ setup_caddy_proxy() {
   ws_path=$(rand_safe_path "vlws")
 
   local public_ip cur_cc
-  public_ip=$(curl -s4m 5 https://api.ipify.org 2>/dev/null || curl -s4m 5 https://ifconfig.me 2>/dev/null || echo "$domain")
+  public_ip=$(curl -s4m 5 https://checkip.amazonaws.com 2>/dev/null || curl -s4m 5 https://api.ipify.org 2>/dev/null || curl -s4m 5 https://ifconfig.me 2>/dev/null || echo "$domain")
   cur_cc=$(get_tcp_congestion)
 
   echo -e "  [+] 正在启动 Cloudflare 隧道服务..."
@@ -2618,7 +2618,7 @@ with open(path, 'w') as f:
 
   # 恢复 s-ui 监听与配置 (优先从备份还原，若端口被占用则自动随机空闲端口)
   local public_ip
-  public_ip=$(curl -s4m 2 https://api.ipify.org 2>/dev/null || curl -s4m 2 https://icanhazip.com 2>/dev/null || curl -s4m 2 https://ifconfig.me 2>/dev/null || true)
+  public_ip=$(curl -s4m 2 https://checkip.amazonaws.com 2>/dev/null || curl -s4m 2 https://api.ipify.org 2>/dev/null || curl -s4m 2 https://icanhazip.com 2>/dev/null || curl -s4m 2 https://ifconfig.me 2>/dev/null || true)
   public_ip=$(echo "$public_ip" | tr -d ' \r\n')
   [[ -z "$public_ip" ]] && public_ip="服务器公网IP"
 
@@ -4219,7 +4219,7 @@ except Exception:
   local admin_user
   admin_user=$(get_sui_user)
   local public_ip
-  public_ip=$(curl -s4m 5 https://api.ipify.org 2>/dev/null || curl -s4m 5 https://ifconfig.me 2>/dev/null || echo "$cert_domain")
+  public_ip=$(curl -s4m 5 https://checkip.amazonaws.com 2>/dev/null || curl -s4m 5 https://api.ipify.org 2>/dev/null || curl -s4m 5 https://ifconfig.me 2>/dev/null || echo "$cert_domain")
 
   local tuic_p hy2_p
   tuic_p=$(rand_local_port)

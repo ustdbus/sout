@@ -712,10 +712,11 @@ func ProbeCustomProxy(proxyAddr, protocol, user, pass string, timeout time.Durat
 	client := &http.Client{Transport: tr, Timeout: timeout}
 
 	endpoints := []string{
-		"http://api.ipify.org",
+		"http://checkip.amazonaws.com",
+		"https://checkip.amazonaws.com",
 		"http://icanhazip.com",
 		"http://ifconfig.me",
-		"http://checkip.amazonaws.com",
+		"http://api.ipify.org",
 	}
 
 	for _, ep := range endpoints {
@@ -1871,10 +1872,11 @@ func ProbeAnyNode(node *CustomNode, timeout time.Duration) (exitIP string, ping 
 
 	start := time.Now()
 	endpoints := []string{
-		"http://api.ipify.org",
+		"http://checkip.amazonaws.com",
+		"https://checkip.amazonaws.com",
 		"http://icanhazip.com",
 		"http://ifconfig.me/ip",
-		"https://api.ipify.org",
+		"http://api.ipify.org",
 	}
 
 	for _, ep := range endpoints {

@@ -911,7 +911,7 @@ if [[ "$WANT_TUNNEL" == "y" ]]; then
   exit 0
 fi
 
-IP=$(curl -s4m 5 https://api.ipify.org || curl -s4m 5 https://ifconfig.me || echo "127.0.0.1")
+IP=$(curl -s4m 5 https://checkip.amazonaws.com || curl -s4m 5 https://api.ipify.org || curl -s4m 5 https://ifconfig.me || echo "127.0.0.1")
 BP=$(cat "${WORK_DIR}/basepath" 2>/dev/null | tr -d ' \r\n')
 BP="/${BP#/}"
 BP="${BP%/}/"
