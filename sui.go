@@ -681,12 +681,23 @@ func (s *SUI) Inbounds(live map[string]bool) ([]Inbound, error) {
 						}
 					}
 				}
+				baseTag := getBaseTag(item.Tag)
 				if cRem != "" {
-					branchTag = fmt.Sprintf("%s (%s)", item.Tag, cRem)
+					cleanExit := cleanExitName(cRem)
+					if cleanExit != "" {
+						branchTag = fmt.Sprintf("%s (%s)", baseTag, cleanExit)
+					} else {
+						branchTag = baseTag
+					}
 				} else if boundHost != "" {
-					branchTag = fmt.Sprintf("%s (%s)", item.Tag, cleanRemarkTitle(boundHost))
+					cleanExit := cleanExitName(boundHost)
+					if cleanExit != "" {
+						branchTag = fmt.Sprintf("%s (%s)", baseTag, cleanExit)
+					} else {
+						branchTag = baseTag
+					}
 				} else {
-					branchTag = fmt.Sprintf("%s (出口分流)", item.Tag)
+					branchTag = fmt.Sprintf("%s (出口分流)", baseTag)
 				}
 			}
 
@@ -991,12 +1002,39 @@ func cleanSubRegion(raw string) string {
 	return ""
 }
 
-// cleanRemarkTitle 清洗节点名称，剔除类似 (SRC:proton:日本) 等内部变量，规范化括号层级
+// cleanRemarkTitle 清洗节点名称，剔除类似 (SRC:proton:日本) 等内部变量，规范化括号层级与品牌名
 func cleanRemarkTitle(rem string) string {
 	rem = strings.TrimSpace(rem)
 	if rem == "" {
 		return ""
 	}
+
+	// 1. 若已经是形如 "base (exit...)" 的分流节点形态，拆分母节点与出口名称分别清洗
+	if firstParen := strings.Index(rem, " ("); firstParen != -1 && strings.HasSuffix(rem, ")") {
+		basePart := strings.TrimSpace(rem[:firstParen])
+		exitPart := strings.TrimSpace(rem[firstParen+2 : len(rem)-1])
+
+		// 若 basePart 不含左括号，说明是纯净的母节点 tag
+		if !strings.Contains(basePart, "(") {
+			cleanExit := cleanExitName(exitPart)
+			if cleanExit == "" {
+				return basePart
+			}
+			return fmt.Sprintf("%s (%s)", basePart, cleanExit)
+		}
+	}
+
+	return cleanExitName(rem)
+}
+
+// cleanExitName 专门清洗出口名称（如 WARP、Proton 日本、shadowsocks-gcp、日本家宽）
+func cleanExitName(rem string) string {
+	rem = strings.TrimSpace(rem)
+	if rem == "" {
+		return ""
+	}
+
+	// 1. 清洗内部变量 SRC:xxx:yyy
 	for strings.Contains(rem, "SRC:") {
 		idx := strings.Index(rem, "SRC:")
 		endIdx := strings.IndexAny(rem[idx:], ") ]}")
@@ -1014,20 +1052,23 @@ func cleanRemarkTitle(rem string) string {
 		rem = strings.Replace(rem, "("+fullSRC+")", sub, 1)
 		rem = strings.Replace(rem, fullSRC, sub, 1)
 	}
-	for _, brand := range []string{"Proton", "Windscribe", "Opera", "WARP"} {
+
+	// 2. WARP 官方/原生出站统一规范化为简洁的 "WARP"（彻底杜绝多层套娃）
+	lower := strings.ToLower(rem)
+	if strings.Contains(lower, "warp") || strings.Contains(lower, "cloudflareclient") {
+		return "WARP"
+	}
+
+	// 3. 清洗主流品牌的机房与多余括号
+	for _, brand := range []string{"Proton", "Windscribe", "Opera"} {
 		prefix := brand + " ("
-		if strings.Contains(rem, prefix) && strings.Contains(rem, ") 机房") {
+		if strings.Contains(rem, prefix) && strings.Contains(rem, ")") {
 			rem = strings.Replace(rem, prefix, brand+" ", 1)
-			rem = strings.Replace(rem, ") 机房", "", 1)
+			rem = strings.Replace(rem, ")", "", 1)
 		}
 	}
-	// 去除非家宽节点的残留“机房”二字
-	if strings.Contains(rem, "WARP 机房") {
-		rem = strings.ReplaceAll(rem, "WARP 机房", "WARP")
-	}
-	if strings.Contains(rem, "WARP机房") {
-		rem = strings.ReplaceAll(rem, "WARP机房", "WARP")
-	}
+
+	// 4. 去除非家宽节点的残留“机房”二字
 	if strings.Contains(rem, "出口机房") {
 		rem = strings.ReplaceAll(rem, "出口机房", "出口分流")
 	}
@@ -1035,12 +1076,17 @@ func cleanRemarkTitle(rem string) string {
 		rem = strings.TrimSuffix(rem, "机房")
 		rem = strings.TrimSpace(rem)
 	}
+
+	// 5. 清理多余的双重/残留括号与空括号
 	for strings.Contains(rem, "((") && strings.Contains(rem, "))") {
 		rem = strings.ReplaceAll(rem, "((", "(")
 		rem = strings.ReplaceAll(rem, "))", ")")
 	}
 	rem = strings.ReplaceAll(rem, "()", "")
 	rem = strings.ReplaceAll(rem, "( )", "")
+	rem = strings.TrimPrefix(rem, "(")
+	rem = strings.TrimSuffix(rem, ")")
+
 	return strings.TrimSpace(strings.Join(strings.Fields(rem), " "))
 }
 

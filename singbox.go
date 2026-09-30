@@ -459,7 +459,12 @@ func (sb *SingBox) Inbounds(live map[string]bool) ([]Inbound, error) {
 						cRemark = "出口分流"
 					}
 				}
-				branchTag := fmt.Sprintf("%s (%s)", tag, cleanRemarkTitle(cRemark))
+				baseTag := getBaseTag(tag)
+				cleanExit := cleanExitName(cRemark)
+				branchTag := baseTag
+				if cleanExit != "" {
+					branchTag = fmt.Sprintf("%s (%s)", baseTag, cleanExit)
+				}
 
 				result = append(result, Inbound{
 					ID:       baseID,
@@ -725,10 +730,16 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 				matchedRemark = rem
 			}
 		}
+		baseTag := getBaseTag(tag)
 		if matchedRemark != "" {
-			baseRemark = fmt.Sprintf("%s (%s)", tag, cleanRemarkTitle(matchedRemark))
+			cleanExit := cleanExitName(matchedRemark)
+			if cleanExit != "" {
+				baseRemark = fmt.Sprintf("%s (%s)", baseTag, cleanExit)
+			} else {
+				baseRemark = baseTag
+			}
 		} else {
-			baseRemark = fmt.Sprintf("%s (出口分流)", tag)
+			baseRemark = fmt.Sprintf("%s (出口分流)", baseTag)
 		}
 	}
 

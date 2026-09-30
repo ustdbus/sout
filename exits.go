@@ -121,11 +121,9 @@ func isResidentialBranch(tag string) bool {
 }
 
 func getBaseTag(tag string) string {
-	if isResidentialBranch(tag) {
-		idx := strings.LastIndex(tag, " (")
-		if idx != -1 {
-			return tag[:idx]
-		}
+	tag = strings.TrimSpace(tag)
+	if idx := strings.Index(tag, " ("); idx != -1 {
+		return strings.TrimSpace(tag[:idx])
 	}
 	return tag
 }
@@ -322,7 +320,10 @@ func (m *Manager) ExitsOf() ExitsView {
 				}
 				if !ib.IsBase && exitName != "" {
 					baseTag := getBaseTag(ib.Tag)
-					ib.Tag = fmt.Sprintf("%s (%s)", baseTag, exitName)
+					cleanExit := cleanExitName(exitName)
+					if cleanExit != "" {
+						ib.Tag = fmt.Sprintf("%s (%s)", baseTag, cleanExit)
+					}
 				}
 			}
 		}

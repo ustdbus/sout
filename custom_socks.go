@@ -2385,7 +2385,7 @@ func RegisterWARPAccount() (*CustomNode, error) {
 
 	server := "engage.cloudflareclient.com"
 	port := 2408
-	tag := "Cloudflare WARP (官方原生)"
+	tag := "WARP"
 
 	cfgMap := map[string]any{
 		"type":            "wireguard",
