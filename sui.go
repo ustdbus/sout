@@ -1059,12 +1059,49 @@ func cleanExitName(rem string) string {
 		return "WARP"
 	}
 
-	// 3. 清洗主流品牌的机房与多余括号
-	for _, brand := range []string{"Proton", "Windscribe", "Opera"} {
-		prefix := brand + " ("
-		if strings.Contains(rem, prefix) && strings.Contains(rem, ")") {
-			rem = strings.Replace(rem, prefix, brand+" ", 1)
-			rem = strings.Replace(rem, ")", "", 1)
+	// 3. 清洗主流品牌（Proton, Windscribe, Opera 等）的连字符、括号与冗余后缀/编号
+	if strings.Contains(rem, "Proton") {
+		region := ""
+		for _, c := range []string{"日本", "新加坡", "美国", "香港", "英国", "德国", "荷兰", "加拿大", "澳大利亚"} {
+			if strings.Contains(rem, c) {
+				region = c
+				break
+			}
+		}
+		if region != "" {
+			return "Proton " + region
+		}
+		pClean := strings.ReplaceAll(rem, "Proton-", "Proton ")
+		pClean = strings.ReplaceAll(pClean, "Proton (", "Proton ")
+		pClean = strings.ReplaceAll(pClean, ")", "")
+		pClean = strings.ReplaceAll(pClean, "(", "")
+		pClean = strings.TrimRight(pClean, "0123456789# ")
+		return strings.TrimSpace(pClean)
+	}
+
+	if strings.Contains(rem, "Windscribe") {
+		city := ""
+		for _, c := range []string{"洛杉矶", "西雅图", "纽约", "芝加哥", "温哥华", "多伦多", "蒙特利尔", "伦敦", "法兰克福", "巴黎", "阿姆斯特丹", "苏黎世", "香港", "日本"} {
+			if strings.Contains(rem, c) {
+				city = c
+				break
+			}
+		}
+		if city != "" {
+			return "Windscribe " + city
+		}
+		wClean := strings.ReplaceAll(rem, "Windscribe-", "Windscribe ")
+		wClean = strings.ReplaceAll(wClean, "Windscribe (", "Windscribe ")
+		wClean = strings.ReplaceAll(wClean, ")", "")
+		wClean = strings.ReplaceAll(wClean, "(", "")
+		wClean = strings.TrimRight(wClean, "0123456789# ")
+		return strings.TrimSpace(wClean)
+	}
+
+	if strings.Contains(rem, "Opera") {
+		sub := cleanSubRegion(rem)
+		if sub != "" {
+			return "Opera " + sub
 		}
 	}
 
