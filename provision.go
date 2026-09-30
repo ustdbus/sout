@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -337,6 +339,78 @@ func matchNodeSubRegion(n Node, sub string) bool {
 	return strings.Contains(remLower, subLower) || strings.Contains(cLower, subLower) || strings.EqualFold(ccLower, subLower) || strings.Contains(hostLower, subLower)
 }
 
+func probeNodeLatency(n Node, timeout time.Duration) (int, error) {
+	if n.Port > 0 && n.IP != "" && !strings.EqualFold(n.Protocol, "wireguard") {
+		start := time.Now()
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(n.IP, strconv.Itoa(n.Port)), timeout)
+		if err == nil {
+			_ = conn.Close()
+			cost := int(time.Since(start).Milliseconds())
+			if cost <= 0 {
+				cost = 1
+			}
+			return cost, nil
+		}
+	}
+	if n.Ping > 0 {
+		return n.Ping, nil
+	}
+	return 0, fmt.Errorf("probe failed: %s unreachable", n.HostName)
+}
+
+func rankNodesByLatency(nodes []Node, timeout time.Duration) []Node {
+	if len(nodes) <= 1 {
+		return nodes
+	}
+	if timeout <= 0 {
+		timeout = 1500 * time.Millisecond
+	}
+
+	type probeResult struct {
+		node    Node
+		latency int
+		err     error
+	}
+
+	results := make([]probeResult, len(nodes))
+	var wg sync.WaitGroup
+	for i, n := range nodes {
+		wg.Add(1)
+		go func(idx int, target Node) {
+			defer wg.Done()
+			lat, err := probeNodeLatency(target, timeout)
+			results[idx] = probeResult{
+				node:    target,
+				latency: lat,
+				err:     err,
+			}
+		}(i, n)
+	}
+	wg.Wait()
+
+	var reachable []Node
+	var unreachable []Node
+	for _, r := range results {
+		if r.err == nil {
+			node := r.node
+			node.Ping = r.latency
+			reachable = append(reachable, node)
+		} else {
+			unreachable = append(unreachable, r.node)
+		}
+	}
+
+	if len(reachable) == 0 {
+		return nodes
+	}
+
+	sort.SliceStable(reachable, func(i, j int) bool {
+		return reachable[i].Ping < reachable[j].Ping
+	})
+
+	return append(reachable, unreachable...)
+}
+
 // pickNodes 挑选 count 个未被占用的节点，按速度与质量降序选取
 func (m *Manager) pickNodes(region, poolType string, count int) ([]Node, error) {
 	candidateNodes := m.GetAllCandidateNodes(poolType)
@@ -348,11 +422,8 @@ func (m *Manager) pickNodes(region, poolType string, count int) ([]Node, error) 
 	}
 	m.mu.RUnlock()
 
-	var out []Node
+	var matched []Node
 	for _, n := range candidateNodes {
-		if len(out) >= count {
-			break
-		}
 		if used[n.HostName] {
 			continue
 		}
@@ -373,15 +444,19 @@ func (m *Manager) pickNodes(region, poolType string, count int) ([]Node, error) 
 		} else if region != "" && !strings.EqualFold(region, "ALL") && !strings.EqualFold(n.CountryCode, region) {
 			continue
 		}
-		out = append(out, n)
+		matched = append(matched, n)
 	}
-	if len(out) == 0 {
+	if len(matched) == 0 {
 		if region != "" && !strings.EqualFold(region, "ALL") {
 			return nil, fmt.Errorf("%s 没有可用的空闲节点", region)
 		}
 		return nil, fmt.Errorf("没有可用的空闲节点，请稍后刷新列表")
 	}
-	return out, nil
+	if len(matched) <= count {
+		return matched, nil
+	}
+	ranked := rankNodesByLatency(matched, 1500*time.Millisecond)
+	return ranked[:count], nil
 }
 
 // RegionStat 每个目标地区的可用节点概况
