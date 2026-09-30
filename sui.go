@@ -2036,16 +2036,26 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 			uuidStr, _ := clientCfg["tuic"]["uuid"].(string)
 			passStr, _ := clientCfg["tuic"]["password"].(string)
 			v := url.Values{}
-			if out.TLS.Enabled {
+			targetHost := host
+			targetSNI := out.TLS.ServerName
+			if net.ParseIP(targetHost) == nil {
+				if pubIP := hostPublicIP(); pubIP != "" {
+					if targetSNI == "" || targetSNI == "127.0.0.1" || targetSNI == "0.0.0.0" {
+						targetSNI = targetHost
+					}
+					targetHost = pubIP
+				}
+			}
+			if out.TLS.Enabled || targetSNI != "" {
 				v.Set("security", "tls")
-				if out.TLS.ServerName != "" {
-					v.Set("sni", out.TLS.ServerName)
+				if targetSNI != "" {
+					v.Set("sni", targetSNI)
 				}
 			}
 			if out.CongestionControl != "" {
 				v.Set("congestion_control", out.CongestionControl)
 			}
-			links = append(links, fmt.Sprintf("tuic://%s:%s@%s:%d?%s#%s", uuidStr, passStr, host, port, v.Encode(), url.PathEscape(remark)))
+			links = append(links, fmt.Sprintf("tuic://%s:%s@%s:%d?%s#%s", uuidStr, passStr, targetHost, port, v.Encode(), url.PathEscape(remark)))
 
 		case "trojan":
 			passStr, _ := clientCfg["trojan"]["password"].(string)
@@ -2092,13 +2102,23 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 		case "hysteria2", "hy2":
 			passStr, _ := clientCfg["hysteria2"]["password"].(string)
 			v := url.Values{}
-			if out.TLS.ServerName != "" {
-				v.Set("sni", out.TLS.ServerName)
+			targetHost := host
+			targetSNI := out.TLS.ServerName
+			if net.ParseIP(targetHost) == nil {
+				if pubIP := hostPublicIP(); pubIP != "" {
+					if targetSNI == "" || targetSNI == "127.0.0.1" || targetSNI == "0.0.0.0" {
+						targetSNI = targetHost
+					}
+					targetHost = pubIP
+				}
+			}
+			if targetSNI != "" {
+				v.Set("sni", targetSNI)
 			}
 			if out.TLS.Insecure {
 				v.Set("insecure", "1")
 			}
-			links = append(links, fmt.Sprintf("hysteria2://%s@%s:%d?%s#%s", passStr, host, port, v.Encode(), url.PathEscape(remark)))
+			links = append(links, fmt.Sprintf("hysteria2://%s@%s:%d?%s#%s", passStr, targetHost, port, v.Encode(), url.PathEscape(remark)))
 
 		case "vmess":
 			uuidStr, _ := clientCfg["vmess"]["uuid"].(string)
@@ -2296,6 +2316,28 @@ func cleanDefaultUserPrefix(uri string) string {
 
 func formatNodeURI(uri string, tagToUse string) string {
 	uri = cleanDefaultUserPrefix(uri)
+	if strings.HasPrefix(uri, "tuic://") || strings.HasPrefix(uri, "hysteria2://") || strings.HasPrefix(uri, "hy2://") {
+		if u, err := url.Parse(uri); err == nil && u.Host != "" {
+			hostOnly := u.Hostname()
+			portStr := u.Port()
+			if net.ParseIP(hostOnly) == nil {
+				if pubIP := hostPublicIP(); pubIP != "" {
+					q := u.Query()
+					if q.Get("sni") == "" {
+						q.Set("sni", hostOnly)
+					}
+					if portStr != "" {
+						u.Host = net.JoinHostPort(pubIP, portStr)
+					} else {
+						u.Host = pubIP
+					}
+					u.RawQuery = q.Encode()
+					uri = u.String()
+				}
+			}
+		}
+	}
+
 	if strings.HasPrefix(uri, "vmess://") {
 		b64Part := strings.TrimPrefix(uri, "vmess://")
 		if idx := strings.Index(b64Part, "#"); idx != -1 {

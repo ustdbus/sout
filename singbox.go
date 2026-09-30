@@ -1049,8 +1049,18 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 			if itemALPN != "" {
 				tuicALPN = itemALPN
 			}
+			targetHost := connectHost
+			targetSNI := itemSNI
+			if net.ParseIP(targetHost) == nil {
+				if pubIP := hostPublicIP(); pubIP != "" {
+					if targetSNI == "" || targetSNI == "127.0.0.1" || targetSNI == "0.0.0.0" {
+						targetSNI = targetHost
+					}
+					targetHost = pubIP
+				}
+			}
 			link := fmt.Sprintf("tuic://%s@%s:%d?congestion_control=bbr&alpn=%s&sni=%s&allow_insecure=%s#%s",
-				authPart, connectHost, connectPort, tuicALPN, url.PathEscape(itemSNI), itemInsecure, url.PathEscape(remark))
+				authPart, targetHost, connectPort, tuicALPN, url.PathEscape(targetSNI), itemInsecure, url.PathEscape(remark))
 			links = append(links, link)
 
 		case "hysteria2", "hy2":
@@ -1058,8 +1068,18 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 			if authPart == "" {
 				authPart = uuidStr
 			}
+			targetHost := connectHost
+			targetSNI := itemSNI
+			if net.ParseIP(targetHost) == nil {
+				if pubIP := hostPublicIP(); pubIP != "" {
+					if targetSNI == "" || targetSNI == "127.0.0.1" || targetSNI == "0.0.0.0" {
+						targetSNI = targetHost
+					}
+					targetHost = pubIP
+				}
+			}
 			link := fmt.Sprintf("hysteria2://%s@%s:%d?sni=%s&insecure=%s#%s",
-				authPart, connectHost, connectPort, url.PathEscape(itemSNI), itemInsecure, url.PathEscape(remark))
+				authPart, targetHost, connectPort, url.PathEscape(targetSNI), itemInsecure, url.PathEscape(remark))
 			links = append(links, link)
 
 		case "shadowsocks", "ss":

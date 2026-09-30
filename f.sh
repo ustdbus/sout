@@ -3686,14 +3686,10 @@ apply_tuic_hy2_to_singbox() {
     return 1
   fi
 
-  local default_server="$cert_domain"
   local pip
   pip=$(public_ip || true)
-  if [[ "$is_insecure" == "true" && -n "$pip" ]]; then
-    default_server="$pip"
-  fi
-  local node_server="$default_server"
-  [[ -z "$node_server" ]] && node_server="$pip"
+  local node_server="$pip"
+  [[ -z "$node_server" ]] && node_server="$cert_domain"
 
   # 自动探测已有的 TUIC 与 Hysteria2 端口与凭据（若已存在则严格继承；不存在则自动分配随机高位端口，免除询问）
   local exist_tuic_p exist_hy2_p exist_tuic_uuid exist_tuic_pwd exist_hy2_pwd
@@ -4219,7 +4215,8 @@ except Exception:
   local admin_user
   admin_user=$(get_sui_user)
   local public_ip
-  public_ip=$(curl -s4m 5 https://checkip.amazonaws.com 2>/dev/null || curl -s4m 5 https://api.ipify.org 2>/dev/null || curl -s4m 5 https://ifconfig.me 2>/dev/null || echo "$cert_domain")
+  public_ip=$(public_ip || true)
+  [[ -z "$public_ip" ]] && public_ip="$cert_domain"
 
   local tuic_p hy2_p
   tuic_p=$(rand_local_port)
