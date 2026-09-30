@@ -1481,23 +1481,35 @@ sys.exit(0 if latest > cur else 1)
   tmp_dir=$(mktemp -d)
   trap 'rm -rf "$tmp_dir"' RETURN
 
-  echo -e "  正在下载: ${tar_url} ..."
-  if ! curl -fsSL "$tar_url" -o "$tmp_dir/sout.tar.gz"; then
-    echo -e "  ${R}下载发布包失败！${N}"
-    return
+  # 1. 下载前执行页缓存回收，降低内存碎片和缓存占用
+  sync && echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+
+  # 2. 解包覆盖前停止 sout 释放其占用的常驻内存
+  svc_stop
+
+  echo -e "  正在下载并解压: ${tar_url} ..."
+  # 3. 采用管道流式下载解压；若管道解包失败则平滑降级到带重试的文件下载解压
+  if ! (curl -fsSL "$tar_url" | tar -zxf - -C "$tmp_dir"); then
+    echo -e "  ${Y}[!] 管道流式解压失败，尝试回退到带重试的文件下载...${N}"
+    if ! curl -fsSL --retry 3 --connect-timeout 15 "$tar_url" -o "$tmp_dir/sout.tar.gz" || ! tar -zxf "$tmp_dir/sout.tar.gz" -C "$tmp_dir"; then
+      echo -e "  ${R}下载或解压发布包失败！正在恢复服务...${N}"
+      svc_start
+      return 1
+    fi
+    rm -f "$tmp_dir/sout.tar.gz" 2>/dev/null || true
   fi
 
-  tar -zxf "$tmp_dir/sout.tar.gz" -C "$tmp_dir"
+  # 4. 将解包出的二进制用 mv -f 覆盖至 $BIN 并赋予可执行权限
   if [[ -f "$tmp_dir/sout-server" ]]; then
-    cp -f "$tmp_dir/sout-server" "$BIN"
+    mv -f "$tmp_dir/sout-server" "$BIN"
     chmod +x "$BIN"
     ln -sf "$BIN" /usr/local/bin/fanout 2>/dev/null || true
   elif [[ -f "$tmp_dir/sout" ]]; then
-    cp -f "$tmp_dir/sout" "$BIN"
+    mv -f "$tmp_dir/sout" "$BIN"
     chmod +x "$BIN"
     ln -sf "$BIN" /usr/local/bin/fanout 2>/dev/null || true
   elif [[ -f "$tmp_dir/fanout" ]]; then
-    cp -f "$tmp_dir/fanout" "$BIN"
+    mv -f "$tmp_dir/fanout" "$BIN"
     chmod +x "$BIN"
     ln -sf "$BIN" /usr/local/bin/fanout 2>/dev/null || true
   fi
@@ -1512,19 +1524,27 @@ sys.exit(0 if latest > cur else 1)
   rm -rf "$tmp_dir" /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/fanout /tmp/f.sh 2>/dev/null || true
 
   echo
-  echo -e "  ${B}[+] 正在重启服务并加载最新版本配置...${N}"
-  # 1. 重启 sout 服务
-  svc_restart
+  echo -e "  ${B}[+] 正在启动服务并加载最新版本配置...${N}"
+  # 5. 升级完成后调用 svc_start 拉起 sout
+  svc_start
 
-  # 2. 重启 s-ui 面板服务
+  # 6. 重启 s-ui 面板服务
   systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || service s-ui restart 2>/dev/null || true
 
-  # 3. 若开启了 Cloudflare 隧道和 Caddy 代理，联动重启隧道并执行 Caddy 重新探测分流
+  # 7. 若开启了 Cloudflare 隧道和 Caddy 代理，联动重启隧道并执行 Caddy 重新探测分流
   if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$CADDY_META" 2>/dev/null; then
     echo -e "  ${B}[+] 检测到已开启 Cloudflare 隧道反代，正在自动重启隧道服务...${N}"
     systemctl restart cloudflared 2>/dev/null || rc-service cloudflared restart 2>/dev/null || service cloudflared restart 2>/dev/null || true
     echo -e "  ${B}[+] 正在自动执行 Caddy 重新探测并分流...${N}"
     reload_caddy_proxy
+  fi
+
+  # 8. 检查 Caddy 运行状态（若未运行则自动拉起）
+  if command -v caddy >/dev/null 2>&1; then
+    if ! systemctl is-active --quiet caddy 2>/dev/null; then
+      echo -e "  ${B}[+] 检测到 Caddy 未运行，正在自动拉起 Caddy 服务...${N}"
+      systemctl restart caddy 2>/dev/null || systemctl start caddy 2>/dev/null || rc-service caddy restart 2>/dev/null || rc-service caddy start 2>/dev/null || true
+    fi
   fi
 
   echo
@@ -1585,6 +1605,9 @@ User=root
 Group=root
 ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
 ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force
+Restart=always
+RestartSec=2s
+StartLimitIntervalSec=0
 TimeoutStopSec=5s
 LimitNOFILE=1048576
 PrivateTmp=true

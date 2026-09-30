@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -144,6 +145,9 @@ func parseSemver(v string) ([3]int, bool) {
 // applyUpdate 下载最新版对应架构的包、校验、替换当前二进制，然后重启服务。
 // 成功后本进程会被 init 系统拉起成新版本，所以正常情况下这里返回后进程即被替换。
 func applyUpdate() error {
+	runtime.GC()
+	debug.FreeOSMemory()
+
 	rel, err := fetchLatestRelease()
 	if err != nil {
 		return err
@@ -190,6 +194,7 @@ func applyUpdate() error {
 			}
 		}
 	}
+	_ = os.Remove(tarPath)
 
 	self, err := os.Executable()
 	if err != nil {
