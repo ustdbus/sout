@@ -15,6 +15,26 @@ bash <(curl -fsSL https://raw.githubusercontent.com/ustdbus/sout/main/install.sh
 
 ---
 
+## 系统配置要求与超低内存调优
+
+sout 针对超小内存 VPS 与轻量容器（如 Alpine、Debian 极限环境）进行了深度工程自适应优化：
+
+| 资源项 | 最低要求 | 推荐配置 | 实测说明 |
+| :--- | :--- | :--- | :--- |
+| **物理内存** | **125 MB** | 256 MB+ | 实测在 125MB/128MB Alpine (无 Swap) 及 Debian 下稳定运行，不触发 OOM |
+| **磁盘空间** | **512 MB** | 1 GB+ | 包含基础运行时、sing-box 内核、Caddy、Cloudflare 隧道代理与证书缓存，实机系统总占用仅约 266MB (占 512MB 磁盘的 49%) |
+| **系统架构** | amd64 / arm64 | amd64 / arm64 | 支持主流 Linux 发行版（Alpine、Debian、Ubuntu、CentOS 等） |
+| **初始化系统** | OpenRC / systemd | OpenRC / systemd | 自动识别服务管理与守护进程规范 |
+
+### 🚀「CPU + 内存」自适应调优机制
+- **动态探测与平滑限额**：启动时自动读取 `/proc/meminfo` 与 cgroup v1/v2 物理限额，取两者真实有效最小值。
+- **超低内存实例 (<= 128MB / 125MB)**：
+  - 自动设定 Go 堆硬限制（`sout-server` 为 `18MB`、关联后台服务为 `22MB`~`25MB`）；
+  - 自动启用激进垃圾回收 `GOGC=25`，通过提高 GC 频次极速回收无效内存，彻底杜绝无 Swap 容器因内存抖动被 cgroup OOM Kill 导致的 1033 隧道中断。
+- **低内存实例 (<= 256MB)**：
+  - 自动设定 Go 堆限制为 `30MB`~`35MB`，并配置 `GOGC=50`，平衡 CPU 消耗与内存安全。
+
+
 ## 核心特性
 
 - 🎯 **s-ui 原生深度适配**：专为 `s-ui` 面板（sing-box 内核）打造，直接对接 SQLite 数据库与路由引擎，配置秒级热重载。

@@ -22,31 +22,102 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v3.6.7"
+var version = "v3.6.8"
 
 func initLowMemoryProtection() {
-	if os.Getenv("GOMEMLIMIT") == "" {
-		data, err := os.ReadFile("/proc/meminfo")
-		if err == nil {
-			for _, line := range strings.Split(string(data), "\n") {
-				if strings.HasPrefix(line, "MemTotal:") {
-					fields := strings.Fields(line)
-					if len(fields) >= 2 {
-						if kb, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
-							// 内存 <= 384MB 的超轻量/小内存实例 (例如 128MB/256MB VPS/容器)
-							if kb <= 384*1024 {
-								debug.SetMemoryLimit(30 * 1024 * 1024)
-								if os.Getenv("GOGC") == "" {
-									debug.SetGCPercent(100)
-								}
-								log.Printf("检测到低内存环境 (总物理内存 %d MB)，已自动启用 30MB 内存保护限制", kb/1024)
-							}
-						}
+	var memTotalKB int64
+	// 1. 读取 /proc/meminfo
+	if data, err := os.ReadFile("/proc/meminfo"); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(line, "MemTotal:") {
+				fields := strings.Fields(line)
+				if len(fields) >= 2 {
+					if kb, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
+						memTotalKB = kb
 					}
-					break
+				}
+				break
+			}
+		}
+	}
+
+	// 2. 读取 cgroup v1 / v2 物理限额
+	var cgroupLimitBytes int64
+	cgroupPaths := []string{
+		"/sys/fs/cgroup/memory.max",                   // cgroup v2
+		"/sys/fs/cgroup/memory/memory.limit_in_bytes", // cgroup v1
+		"/sys/fs/cgroup/memory.limit_in_bytes",        // cgroup v1 alternate
+	}
+	for _, p := range cgroupPaths {
+		if data, err := os.ReadFile(p); err == nil {
+			valStr := strings.TrimSpace(string(data))
+			if valStr != "" && valStr != "max" {
+				if val, err := strconv.ParseInt(valStr, 10, 64); err == nil {
+					// 过滤未限制时的极大值 (例如 0x7FFFFFFFFFFFF000 / > 1TB)
+					if val > 0 && val < (1<<40) {
+						cgroupLimitBytes = val
+						break
+					}
 				}
 			}
 		}
+	}
+
+	// 3. 计算有效真实可用物理内存 (MB)
+	var effectiveMB int64
+	var meminfoMB int64
+	if memTotalKB > 0 {
+		meminfoMB = memTotalKB / 1024
+	}
+	var cgroupMB int64
+	if cgroupLimitBytes > 0 {
+		cgroupMB = cgroupLimitBytes / (1024 * 1024)
+	}
+
+	if meminfoMB > 0 && cgroupMB > 0 {
+		if meminfoMB < cgroupMB {
+			effectiveMB = meminfoMB
+		} else {
+			effectiveMB = cgroupMB
+		}
+	} else if meminfoMB > 0 {
+		effectiveMB = meminfoMB
+	} else if cgroupMB > 0 {
+		effectiveMB = cgroupMB
+	}
+
+	if effectiveMB <= 0 {
+		return
+	}
+
+	// 4. 自适应 CPU + 内存调优 (根据物理/cgroup 真实边界分级)
+	if effectiveMB <= 135 {
+		// <= 128MB (如 125MB/128MB Alpine/Debian 极限环境)
+		if os.Getenv("GOMEMLIMIT") == "" {
+			debug.SetMemoryLimit(18 * 1024 * 1024)
+		}
+		if os.Getenv("GOGC") == "" {
+			debug.SetGCPercent(25)
+		}
+		log.Printf("检测到超低内存环境 (有效内存限额 %d MB)，已自动启用 18MB 堆限制与 GOGC=25 激进GC防护", effectiveMB)
+	} else if effectiveMB <= 270 {
+		// <= 256MB
+		if os.Getenv("GOMEMLIMIT") == "" {
+			debug.SetMemoryLimit(30 * 1024 * 1024)
+		}
+		if os.Getenv("GOGC") == "" {
+			debug.SetGCPercent(50)
+		}
+		log.Printf("检测到低内存环境 (有效内存限额 %d MB)，已自动启用 30MB 堆限制与 GOGC=50 保护", effectiveMB)
+	} else if effectiveMB <= 400 {
+		// <= 384MB
+		if os.Getenv("GOMEMLIMIT") == "" {
+			debug.SetMemoryLimit(40 * 1024 * 1024)
+		}
+		if os.Getenv("GOGC") == "" {
+			debug.SetGCPercent(100)
+		}
+		log.Printf("检测到轻量低内存环境 (有效内存限额 %d MB)，已自动启用 40MB 堆限制与 GOGC=100 保护", effectiveMB)
 	}
 }
 

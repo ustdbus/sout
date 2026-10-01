@@ -29,6 +29,62 @@ detect_init() {
 }
 INIT_SYS=$(detect_init)
 
+detect_adaptive_mem_tuning() {
+  local mem_kb=0
+  if [[ -f /proc/meminfo ]]; then
+    mem_kb=$(grep -i 'MemTotal' /proc/meminfo 2>/dev/null | awk '{print $2}')
+  fi
+
+  local cg_bytes=0
+  for cg_path in /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.limit_in_bytes /sys/fs/cgroup/memory.limit_in_bytes; do
+    if [[ -f "$cg_path" ]]; then
+      local val
+      val=$(cat "$cg_path" 2>/dev/null || true)
+      if [[ "$val" =~ ^[0-9]+$ ]] && [[ "$val" -lt 1099511627776 ]]; then
+        cg_bytes="$val"
+        break
+      fi
+    fi
+  done
+
+  local sys_bytes=0
+  if [[ -n "$mem_kb" && "$mem_kb" -gt 0 ]]; then
+    sys_bytes=$(( mem_kb * 1024 ))
+  fi
+
+  local min_bytes=0
+  if [[ "$sys_bytes" -gt 0 && "$cg_bytes" -gt 0 ]]; then
+    if [[ "$sys_bytes" -lt "$cg_bytes" ]]; then
+      min_bytes="$sys_bytes"
+    else
+      min_bytes="$cg_bytes"
+    fi
+  elif [[ "$sys_bytes" -gt 0 ]]; then
+    min_bytes="$sys_bytes"
+  elif [[ "$cg_bytes" -gt 0 ]]; then
+    min_bytes="$cg_bytes"
+  fi
+
+  local mem_mb=0
+  if [[ "$min_bytes" -gt 0 ]]; then
+    mem_mb=$(( min_bytes / 1024 / 1024 ))
+  fi
+
+  AUTO_MEM_MB="$mem_mb"
+  AUTO_GOMEMLIMIT=""
+  AUTO_GOGC=""
+  if [[ "$mem_mb" -gt 0 && "$mem_mb" -le 135 ]]; then
+    AUTO_GOMEMLIMIT="22MiB"
+    AUTO_GOGC="25"
+  elif [[ "$mem_mb" -gt 0 && "$mem_mb" -le 270 ]]; then
+    AUTO_GOMEMLIMIT="35MiB"
+    AUTO_GOGC="50"
+  elif [[ "$mem_mb" -gt 0 && "$mem_mb" -le 384 ]]; then
+    AUTO_GOMEMLIMIT="45MiB"
+    AUTO_GOGC="100"
+  fi
+}
+
 detect_pkg_mgr() {
   if command -v apt-get >/dev/null 2>&1; then
     echo "apt"
@@ -316,14 +372,33 @@ SBCONF
 
   # 注册并启动系统服务
   echo "      正在注册 sing-box 服务 (${INIT_SYS})..."
+  detect_adaptive_mem_tuning
+  local sb_limit="${AUTO_GOMEMLIMIT:-}"
+  local sb_gc="${AUTO_GOGC:-}"
+  if [[ -n "$AUTO_GOMEMLIMIT" && -n "$AUTO_MEM_MB" ]]; then
+    if [[ "$AUTO_MEM_MB" -le 135 ]]; then
+      sb_limit="25MiB"
+      sb_gc="25"
+    fi
+  fi
+  local sb_env_systemd=""
+  local sb_env_openrc=""
+  if [[ -n "$sb_limit" ]]; then
+    sb_env_systemd="Environment=\"GOMEMLIMIT=${sb_limit}\"
+Environment=\"GOGC=${sb_gc}\""
+    sb_env_openrc="export GOMEMLIMIT=\"${sb_limit}\"
+export GOGC=\"${sb_gc}\""
+  fi
+
   if [[ "$INIT_SYS" == "systemd" ]]; then
-    cat > /etc/systemd/system/sing-box.service <<'SBEU'
+    cat > /etc/systemd/system/sing-box.service <<SBEU
 [Unit]
 Description=sing-box service
 Documentation=https://sing-box.sagernet.org
 After=network.target nss-lookup.target network-online.target
 
 [Service]
+${sb_env_systemd}
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
@@ -338,10 +413,11 @@ SBEU
     systemctl enable sing-box >/dev/null 2>&1 || true
     systemctl restart sing-box >/dev/null 2>&1 || true
   else
-    cat > /etc/init.d/sing-box <<'SBRC'
+    cat > /etc/init.d/sing-box <<SBRC
 #!/sbin/openrc-run
 name="sing-box"
 description="sing-box service"
+${sb_env_openrc}
 command="/usr/local/bin/sing-box"
 command_args="run -c /etc/sing-box/config.json"
 command_background="yes"
@@ -356,17 +432,17 @@ depend() {
 }
 
 start_pre() {
-  if [ -f "$pidfile" ]; then
+  if [ -f "\$pidfile" ]; then
     local p
-    p=$(cat "$pidfile" 2>/dev/null)
-    if [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; then
-      rm -f "$pidfile"
+    p=\$(cat "\$pidfile" 2>/dev/null)
+    if [ -n "\$p" ] && ! kill -0 "\$p" 2>/dev/null; then
+      rm -f "\$pidfile"
     fi
   fi
 }
 
 stop_post() {
-  rm -f "$pidfile"
+  rm -f "\$pidfile"
 }
 SBRC
     chmod +x /etc/init.d/sing-box
@@ -804,8 +880,111 @@ SEEOF
   chmod 600 "$target"
 }
 
+optimize_low_memory() {
+  detect_adaptive_mem_tuning
+  local mem_mb="${AUTO_MEM_MB:-512}"
+  if [[ $mem_mb -le 384 ]]; then
+    echo "      检测到轻量低内存环境 (${mem_mb} MB)，正在配置系统级内存防爆与自适应垃圾回收策略..."
+    # 1. 限制 journald 运行时内存
+    if [[ -d /run/systemd/system ]]; then
+      mkdir -p /etc/systemd/journald.conf.d 2>/dev/null || true
+      cat > /etc/systemd/journald.conf.d/00-mem-limit.conf <<'EOF'
+[Journal]
+RuntimeMaxUse=8M
+SystemMaxUse=8M
+MaxRetentionSec=3day
+EOF
+      systemctl restart systemd-journald >/dev/null 2>&1 || true
+
+      local sb_memlimit="45MiB"
+      local sb_gogc="100"
+      local svc_memlimit="35MiB"
+      local svc_gogc="100"
+
+      if [[ $mem_mb -le 135 ]]; then
+        sb_memlimit="25MiB"
+        sb_gogc="25"
+        svc_memlimit="22MiB"
+        svc_gogc="25"
+      elif [[ $mem_mb -le 270 ]]; then
+        sb_memlimit="35MiB"
+        sb_gogc="50"
+        svc_memlimit="30MiB"
+        svc_gogc="50"
+      fi
+
+      mkdir -p /etc/systemd/system/sing-box.service.d 2>/dev/null || true
+      cat > /etc/systemd/system/sing-box.service.d/override.conf <<EOF
+[Service]
+Environment="GOMEMLIMIT=${sb_memlimit}"
+Environment="GOGC=${sb_gogc}"
+EOF
+
+      for svc in caddy cloudflared sout s-ui; do
+        mkdir -p "/etc/systemd/system/${svc}.service.d" 2>/dev/null || true
+        cat > "/etc/systemd/system/${svc}.service.d/override.conf" <<EOF
+[Service]
+Environment="GOMEMLIMIT=${svc_memlimit}"
+Environment="GOGC=${svc_gogc}"
+EOF
+      done
+      systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+
+    # 2. OpenRC 环境内存自适应保护 (Alpine 等)
+    if [[ -f /etc/alpine-release ]] || command -v rc-service >/dev/null 2>&1; then
+      local sb_memlimit="25MiB"
+      local sb_gogc="25"
+      local svc_memlimit="22MiB"
+      local svc_gogc="25"
+      if [[ $mem_mb -gt 135 && $mem_mb -le 270 ]]; then
+        sb_memlimit="35MiB"
+        sb_gogc="50"
+        svc_memlimit="30MiB"
+        svc_gogc="50"
+      elif [[ $mem_mb -gt 270 ]]; then
+        sb_memlimit="45MiB"
+        sb_gogc="100"
+        svc_memlimit="35MiB"
+        svc_gogc="100"
+      fi
+
+      for svc in sing-box caddy cloudflared sout s-ui; do
+        local mlimit="$svc_memlimit"
+        local ggc="$svc_gogc"
+        [[ "$svc" == "sing-box" ]] && mlimit="$sb_memlimit" && ggc="$sb_gogc"
+
+        mkdir -p /etc/conf.d 2>/dev/null || true
+        cat > "/etc/conf.d/${svc}" <<EOF
+export GOMEMLIMIT="${mlimit}"
+export GOGC="${ggc}"
+EOF
+        if [[ -f "/etc/init.d/${svc}" ]] && ! grep -q "GOMEMLIMIT" "/etc/init.d/${svc}" 2>/dev/null; then
+          sed -i "2i export GOMEMLIMIT=\"${mlimit}\"\nexport GOGC=\"${ggc}\"" "/etc/init.d/${svc}" 2>/dev/null || true
+        fi
+      done
+    fi
+
+    # 3. 调低 swappiness（从默认 100 降为 30），防止过早向虚拟 Swap 剧烈换页
+    sysctl -w vm.swappiness=30 >/dev/null 2>&1 || true
+
+    # 4. 清理 /tmp 内存文件系统历史残留的 tar.gz 与二进制
+    rm -f /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/fanout /tmp/f.sh 2>/dev/null || true
+  fi
+}
+
 svc_install() {
   echo "      正在注册系统服务 (${INIT_SYS})..."
+  detect_adaptive_mem_tuning
+  local sout_env_systemd=""
+  local sout_env_openrc=""
+  if [[ -n "$AUTO_GOMEMLIMIT" ]]; then
+    sout_env_systemd="Environment=\"GOMEMLIMIT=${AUTO_GOMEMLIMIT}\"
+Environment=\"GOGC=${AUTO_GOGC}\""
+    sout_env_openrc="export GOMEMLIMIT=\"${AUTO_GOMEMLIMIT}\"
+export GOGC=\"${AUTO_GOGC}\""
+  fi
+
   if [[ "$INIT_SYS" == systemd ]]; then
     cat > /etc/systemd/system/sout.service <<SVCEOF
 [Unit]
@@ -815,6 +994,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+${sout_env_systemd}
 ExecStart=${BIN} -dir ${WORK_DIR}
 WorkingDirectory=${WORK_DIR}
 Restart=always
@@ -829,10 +1009,11 @@ SVCEOF
     systemctl daemon-reload
     rm -f /etc/systemd/system/fanout.service 2>/dev/null || true
   else
-    cat > /etc/init.d/sout <<'OPENRCEOF'
+    cat > /etc/init.d/sout <<OPENRCEOF
 #!/sbin/openrc-run
 name="sout"
 description="sout - s-ui 动态家宽出口插件"
+${sout_env_openrc}
 command="/usr/local/bin/sout-server"
 command_args="-dir /var/lib/sout"
 command_background="yes"
@@ -847,17 +1028,17 @@ depend() {
 }
 
 start_pre() {
-  if [ -f "$pidfile" ]; then
+  if [ -f "\$pidfile" ]; then
     local p
-    p=$(cat "$pidfile" 2>/dev/null)
-    if [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; then
-      rm -f "$pidfile"
+    p=\$(cat "\$pidfile" 2>/dev/null)
+    if [ -n "\$p" ] && ! kill -0 "\$p" 2>/dev/null; then
+      rm -f "\$pidfile"
     fi
   fi
 }
 
 stop_post() {
-  rm -f "$pidfile"
+  rm -f "\$pidfile"
 }
 OPENRCEOF
     chmod +x /etc/init.d/sout
@@ -978,15 +1159,34 @@ chmod 700 "$WORK_DIR"
 # 若为 sing-box 后端，确保持久化 panel_mode 并确保守护进程服务存在
 if [[ "$backend_kind" == "sing-box" ]] || (! check_sui && check_singbox); then
   echo -n "sing-box" > "${WORK_DIR}/panel_mode"
+  detect_adaptive_mem_tuning
+  local sb_limit="${AUTO_GOMEMLIMIT:-}"
+  local sb_gc="${AUTO_GOGC:-}"
+  if [[ -n "$AUTO_GOMEMLIMIT" && -n "$AUTO_MEM_MB" ]]; then
+    if [[ "$AUTO_MEM_MB" -le 135 ]]; then
+      sb_limit="25MiB"
+      sb_gc="25"
+    fi
+  fi
+  local sb_env_systemd=""
+  local sb_env_openrc=""
+  if [[ -n "$sb_limit" ]]; then
+    sb_env_systemd="Environment=\"GOMEMLIMIT=${sb_limit}\"
+Environment=\"GOGC=${sb_gc}\""
+    sb_env_openrc="export GOMEMLIMIT=\"${sb_limit}\"
+export GOGC=\"${sb_gc}\""
+  fi
+
   if [[ "$INIT_SYS" == "systemd" ]]; then
     if [[ ! -f /etc/systemd/system/sing-box.service ]]; then
-      cat > /etc/systemd/system/sing-box.service <<'SBEU'
+      cat > /etc/systemd/system/sing-box.service <<SBEU
 [Unit]
 Description=sing-box service
 Documentation=https://sing-box.sagernet.org
 After=network.target nss-lookup.target network-online.target
 
 [Service]
+${sb_env_systemd}
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
@@ -1003,10 +1203,11 @@ SBEU
     systemctl restart sing-box >/dev/null 2>&1 || true
   else
     if [[ ! -f /etc/init.d/sing-box ]]; then
-      cat > /etc/init.d/sing-box <<'SBRC'
+      cat > /etc/init.d/sing-box <<SBRC
 #!/sbin/openrc-run
 name="sing-box"
 description="sing-box service"
+${sb_env_openrc}
 command="/usr/local/bin/sing-box"
 command_args="run -c /etc/sing-box/config.json"
 command_background="yes"
@@ -1021,17 +1222,17 @@ depend() {
 }
 
 start_pre() {
-  if [ -f "$pidfile" ]; then
+  if [ -f "\$pidfile" ]; then
     local p
-    p=$(cat "$pidfile" 2>/dev/null)
-    if [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; then
-      rm -f "$pidfile"
+    p=\$(cat "\$pidfile" 2>/dev/null)
+    if [ -n "\$p" ] && ! kill -0 "\$p" 2>/dev/null; then
+      rm -f "\$pidfile"
     fi
   fi
 }
 
 stop_post() {
-  rm -f "$pidfile"
+  rm -f "\$pidfile"
 }
 SBRC
       chmod +x /etc/init.d/sing-box
@@ -1049,6 +1250,7 @@ fi
 seed_settings
 svc_install
 svc_enable_start
+optimize_low_memory
 
 echo "[6/6] 检查运行状态..."
 sleep 3

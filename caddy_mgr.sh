@@ -25,6 +25,61 @@ detect_init() {
 }
 INIT_SYS=$(detect_init)
 
+detect_adaptive_mem_tuning() {
+  local mem_kb=0
+  if [[ -f /proc/meminfo ]]; then
+    mem_kb=$(grep -i 'MemTotal' /proc/meminfo 2>/dev/null | awk '{print $2}')
+  fi
+
+  local cg_bytes=0
+  for cg_path in /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.limit_in_bytes /sys/fs/cgroup/memory.limit_in_bytes; do
+    if [[ -f "$cg_path" ]]; then
+      local val
+      val=$(cat "$cg_path" 2>/dev/null || true)
+      if [[ "$val" =~ ^[0-9]+$ ]] && [[ "$val" -lt 1099511627776 ]]; then
+        cg_bytes="$val"
+        break
+      fi
+    fi
+  done
+
+  local sys_bytes=0
+  if [[ -n "$mem_kb" && "$mem_kb" -gt 0 ]]; then
+    sys_bytes=$(( mem_kb * 1024 ))
+  fi
+
+  local min_bytes=0
+  if [[ "$sys_bytes" -gt 0 && "$cg_bytes" -gt 0 ]]; then
+    if [[ "$sys_bytes" -lt "$cg_bytes" ]]; then
+      min_bytes="$sys_bytes"
+    else
+      min_bytes="$cg_bytes"
+    fi
+  elif [[ "$sys_bytes" -gt 0 ]]; then
+    min_bytes="$sys_bytes"
+  elif [[ "$cg_bytes" -gt 0 ]]; then
+    min_bytes="$cg_bytes"
+  fi
+
+  local mem_mb=0
+  if [[ "$min_bytes" -gt 0 ]]; then
+    mem_mb=$(( min_bytes / 1024 / 1024 ))
+  fi
+
+  AUTO_GOMEMLIMIT=""
+  AUTO_GOGC=""
+  if [[ "$mem_mb" -gt 0 && "$mem_mb" -le 135 ]]; then
+    AUTO_GOMEMLIMIT="22MiB"
+    AUTO_GOGC="25"
+  elif [[ "$mem_mb" -gt 0 && "$mem_mb" -le 270 ]]; then
+    AUTO_GOMEMLIMIT="35MiB"
+    AUTO_GOGC="50"
+  elif [[ "$mem_mb" -gt 0 && "$mem_mb" -le 384 ]]; then
+    AUTO_GOMEMLIMIT="45MiB"
+    AUTO_GOGC="100"
+  fi
+}
+
 get_arch() {
   local arch
   arch=$(uname -m)
@@ -262,6 +317,16 @@ setup_cloudflared_service() {
   local token="$1"
   local tun_p="${2:-8081}"
 
+  detect_adaptive_mem_tuning
+  local env_export=""
+  local env_systemd=""
+  if [[ -n "$AUTO_GOMEMLIMIT" ]]; then
+    env_export="export GOMEMLIMIT=\"${AUTO_GOMEMLIMIT}\"
+export GOGC=\"${AUTO_GOGC}\""
+    env_systemd="Environment=\"GOMEMLIMIT=${AUTO_GOMEMLIMIT}\"
+Environment=\"GOGC=${AUTO_GOGC}\""
+  fi
+
   if [[ "$INIT_SYS" == "openrc" ]]; then
     local cmd_bin="/usr/local/bin/cloudflared"
     local cmd_args="tunnel --protocol quic --no-autoupdate run --token ${token}"
@@ -277,6 +342,7 @@ setup_cloudflared_service() {
 #!/sbin/openrc-run
 name="cloudflared"
 description="${desc}"
+${env_export}
 command="${cmd_bin}"
 command_args="${cmd_args}"
 command_background="yes"
@@ -322,6 +388,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+${env_systemd}
 ExecStart=/usr/local/bin/cloudflared tunnel --protocol quic --no-autoupdate run --token ${token}
 Restart=always
 RestartSec=5s
@@ -340,6 +407,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+${env_systemd}
 ExecStart=${QUICK_SCRIPT} ${tun_p}
 Restart=always
 RestartSec=5s
@@ -357,6 +425,16 @@ EOF
 }
 
 setup_caddy_service() {
+  detect_adaptive_mem_tuning
+  local env_export=""
+  local env_systemd=""
+  if [[ -n "$AUTO_GOMEMLIMIT" ]]; then
+    env_export="export GOMEMLIMIT=\"${AUTO_GOMEMLIMIT}\"
+export GOGC=\"${AUTO_GOGC}\""
+    env_systemd="Environment=\"GOMEMLIMIT=${AUTO_GOMEMLIMIT}\"
+Environment=\"GOGC=${AUTO_GOGC}\""
+  fi
+
   if [[ "$INIT_SYS" == "openrc" ]]; then
     local caddy_bin
     caddy_bin=$(command -v caddy 2>/dev/null || echo "/usr/local/bin/caddy")
@@ -364,6 +442,7 @@ setup_caddy_service() {
 #!/sbin/openrc-run
 name="caddy"
 description="Caddy Web Server"
+${env_export}
 command="${caddy_bin}"
 command_args="run --config /etc/caddy/Caddyfile"
 command_background="yes"
@@ -415,6 +494,7 @@ Wants=network-online.target
 [Service]
 Type=notify
 User=root
+${env_systemd}
 ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
 ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force
 Restart=always

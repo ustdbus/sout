@@ -13,6 +13,62 @@ detect_init() {
 }
 INIT_SYS=$(detect_init)
 
+detect_adaptive_mem_tuning() {
+  local mem_kb=0
+  if [[ -f /proc/meminfo ]]; then
+    mem_kb=$(grep -i 'MemTotal' /proc/meminfo 2>/dev/null | awk '{print $2}')
+  fi
+
+  local cg_bytes=0
+  for cg_path in /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.limit_in_bytes /sys/fs/cgroup/memory.limit_in_bytes; do
+    if [[ -f "$cg_path" ]]; then
+      local val
+      val=$(cat "$cg_path" 2>/dev/null || true)
+      if [[ "$val" =~ ^[0-9]+$ ]] && [[ "$val" -lt 1099511627776 ]]; then
+        cg_bytes="$val"
+        break
+      fi
+    fi
+  done
+
+  local sys_bytes=0
+  if [[ -n "$mem_kb" && "$mem_kb" -gt 0 ]]; then
+    sys_bytes=$(( mem_kb * 1024 ))
+  fi
+
+  local min_bytes=0
+  if [[ "$sys_bytes" -gt 0 && "$cg_bytes" -gt 0 ]]; then
+    if [[ "$sys_bytes" -lt "$cg_bytes" ]]; then
+      min_bytes="$sys_bytes"
+    else
+      min_bytes="$cg_bytes"
+    fi
+  elif [[ "$sys_bytes" -gt 0 ]]; then
+    min_bytes="$sys_bytes"
+  elif [[ "$cg_bytes" -gt 0 ]]; then
+    min_bytes="$cg_bytes"
+  fi
+
+  local mem_mb=0
+  if [[ "$min_bytes" -gt 0 ]]; then
+    mem_mb=$(( min_bytes / 1024 / 1024 ))
+  fi
+
+  AUTO_MEM_MB="$mem_mb"
+  AUTO_GOMEMLIMIT=""
+  AUTO_GOGC=""
+  if [[ "$mem_mb" -gt 0 && "$mem_mb" -le 135 ]]; then
+    AUTO_GOMEMLIMIT="22MiB"
+    AUTO_GOGC="25"
+  elif [[ "$mem_mb" -gt 0 && "$mem_mb" -le 270 ]]; then
+    AUTO_GOMEMLIMIT="35MiB"
+    AUTO_GOGC="50"
+  elif [[ "$mem_mb" -gt 0 && "$mem_mb" -le 384 ]]; then
+    AUTO_GOMEMLIMIT="45MiB"
+    AUTO_GOGC="100"
+  fi
+}
+
 # 在 OpenRC/Alpine 上自动把 systemctl 调用翻译为 rc-service / rc-update。
 # 优先从 systemd unit 生成 OpenRC init 脚本，保证 caddy/cloudflared 可被管理。
 _openrc_init_from_unit() {
@@ -35,11 +91,20 @@ _openrc_init_from_unit() {
     command_args="${exec_start#* }"
     [[ -z "$command" ]] && return 1
   fi
+
+  detect_adaptive_mem_tuning
+  local env_export=""
+  if [[ -n "$AUTO_GOMEMLIMIT" ]]; then
+    env_export="export GOMEMLIMIT=\"${AUTO_GOMEMLIMIT}\"
+export GOGC=\"${AUTO_GOGC}\""
+  fi
+
   mkdir -p /var/log
   cat > "$init" <<EOF
 #!/sbin/openrc-run
 name="$name"
 description="$name service"
+${env_export}
 command="$command"
 command_args="$command_args"
 command_background="yes"
@@ -360,9 +425,10 @@ net.ipv4.tcp_congestion_control = bbr
 }
 
 optimize_low_memory() {
-  local mem_mb="${1:-512}"
+  detect_adaptive_mem_tuning
+  local mem_mb="${AUTO_MEM_MB:-${1:-512}}"
   if [[ $mem_mb -le 384 ]]; then
-    echo "      检测到轻量低内存环境 (${mem_mb} MB)，正在配置系统级内存防爆与垃圾回收策略..."
+    echo "      检测到轻量低内存环境 (${mem_mb} MB)，正在配置系统级内存防爆与自适应垃圾回收策略..."
     # 1. 限制 journald 运行时内存
     if [[ -d /run/systemd/system ]]; then
       mkdir -p /etc/systemd/journald.conf.d 2>/dev/null || true
@@ -374,23 +440,73 @@ MaxRetentionSec=3day
 EOF
       systemctl restart systemd-journald >/dev/null 2>&1 || true
 
-      # 2. 为各核心 Go 服务注入合理的内存保护限制 (为代理转发留出充足缓冲区，避免GC中断转发限速)
+      local sb_memlimit="45MiB"
+      local sb_gogc="100"
+      local svc_memlimit="35MiB"
+      local svc_gogc="100"
+
+      if [[ $mem_mb -le 135 ]]; then
+        sb_memlimit="25MiB"
+        sb_gogc="25"
+        svc_memlimit="22MiB"
+        svc_gogc="25"
+      elif [[ $mem_mb -le 270 ]]; then
+        sb_memlimit="35MiB"
+        sb_gogc="50"
+        svc_memlimit="30MiB"
+        svc_gogc="50"
+      fi
+
       mkdir -p /etc/systemd/system/sing-box.service.d 2>/dev/null || true
-      cat > /etc/systemd/system/sing-box.service.d/override.conf <<'EOF'
+      cat > /etc/systemd/system/sing-box.service.d/override.conf <<EOF
 [Service]
-Environment="GOMEMLIMIT=45MiB"
-Environment="GOGC=100"
+Environment="GOMEMLIMIT=${sb_memlimit}"
+Environment="GOGC=${sb_gogc}"
 EOF
 
       for svc in caddy cloudflared sout s-ui; do
         mkdir -p "/etc/systemd/system/${svc}.service.d" 2>/dev/null || true
-        cat > "/etc/systemd/system/${svc}.service.d/override.conf" <<'EOF'
+        cat > "/etc/systemd/system/${svc}.service.d/override.conf" <<EOF
 [Service]
-Environment="GOMEMLIMIT=35MiB"
-Environment="GOGC=100"
+Environment="GOMEMLIMIT=${svc_memlimit}"
+Environment="GOGC=${svc_gogc}"
 EOF
       done
       systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+
+    # 2. OpenRC 环境内存自适应保护 (Alpine 等)
+    if [[ -f /etc/alpine-release ]] || command -v rc-service >/dev/null 2>&1; then
+      local sb_memlimit="25MiB"
+      local sb_gogc="25"
+      local svc_memlimit="22MiB"
+      local svc_gogc="25"
+      if [[ $mem_mb -gt 135 && $mem_mb -le 270 ]]; then
+        sb_memlimit="35MiB"
+        sb_gogc="50"
+        svc_memlimit="30MiB"
+        svc_gogc="50"
+      elif [[ $mem_mb -gt 270 ]]; then
+        sb_memlimit="45MiB"
+        sb_gogc="100"
+        svc_memlimit="35MiB"
+        svc_gogc="100"
+      fi
+
+      for svc in sing-box caddy cloudflared sout s-ui; do
+        local mlimit="$svc_memlimit"
+        local ggc="$svc_gogc"
+        [[ "$svc" == "sing-box" ]] && mlimit="$sb_memlimit" && ggc="$sb_gogc"
+
+        mkdir -p /etc/conf.d 2>/dev/null || true
+        cat > "/etc/conf.d/${svc}" <<EOF
+export GOMEMLIMIT="${mlimit}"
+export GOGC="${ggc}"
+EOF
+        if [[ -f "/etc/init.d/${svc}" ]] && ! grep -q "GOMEMLIMIT" "/etc/init.d/${svc}" 2>/dev/null; then
+          sed -i "2i export GOMEMLIMIT=\"${mlimit}\"\nexport GOGC=\"${ggc}\"" "/etc/init.d/${svc}" 2>/dev/null || true
+        fi
+      done
     fi
 
     # 3. 调低 swappiness（从默认 100 降为 30），防止过早向虚拟 Swap 剧烈换页
