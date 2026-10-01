@@ -84,7 +84,10 @@ func restartSUI() {
 	if hasCmd("systemctl") && dirExists("/run/systemd/system") {
 		_ = exec.Command("systemctl", "restart", "s-ui").Run()
 	} else if hasCmd("rc-service") {
-		_ = exec.Command("rc-service", "s-ui", "restart").Run()
+		_ = exec.Command("rc-service", "s-ui", "stop").Run()
+		_ = exec.Command("rc-service", "s-ui", "zap").Run()
+		time.Sleep(300 * time.Millisecond)
+		_ = exec.Command("rc-service", "s-ui", "start").Run()
 	} else {
 		_ = exec.Command("systemctl", "restart", "s-ui").Run()
 	}
@@ -824,9 +827,16 @@ func (s *SUI) restartSingBox() {
 }
 
 func (s *SUI) restartSUI() {
-	_ = exec.Command("systemctl", "restart", "s-ui").Run()
-	_ = exec.Command("service", "s-ui", "restart").Run()
-	_ = exec.Command("rc-service", "s-ui", "restart").Run()
+	if hasCmd("systemctl") && dirExists("/run/systemd/system") {
+		_ = exec.Command("systemctl", "restart", "s-ui").Run()
+	} else if hasCmd("rc-service") {
+		_ = exec.Command("rc-service", "s-ui", "stop").Run()
+		_ = exec.Command("rc-service", "s-ui", "zap").Run()
+		time.Sleep(300 * time.Millisecond)
+		_ = exec.Command("rc-service", "s-ui", "start").Run()
+	} else {
+		_ = exec.Command("service", "s-ui", "restart").Run()
+	}
 }
 
 func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {

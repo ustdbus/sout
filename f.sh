@@ -20,16 +20,21 @@ _openrc_init_from_unit() {
   local unit="/etc/systemd/system/${name}.service"
   local init="/etc/init.d/${name}"
   local exec_start command command_args
-  [[ -f "$unit" ]] || return 1
-  # 非 caddy/cloudflared 已有 OpenRC 脚本时不要覆盖（如 sout/s-ui）
-  if [[ -x "$init" && "$name" != "caddy" && "$name" != "cloudflared" ]]; then
+  # 非 caddy/cloudflared/sing-box 已有 OpenRC 脚本时不要覆盖（如 sout/s-ui）
+  if [[ -x "$init" && "$name" != "caddy" && "$name" != "cloudflared" && "$name" != "sing-box" ]]; then
     return 0
   fi
-  exec_start=$(sed -n 's/^ExecStart=//p' "$unit" | head -1)
-  [[ -z "$exec_start" ]] && return 1
-  command="${exec_start%% *}"
-  command_args="${exec_start#* }"
-  [[ -z "$command" ]] && return 1
+  if [[ "$name" == "sing-box" && ! -f "$unit" ]]; then
+    command="/usr/local/bin/sing-box"
+    command_args="run -c /etc/sing-box/config.json"
+  else
+    [[ -f "$unit" ]] || return 1
+    exec_start=$(sed -n 's/^ExecStart=//p' "$unit" | head -1)
+    [[ -z "$exec_start" ]] && return 1
+    command="${exec_start%% *}"
+    command_args="${exec_start#* }"
+    [[ -z "$command" ]] && return 1
+  fi
   mkdir -p /var/log
   cat > "$init" <<EOF
 #!/sbin/openrc-run
@@ -37,16 +42,29 @@ name="$name"
 description="$name service"
 command="$command"
 command_args="$command_args"
-command_background=true
+command_background="yes"
 pidfile="/run/${name}.pid"
 output_log="/var/log/${name}.log"
 error_log="/var/log/${name}.log"
-respawn_delay=5
-supervisor=supervise-daemon
+respawn_delay=3
 
 depend() {
     need net
     after firewall
+}
+
+start_pre() {
+  if [ -f "\$pidfile" ]; then
+    local p
+    p=\$(cat "\$pidfile" 2>/dev/null)
+    if [ -n "\$p" ] && ! kill -0 "\$p" 2>/dev/null; then
+      rm -f "\$pidfile"
+    fi
+  fi
+}
+
+stop_post() {
+  rm -f "\$pidfile"
 }
 EOF
   chmod +x "$init"
@@ -99,6 +117,7 @@ _openrc_force_stop() {
       ;;
     cloudflared)
       pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
+      pkill -9 -f "sout-quick-tunnel" 2>/dev/null || true
       ;;
     sing-box)
       pkill -9 -f "/usr/local/bin/sing-box" 2>/dev/null || true
@@ -154,14 +173,17 @@ systemctl() {
       if [[ -x /etc/init.d/${name} ]]; then
         if [[ "$action" == "restart" ]]; then
           rc-service "$name" stop >/dev/null 2>&1 || true
+          rc-service "$name" zap >/dev/null 2>&1 || true
           _openrc_force_stop "$name"
           _openrc_clean_ports "$name"
           sleep 0.3
           rc-service "$name" start
         elif [[ "$action" == "stop" ]]; then
           rc-service "$name" stop >/dev/null 2>&1 || true
+          rc-service "$name" zap >/dev/null 2>&1 || true
           _openrc_force_stop "$name"
         else
+          rc-service "$name" zap >/dev/null 2>&1 || true
           _openrc_force_stop "$name"
           _openrc_clean_ports "$name"
           sleep 0.2
@@ -172,7 +194,7 @@ systemctl() {
       fi
       ;;
     enable)
-      if [[ "$name" == "caddy" || "$name" == "cloudflared" ]]; then
+      if [[ "$name" == "caddy" || "$name" == "cloudflared" || "$name" == "sing-box" ]]; then
         _openrc_init_from_unit "$name" || true
       fi
       if [[ -x /etc/init.d/${name} ]]; then
@@ -1705,16 +1727,19 @@ EOF
   else
     # 兼容 OpenRC (Alpine Linux)
     mkdir -p /etc/init.d
-    cat > /etc/init.d/caddy <<'EOF'
+    local caddy_bin
+    caddy_bin=$(command -v caddy 2>/dev/null || echo "/usr/local/bin/caddy")
+    cat > /etc/init.d/caddy <<EOF
 #!/sbin/openrc-run
 name="caddy"
 description="Caddy Web Server"
-command="/usr/local/bin/caddy"
+command="${caddy_bin}"
 command_args="run --config /etc/caddy/Caddyfile"
 command_background="yes"
 pidfile="/run/caddy.pid"
 output_log="/var/log/caddy/caddy.log"
-error_log="/var/log/caddy/caddy.err"
+error_log="/var/log/caddy/caddy.log"
+respawn_delay=2
 
 extra_started_commands="reload"
 
@@ -1723,14 +1748,33 @@ depend() {
   after firewall
 }
 
+start_pre() {
+  if [ -f "\$pidfile" ]; then
+    local p
+    p=\$(cat "\$pidfile" 2>/dev/null)
+    if [ -n "\$p" ] && ! kill -0 "\$p" 2>/dev/null; then
+      rm -f "\$pidfile"
+    fi
+  fi
+}
+
+stop_post() {
+  rm -f "\$pidfile"
+}
+
 reload() {
   ebegin "Reloading Caddy"
-  /usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force >/dev/null 2>&1
-  eend $?
+  ${caddy_bin} reload --config /etc/caddy/Caddyfile --force >/dev/null 2>&1
+  eend \$?
 }
 EOF
     chmod +x /etc/init.d/caddy
     rc-update add caddy default >/dev/null 2>&1 || true
+    rc-service caddy stop >/dev/null 2>&1 || true
+    rc-service caddy zap >/dev/null 2>&1 || true
+    pkill -9 -f "${caddy_bin}" 2>/dev/null || true
+    sleep 0.3
+    rc-service caddy start >/dev/null 2>&1 || true
   fi
 }
 
@@ -1842,15 +1886,35 @@ command_background="yes"
 pidfile="/run/cloudflared.pid"
 output_log="/var/log/cloudflared.log"
 error_log="/var/log/cloudflared.err"
+respawn_delay=5
 
 depend() {
   need net
   after firewall
 }
+
+start_pre() {
+  if [ -f "\$pidfile" ]; then
+    local p
+    p=\$(cat "\$pidfile" 2>/dev/null)
+    if [ -n "\$p" ] && ! kill -0 "\$p" 2>/dev/null; then
+      rm -f "\$pidfile"
+    fi
+  fi
+}
+
+stop_post() {
+  rm -f "\$pidfile"
+}
 EOF
     chmod +x /etc/init.d/cloudflared
     rc-update add cloudflared default >/dev/null 2>&1 || true
-    rc-service cloudflared restart 2>/dev/null || rc-service cloudflared start 2>/dev/null || true
+    rc-service cloudflared stop >/dev/null 2>&1 || true
+    rc-service cloudflared zap >/dev/null 2>&1 || true
+    pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
+    pkill -9 -f "sout-quick-tunnel" 2>/dev/null || true
+    sleep 0.3
+    rc-service cloudflared start >/dev/null 2>&1 || true
   fi
 
   # 清空旧日志，避免 get_quick_tunnel_domain 读到上一次临时隧道的旧域名
@@ -2911,6 +2975,10 @@ reload_caddy_proxy() {
   if [[ -f /etc/systemd/system/cloudflared.service ]]; then
     local probed_cf_port
     probed_cf_port=$(grep -oE 'http://127\.0\.0\.1:[0-9]+' /etc/systemd/system/cloudflared.service 2>/dev/null | awk -F: '{print $3}' | head -1)
+    [[ -n "$probed_cf_port" ]] && tunnel_port="$probed_cf_port"
+  elif [[ -f /etc/init.d/cloudflared ]]; then
+    local probed_cf_port
+    probed_cf_port=$(grep -oE 'http://127\.0\.0\.1:[0-9]+' /etc/init.d/cloudflared 2>/dev/null | awk -F: '{print $3}' | head -1)
     [[ -n "$probed_cf_port" ]] && tunnel_port="$probed_cf_port"
   fi
   [[ -z "$tunnel_port" ]] && tunnel_port="8081"

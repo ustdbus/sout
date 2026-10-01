@@ -307,7 +307,9 @@ EOF
     chmod +x /etc/init.d/cloudflared
     rc-update add cloudflared default >/dev/null 2>&1 || true
     rc-service cloudflared stop >/dev/null 2>&1 || true
+    rc-service cloudflared zap >/dev/null 2>&1 || true
     pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
+    pkill -9 -f "sout-quick-tunnel" 2>/dev/null || true
     sleep 0.3
     rc-service cloudflared start
   else
@@ -356,11 +358,13 @@ EOF
 
 setup_caddy_service() {
   if [[ "$INIT_SYS" == "openrc" ]]; then
-    cat > /etc/init.d/caddy <<'EOF'
+    local caddy_bin
+    caddy_bin=$(command -v caddy 2>/dev/null || echo "/usr/local/bin/caddy")
+    cat > /etc/init.d/caddy <<EOF
 #!/sbin/openrc-run
 name="caddy"
 description="Caddy Web Server"
-command="/usr/local/bin/caddy"
+command="${caddy_bin}"
 command_args="run --config /etc/caddy/Caddyfile"
 command_background="yes"
 pidfile="/run/caddy.pid"
@@ -374,29 +378,30 @@ depend() {
 }
 
 start_pre() {
-  if [ -f "$pidfile" ]; then
+  if [ -f "\$pidfile" ]; then
     local p
-    p=$(cat "$pidfile" 2>/dev/null)
-    if [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; then
-      rm -f "$pidfile"
+    p=\$(cat "\$pidfile" 2>/dev/null)
+    if [ -n "\$p" ] && ! kill -0 "\$p" 2>/dev/null; then
+      rm -f "\$pidfile"
     fi
   fi
 }
 
 stop_post() {
-  rm -f "$pidfile"
+  rm -f "\$pidfile"
 }
 
 reload() {
   ebegin "Reloading caddy"
-  /usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force >/dev/null 2>&1
-  eend $?
+  ${caddy_bin} reload --config /etc/caddy/Caddyfile --force >/dev/null 2>&1
+  eend \$?
 }
 EOF
     chmod +x /etc/init.d/caddy
     rc-update add caddy default >/dev/null 2>&1 || true
     rc-service caddy stop >/dev/null 2>&1 || true
-    pkill -9 -f "/usr/local/bin/caddy" 2>/dev/null || true
+    rc-service caddy zap >/dev/null 2>&1 || true
+    pkill -9 -f "${caddy_bin}" 2>/dev/null || true
     sleep 0.3
     rc-service caddy start
   else
@@ -964,6 +969,10 @@ reload_caddy_proxy() {
   if [[ -f /etc/systemd/system/cloudflared.service ]]; then
     local probed_cf_port
     probed_cf_port=$(grep -oE 'http://127\.0\.0\.1:[0-9]+' /etc/systemd/system/cloudflared.service 2>/dev/null | awk -F: '{print $3}' | head -1)
+    [[ -n "$probed_cf_port" ]] && tunnel_port="$probed_cf_port"
+  elif [[ -f /etc/init.d/cloudflared ]]; then
+    local probed_cf_port
+    probed_cf_port=$(grep -oE 'http://127\.0\.0\.1:[0-9]+' /etc/init.d/cloudflared 2>/dev/null | awk -F: '{print $3}' | head -1)
     [[ -n "$probed_cf_port" ]] && tunnel_port="$probed_cf_port"
   fi
   [[ -z "$tunnel_port" ]] && tunnel_port="8081"
@@ -1544,10 +1553,13 @@ remove_caddy_proxy() {
   echo "  [-] 正在关闭 Cloudflare隧道连接和Caddy流量代理..."
   if [[ "$INIT_SYS" == "openrc" ]]; then
     rc-service cloudflared stop 2>/dev/null || true
+    rc-service cloudflared zap 2>/dev/null || true
     rc-update del cloudflared default 2>/dev/null || true
     rc-service caddy stop 2>/dev/null || true
+    rc-service caddy zap 2>/dev/null || true
     rc-update del caddy default 2>/dev/null || true
     pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
+    pkill -9 -f "sout-quick-tunnel" 2>/dev/null || true
     pkill -9 -f "/usr/local/bin/caddy" 2>/dev/null || true
   else
     systemctl stop cloudflared 2>/dev/null || true

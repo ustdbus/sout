@@ -380,11 +380,14 @@ func restartSelf() {
 		return
 	}
 	if hasCmd("rc-service") {
-		if exec.Command("rc-service", "sout", "status").Run() == nil {
-			_ = exec.Command("rc-service", "sout", "restart").Start()
-			return
+		svc := "sout"
+		if exec.Command("rc-service", "sout", "status").Run() != nil && exec.Command("rc-service", "fanout", "status").Run() == nil {
+			svc = "fanout"
 		}
-		_ = exec.Command("rc-service", "fanout", "restart").Start()
+		_ = exec.Command("rc-service", svc, "stop").Run()
+		_ = exec.Command("rc-service", svc, "zap").Run()
+		time.Sleep(300 * time.Millisecond)
+		_ = exec.Command("rc-service", svc, "start").Start()
 		return
 	}
 	// 没有 init 系统托管：直接退出，让外部守护（若有）拉起；

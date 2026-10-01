@@ -120,6 +120,9 @@ check_and_install_deps() {
     if ! command -v ss >/dev/null 2>&1; then
       needed+=("ss")
     fi
+    if ! ip netns list >/dev/null 2>&1; then
+      needed+=("ip")
+    fi
   fi
 
   if [[ ${#needed[@]} -gt 0 ]]; then
@@ -131,6 +134,7 @@ check_and_install_deps() {
         tar)  pkgs+=("tar") ;;
         ip)   pkgs+=("iproute2") ;;
         ss)   pkgs+=("iproute2") ;;
+        bash) pkgs+=("bash") ;;
         python3) pkgs+=("python3") ;;
         sqlite3) [[ "$mgr" == "apk" ]] && pkgs+=("sqlite") || pkgs+=("sqlite3") ;;
       esac
@@ -164,7 +168,10 @@ check_sui() {
 }
 
 check_singbox() {
-  if command -v sing-box >/dev/null 2>&1 || [[ -f /usr/local/bin/sing-box ]] || [[ -f /etc/sing-box/config.json ]]; then
+  if /usr/local/bin/sing-box version >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v sing-box >/dev/null 2>&1 && sing-box version >/dev/null 2>&1; then
     return 0
   fi
   return 1
@@ -174,25 +181,28 @@ install_singbox() {
   echo
   echo "  [+] 正在检查并配置 sing-box 原生内核..."
 
-  # 1. 优先检测是否可直接复用本地现存的 sing-box 内核
-  if [[ ! -x /usr/local/bin/sing-box ]]; then
-    if [[ -x /usr/local/s-ui/bin/sing-box ]]; then
+  # 1. 优先检测是否可直接复用本地现存且能正常运行的 sing-box 内核
+  if ! /usr/local/bin/sing-box version >/dev/null 2>&1; then
+    if /usr/local/s-ui/bin/sing-box version >/dev/null 2>&1; then
       echo "      发现 s-ui 现有 sing-box 内核 (/usr/local/s-ui/bin/sing-box)，正在建立复用软链接..."
+      mkdir -p /usr/local/bin
       ln -sf /usr/local/s-ui/bin/sing-box /usr/local/bin/sing-box
-    elif [[ -x /usr/bin/sing-box ]]; then
+    elif /usr/bin/sing-box version >/dev/null 2>&1; then
       echo "      发现系统 /usr/bin/sing-box，正在建立复用软链接..."
+      mkdir -p /usr/local/bin
       ln -sf /usr/bin/sing-box /usr/local/bin/sing-box
-    elif command -v sing-box >/dev/null 2>&1; then
+    elif command -v sing-box >/dev/null 2>&1 && sing-box version >/dev/null 2>&1; then
       local existing_sb
       existing_sb="$(command -v sing-box)"
       echo "      发现 PATH 中已有 sing-box (${existing_sb})，正在建立复用软链接..."
+      mkdir -p /usr/local/bin
       ln -sf "$existing_sb" /usr/local/bin/sing-box
     fi
   fi
 
   # 2. 若本地无可用内核，自动从官方拉取最新稳定版 (Release)
-  if [[ ! -x /usr/local/bin/sing-box ]]; then
-    echo "      本地未发现 sing-box，正在自动获取官方最新稳定版内核..."
+  if ! /usr/local/bin/sing-box version >/dev/null 2>&1; then
+    echo "      本地未发现兼容且可运行的 sing-box 内核，正在自动获取官方最新稳定版内核..."
     local arch
     arch=$(uname -m)
     local goarch=""
@@ -362,6 +372,7 @@ SBRC
     chmod +x /etc/init.d/sing-box
     rc-update add sing-box default >/dev/null 2>&1 || true
     rc-service sing-box stop >/dev/null 2>&1 || true
+    rc-service sing-box zap >/dev/null 2>&1 || true
     sleep 0.3
     rc-service sing-box start >/dev/null 2>&1 || true
   fi
@@ -650,6 +661,7 @@ ask_tunnel_setup() {
   fi
 }
 
+check_and_install_deps
 ask_tunnel_setup
 
 # ==============================================================================
@@ -770,7 +782,6 @@ SUI_ADMIN_USER=""
 SUI_ADMIN_PASS=""
 SUI_PASS_IS_RANDOM=0
 
-check_and_install_deps
 ensure_backend
 
 # 若未抓取到随机用户名（如已预装或用户在官方脚本中自定义设置），从数据库读取用户名
@@ -870,6 +881,7 @@ svc_enable_start() {
   else
     rc-update add sout default >/dev/null 2>&1 || true
     rc-service sout stop >/dev/null 2>&1 || true
+    rc-service sout zap >/dev/null 2>&1 || true
     sleep 0.3
     rc-service sout start
   fi
@@ -1026,6 +1038,7 @@ SBRC
     fi
     rc-update add sing-box default >/dev/null 2>&1 || true
     rc-service sing-box stop >/dev/null 2>&1 || true
+    rc-service sing-box zap >/dev/null 2>&1 || true
     sleep 0.3
     rc-service sing-box start >/dev/null 2>&1 || true
   fi

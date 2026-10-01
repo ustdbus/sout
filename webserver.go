@@ -68,7 +68,7 @@ func (s *webServer) reload(cfg WebSettings) error {
 
 	var rawLn net.Listener
 	var err error
-	for attempt := 0; attempt < 5; attempt++ {
+	for attempt := 0; attempt < 10; attempt++ {
 		rawLn, err = net.Listen("tcp", addr)
 		if err == nil {
 			break

@@ -331,6 +331,7 @@ func (sb *SingBox) restartService() {
 		_ = exec.Command("systemctl", "restart", "sing-box").Run()
 	} else if hasCmd("rc-service") {
 		_ = exec.Command("rc-service", "sing-box", "stop").Run()
+		_ = exec.Command("rc-service", "sing-box", "zap").Run()
 		time.Sleep(300 * time.Millisecond)
 		_ = exec.Command("rc-service", "sing-box", "start").Run()
 	} else if hasCmd("service") {
