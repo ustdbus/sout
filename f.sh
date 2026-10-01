@@ -58,8 +58,8 @@ detect_adaptive_mem_tuning() {
   AUTO_GOMEMLIMIT=""
   AUTO_GOGC=""
   if [[ "$mem_mb" -gt 0 && "$mem_mb" -le 135 ]]; then
-    AUTO_GOMEMLIMIT="22MiB"
-    AUTO_GOGC="25"
+    AUTO_GOMEMLIMIT="25MiB"
+    AUTO_GOGC="50"
   elif [[ "$mem_mb" -gt 0 && "$mem_mb" -le 270 ]]; then
     AUTO_GOMEMLIMIT="35MiB"
     AUTO_GOGC="50"
@@ -94,9 +94,20 @@ _openrc_init_from_unit() {
 
   detect_adaptive_mem_tuning
   local env_export=""
-  if [[ -n "$AUTO_GOMEMLIMIT" ]]; then
-    env_export="export GOMEMLIMIT=\"${AUTO_GOMEMLIMIT}\"
-export GOGC=\"${AUTO_GOGC}\""
+  local mlimit="${AUTO_GOMEMLIMIT}"
+  local ggc="${AUTO_GOGC}"
+  if [[ "$name" == "sing-box" ]]; then
+    mlimit="35MiB"
+    ggc="100"
+    [[ "$AUTO_MEM_MB" -gt 135 ]] && mlimit="45MiB"
+  elif [[ "$name" == "cloudflared" ]]; then
+    mlimit="30MiB"
+    ggc="50"
+    [[ "$AUTO_MEM_MB" -gt 135 ]] && mlimit="35MiB"
+  fi
+  if [[ -n "$mlimit" ]]; then
+    env_export="export GOMEMLIMIT=\"${mlimit}\"
+export GOGC=\"${ggc}\""
   fi
 
   mkdir -p /var/log

@@ -74,8 +74,8 @@ detect_adaptive_mem_tuning() {
   AUTO_GOMEMLIMIT=""
   AUTO_GOGC=""
   if [[ "$mem_mb" -gt 0 && "$mem_mb" -le 135 ]]; then
-    AUTO_GOMEMLIMIT="22MiB"
-    AUTO_GOGC="25"
+    AUTO_GOMEMLIMIT="25MiB"
+    AUTO_GOGC="50"
   elif [[ "$mem_mb" -gt 0 && "$mem_mb" -le 270 ]]; then
     AUTO_GOMEMLIMIT="35MiB"
     AUTO_GOGC="50"
@@ -373,13 +373,10 @@ SBCONF
   # 注册并启动系统服务
   echo "      正在注册 sing-box 服务 (${INIT_SYS})..."
   detect_adaptive_mem_tuning
-  local sb_limit="${AUTO_GOMEMLIMIT:-}"
-  local sb_gc="${AUTO_GOGC:-}"
-  if [[ -n "$AUTO_GOMEMLIMIT" && -n "$AUTO_MEM_MB" ]]; then
-    if [[ "$AUTO_MEM_MB" -le 135 ]]; then
-      sb_limit="25MiB"
-      sb_gc="25"
-    fi
+  local sb_limit="35MiB"
+  local sb_gc="100"
+  if [[ -n "$AUTO_MEM_MB" && "$AUTO_MEM_MB" -gt 135 ]]; then
+    sb_limit="45MiB"
   fi
   local sb_env_systemd=""
   local sb_env_openrc=""
@@ -1160,13 +1157,10 @@ chmod 700 "$WORK_DIR"
 if [[ "$backend_kind" == "sing-box" ]] || (! check_sui && check_singbox); then
   echo -n "sing-box" > "${WORK_DIR}/panel_mode"
   detect_adaptive_mem_tuning
-  local sb_limit="${AUTO_GOMEMLIMIT:-}"
-  local sb_gc="${AUTO_GOGC:-}"
-  if [[ -n "$AUTO_GOMEMLIMIT" && -n "$AUTO_MEM_MB" ]]; then
-    if [[ "$AUTO_MEM_MB" -le 135 ]]; then
-      sb_limit="25MiB"
-      sb_gc="25"
-    fi
+  local sb_limit="35MiB"
+  local sb_gc="100"
+  if [[ -n "$AUTO_MEM_MB" && "$AUTO_MEM_MB" -gt 135 ]]; then
+    sb_limit="45MiB"
   fi
   local sb_env_systemd=""
   local sb_env_openrc=""
