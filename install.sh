@@ -903,12 +903,12 @@ EOF
 
       if [[ $mem_mb -le 135 ]]; then
         sb_memlimit="25MiB"
-        sb_gogc="25"
+        sb_gogc="100"
         svc_memlimit="22MiB"
         svc_gogc="25"
       elif [[ $mem_mb -le 270 ]]; then
         sb_memlimit="35MiB"
-        sb_gogc="50"
+        sb_gogc="100"
         svc_memlimit="30MiB"
         svc_gogc="50"
       fi
@@ -934,12 +934,12 @@ EOF
     # 2. OpenRC 环境内存自适应保护 (Alpine 等)
     if [[ -f /etc/alpine-release ]] || command -v rc-service >/dev/null 2>&1; then
       local sb_memlimit="25MiB"
-      local sb_gogc="25"
+      local sb_gogc="100"
       local svc_memlimit="22MiB"
       local svc_gogc="25"
       if [[ $mem_mb -gt 135 && $mem_mb -le 270 ]]; then
         sb_memlimit="35MiB"
-        sb_gogc="50"
+        sb_gogc="100"
         svc_memlimit="30MiB"
         svc_gogc="50"
       elif [[ $mem_mb -gt 270 ]]; then
