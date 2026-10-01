@@ -14,6 +14,17 @@ SUI_DB="/usr/local/s-ui/db/s-ui.db"
 DOMAIN_FILE="/var/lib/sout/tunnel_domain"
 QUICK_SCRIPT="/usr/local/bin/sout-quick-tunnel"
 
+detect_init() {
+  if [[ -f /etc/alpine-release ]] || command -v rc-service >/dev/null 2>&1; then
+    echo "openrc"
+  elif command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+    echo "systemd"
+  else
+    echo "systemd"
+  fi
+}
+INIT_SYS=$(detect_init)
+
 get_arch() {
   local arch
   arch=$(uname -m)
@@ -36,8 +47,16 @@ install_caddy() {
   local tmp_dir
   tmp_dir=$(mktemp -d)
   if curl -sSL -f "$caddy_url" -o "${tmp_dir}/caddy.tar.gz"; then
-    tar -zxf "${tmp_dir}/caddy.tar.gz" -C "$tmp_dir"
-    install -m 755 "${tmp_dir}/caddy" /usr/local/bin/caddy
+    tar -zxf "${tmp_dir}/caddy.tar.gz" -C "$tmp_dir" 2>/dev/null || tar -xf "${tmp_dir}/caddy.tar.gz" -C "$tmp_dir" 2>/dev/null || true
+    local caddy_bin=""
+    if [[ -f "${tmp_dir}/caddy" ]]; then
+      caddy_bin="${tmp_dir}/caddy"
+    else
+      caddy_bin=$(find "$tmp_dir" -type f -name "caddy" 2>/dev/null | head -1)
+    fi
+    if [[ -n "$caddy_bin" && -f "$caddy_bin" ]]; then
+      install -m 755 "$caddy_bin" /usr/local/bin/caddy
+    fi
     rm -rf "$tmp_dir"
   else
     rm -rf "$tmp_dir"
@@ -47,6 +66,8 @@ install_caddy() {
       curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null || true
       curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null 2>&1 || true
       apt-get update -qq && apt-get install -y -qq caddy
+    elif command -v apk >/dev/null 2>&1; then
+      apk add --no-cache caddy
     fi
   fi
 
@@ -138,7 +159,7 @@ try:
         with open(p, 'w') as f: json.dump(conf, f, indent=2)
 except Exception: pass
 " 2>/dev/null || true
-      systemctl restart sing-box 2>/dev/null || true
+      systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true
     fi
 
       if [[ -f "$SUI_DB" ]]; then
@@ -226,7 +247,7 @@ if inbound_id:
         }),
     })
 PY
-          systemctl restart s-ui 2>/dev/null || true
+          systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || true
         fi
       fi
   fi
@@ -241,8 +262,57 @@ setup_cloudflared_service() {
   local token="$1"
   local tun_p="${2:-8081}"
 
-  if [[ -n "$token" ]]; then
-    cat > /etc/systemd/system/cloudflared.service <<EOF
+  if [[ "$INIT_SYS" == "openrc" ]]; then
+    local cmd_bin="/usr/local/bin/cloudflared"
+    local cmd_args="tunnel --protocol quic --no-autoupdate run --token ${token}"
+    local desc="Cloudflare Named Tunnel Agent"
+    if [[ -z "$token" ]]; then
+      create_quick_tunnel_daemon
+      cmd_bin="${QUICK_SCRIPT}"
+      cmd_args="${tun_p}"
+      desc="Cloudflare Quick Tunnel Dynamic Daemon"
+    fi
+
+    cat > /etc/init.d/cloudflared <<EOF
+#!/sbin/openrc-run
+name="cloudflared"
+description="${desc}"
+command="${cmd_bin}"
+command_args="${cmd_args}"
+command_background="yes"
+pidfile="/run/cloudflared.pid"
+output_log="/var/log/cloudflared.log"
+error_log="/var/log/cloudflared.log"
+respawn_delay=5
+
+depend() {
+  need net
+  after firewall
+}
+
+start_pre() {
+  if [ -f "\$pidfile" ]; then
+    local p
+    p=\$(cat "\$pidfile" 2>/dev/null)
+    if [ -n "\$p" ] && ! kill -0 "\$p" 2>/dev/null; then
+      rm -f "\$pidfile"
+    fi
+  fi
+}
+
+stop_post() {
+  rm -f "\$pidfile"
+}
+EOF
+    chmod +x /etc/init.d/cloudflared
+    rc-update add cloudflared default >/dev/null 2>&1 || true
+    rc-service cloudflared stop >/dev/null 2>&1 || true
+    pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
+    sleep 0.3
+    rc-service cloudflared start
+  else
+    if [[ -n "$token" ]]; then
+      cat > /etc/systemd/system/cloudflared.service <<EOF
 [Unit]
 Description=Cloudflare Named Tunnel Agent
 After=network.target network-online.target
@@ -258,9 +328,9 @@ LimitNOFILE=65536
 [Install]
 WantedBy=multi-user.target
 EOF
-  else
-    create_quick_tunnel_daemon
-    cat > /etc/systemd/system/cloudflared.service <<EOF
+    else
+      create_quick_tunnel_daemon
+      cat > /etc/systemd/system/cloudflared.service <<EOF
 [Unit]
 Description=Cloudflare Quick Tunnel Dynamic Daemon
 After=network.target network-online.target
@@ -276,15 +346,61 @@ LimitNOFILE=65536
 [Install]
 WantedBy=multi-user.target
 EOF
-  fi
+    fi
 
-  systemctl daemon-reload
-  systemctl enable cloudflared >/dev/null 2>&1 || true
-  systemctl restart cloudflared
+    systemctl daemon-reload
+    systemctl enable cloudflared >/dev/null 2>&1 || true
+    systemctl restart cloudflared
+  fi
 }
 
 setup_caddy_service() {
-  cat > /etc/systemd/system/caddy.service <<EOF
+  if [[ "$INIT_SYS" == "openrc" ]]; then
+    cat > /etc/init.d/caddy <<'EOF'
+#!/sbin/openrc-run
+name="caddy"
+description="Caddy Web Server"
+command="/usr/local/bin/caddy"
+command_args="run --config /etc/caddy/Caddyfile"
+command_background="yes"
+pidfile="/run/caddy.pid"
+output_log="/var/log/caddy.log"
+error_log="/var/log/caddy.log"
+respawn_delay=2
+
+depend() {
+  need net
+  after firewall
+}
+
+start_pre() {
+  if [ -f "$pidfile" ]; then
+    local p
+    p=$(cat "$pidfile" 2>/dev/null)
+    if [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; then
+      rm -f "$pidfile"
+    fi
+  fi
+}
+
+stop_post() {
+  rm -f "$pidfile"
+}
+
+reload() {
+  ebegin "Reloading caddy"
+  /usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force >/dev/null 2>&1
+  eend $?
+}
+EOF
+    chmod +x /etc/init.d/caddy
+    rc-update add caddy default >/dev/null 2>&1 || true
+    rc-service caddy stop >/dev/null 2>&1 || true
+    pkill -9 -f "/usr/local/bin/caddy" 2>/dev/null || true
+    sleep 0.3
+    rc-service caddy start
+  else
+    cat > /etc/systemd/system/caddy.service <<EOF
 [Unit]
 Description=Caddy Web Server
 Documentation=https://caddyserver.com/docs/
@@ -308,8 +424,9 @@ AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 [Install]
 WantedBy=multi-user.target
 EOF
-  systemctl daemon-reload
-  systemctl enable caddy >/dev/null 2>&1 || true
+    systemctl daemon-reload
+    systemctl enable caddy >/dev/null 2>&1 || true
+  fi
 }
 
 rand_path() {
@@ -460,7 +577,11 @@ ${sub_caddy_block}
 EOF
 
   setup_caddy_service
-  systemctl restart caddy
+  if [[ "$INIT_SYS" == "openrc" ]]; then
+    rc-service caddy restart >/dev/null 2>&1 || true
+  else
+    systemctl restart caddy
+  fi
 
   echo "  [+] 正在启动本地 Caddy 分流服务与 Cloudflare 隧道..."
   setup_cloudflared_service "$tunnel_token" "$tunnel_port"
@@ -1400,8 +1521,19 @@ with open(p, 'w') as f:
 " 2>/dev/null || true
 
   # 6. 重启 Caddy 服务
-  if systemctl restart caddy 2>/dev/null; then
-    systemctl enable caddy 2>/dev/null || true
+  local caddy_restart_ok=0
+  if [[ "$INIT_SYS" == "openrc" ]]; then
+    if rc-service caddy restart 2>/dev/null; then
+      rc-update add caddy default 2>/dev/null || true
+      caddy_restart_ok=1
+    fi
+  else
+    if systemctl restart caddy 2>/dev/null; then
+      systemctl enable caddy 2>/dev/null || true
+      caddy_restart_ok=1
+    fi
+  fi
+  if [[ "$caddy_restart_ok" -eq 1 ]]; then
     echo -e "  ${G}[✓] Caddy 反代服务已重新加载最新分流配置并成功启动！${N}"
   else
     echo -e "  ${R}[×] Caddy 重启失败，请检查 Caddyfile 或端口占用${N}"
@@ -1410,17 +1542,27 @@ with open(p, 'w') as f:
 
 remove_caddy_proxy() {
   echo "  [-] 正在关闭 Cloudflare隧道连接和Caddy流量代理..."
-  systemctl stop cloudflared 2>/dev/null || true
-  systemctl disable cloudflared 2>/dev/null || true
-  systemctl stop caddy 2>/dev/null || true
-  systemctl disable caddy 2>/dev/null || true
+  if [[ "$INIT_SYS" == "openrc" ]]; then
+    rc-service cloudflared stop 2>/dev/null || true
+    rc-update del cloudflared default 2>/dev/null || true
+    rc-service caddy stop 2>/dev/null || true
+    rc-update del caddy default 2>/dev/null || true
+    pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
+    pkill -9 -f "/usr/local/bin/caddy" 2>/dev/null || true
+  else
+    systemctl stop cloudflared 2>/dev/null || true
+    systemctl disable cloudflared 2>/dev/null || true
+    systemctl stop caddy 2>/dev/null || true
+    systemctl disable caddy 2>/dev/null || true
+  fi
+  rm -f /etc/init.d/caddy /etc/init.d/cloudflared /etc/systemd/system/caddy.service /etc/systemd/system/cloudflared.service 2>/dev/null || true
   rm -f "$CADDY_META" "$DOMAIN_FILE" "$QUICK_SCRIPT" /var/log/cloudflared_quick.log 2>/dev/null || true
 
   # 恢复 sout 为独立公网监听
   if [[ -f "${WORK_DIR}/settings.json" ]]; then
     sed -i 's|"listen_addr": "127.0.0.1"|"listen_addr": "0.0.0.0"|g' "${WORK_DIR}/settings.json"
     sed -i 's|"port": [0-9]*|"port": 8899|g' "${WORK_DIR}/settings.json"
-    systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || true
+    systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || rc-service sout restart 2>/dev/null || true
   fi
 
     # 恢复 s-ui 为公网监听（读取当前端口/路径后通过 API 修改，避免直接写库）
@@ -1459,7 +1601,7 @@ req = urllib.request.Request(BASE.rstrip('/') + '/save', data=form, headers={'To
 with urllib.request.urlopen(req, timeout=20) as resp:
     resp.read()
 PY
-        systemctl restart s-ui 2>/dev/null || true
+        systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || true
       fi
     fi
 

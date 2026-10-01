@@ -330,7 +330,9 @@ func (sb *SingBox) restartService() {
 	if hasCmd("systemctl") && dirExists("/run/systemd/system") {
 		_ = exec.Command("systemctl", "restart", "sing-box").Run()
 	} else if hasCmd("rc-service") {
-		_ = exec.Command("rc-service", "sing-box", "restart").Run()
+		_ = exec.Command("rc-service", "sing-box", "stop").Run()
+		time.Sleep(300 * time.Millisecond)
+		_ = exec.Command("rc-service", "sing-box", "start").Run()
 	} else if hasCmd("service") {
 		_ = exec.Command("service", "sing-box", "restart").Run()
 	}

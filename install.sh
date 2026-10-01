@@ -29,6 +29,133 @@ detect_init() {
 }
 INIT_SYS=$(detect_init)
 
+detect_pkg_mgr() {
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "apt"
+  elif command -v dnf >/dev/null 2>&1; then
+    echo "dnf"
+  elif command -v yum >/dev/null 2>&1; then
+    echo "yum"
+  elif command -v pacman >/dev/null 2>&1; then
+    echo "pacman"
+  elif command -v zypper >/dev/null 2>&1; then
+    echo "zypper"
+  elif command -v apk >/dev/null 2>&1; then
+    echo "apk"
+  else
+    echo "unknown"
+  fi
+}
+
+install_pkgs() {
+  local mgr="$1"
+  shift
+  local pkgs=("$@")
+  case "$mgr" in
+    apt)
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -qq && apt-get install -y -qq "${pkgs[@]}"
+      ;;
+    dnf)
+      dnf install -y -q "${pkgs[@]}"
+      ;;
+    yum)
+      yum install -y -q "${pkgs[@]}"
+      ;;
+    pacman)
+      pacman -Sy --noconfirm "${pkgs[@]}"
+      ;;
+    zypper)
+      zypper --non-interactive install -y "${pkgs[@]}"
+      ;;
+    apk)
+      apk add --no-cache "${pkgs[@]}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+kill_port() {
+  local port="$1"
+  [[ -z "$port" ]] && return 0
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -k -9 "${port}/tcp" >/dev/null 2>&1 || true
+  elif command -v ss >/dev/null 2>&1; then
+    local pids
+    pids=$(ss -tlpn "sport = :${port}" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u)
+    if [[ -n "$pids" ]]; then
+      echo "$pids" | xargs -r kill -9 >/dev/null 2>&1 || true
+    fi
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -ti ":${port}" 2>/dev/null | xargs -r kill -9 >/dev/null 2>&1 || true
+  fi
+}
+
+check_and_install_deps() {
+  echo
+  echo "================================================================"
+  echo "  🚀 开始安装部署 sout - s-ui 动态家宽出口插件"
+  echo "================================================================"
+  echo "[1/6] 检查系统基础依赖..."
+  local mgr
+  mgr=$(detect_pkg_mgr)
+  local needed=()
+  local base_cmds=(curl tar ip ss python3)
+  if check_sui; then
+    base_cmds+=(sqlite3)
+  fi
+  for cmd in "${base_cmds[@]}"; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      needed+=("$cmd")
+    fi
+  done
+
+  # 在 Alpine (apk) 环境下，检测 tar 是否为 busybox 版本。如果是，确保安装 GNU tar 以支持完整选项
+  if [[ "$mgr" == "apk" ]]; then
+    if tar --version 2>&1 | grep -iq "busybox"; then
+      needed+=("tar")
+    fi
+    if ! command -v ss >/dev/null 2>&1; then
+      needed+=("ss")
+    fi
+  fi
+
+  if [[ ${#needed[@]} -gt 0 ]]; then
+    echo "      发现缺失或需要补充的命令: ${needed[*]}，正在匹配软件包..."
+    local pkgs=()
+    for cmd in "${needed[@]}"; do
+      case "$cmd" in
+        curl) pkgs+=("curl") ;;
+        tar)  pkgs+=("tar") ;;
+        ip)   pkgs+=("iproute2") ;;
+        ss)   pkgs+=("iproute2") ;;
+        python3) pkgs+=("python3") ;;
+        sqlite3) [[ "$mgr" == "apk" ]] && pkgs+=("sqlite") || pkgs+=("sqlite3") ;;
+      esac
+    done
+
+    # 数组去重
+    local uniq_pkgs=()
+    for p in "${pkgs[@]}"; do
+      local dup=0
+      for u in "${uniq_pkgs[@]}"; do
+        [[ "$u" == "$p" ]] && dup=1 && break
+      done
+      [[ $dup -eq 0 ]] && uniq_pkgs+=("$p")
+    done
+
+    echo "      正在自动安装: ${uniq_pkgs[*]}"
+    install_pkgs "$mgr" "${uniq_pkgs[@]}" || {
+      echo "      自动安装依赖失败，请手动安装: ${uniq_pkgs[*]}" >&2
+      exit 1
+    }
+  else
+    echo "      基础依赖已完整。"
+  fi
+}
+
 check_sui() {
   if [[ -f /usr/local/s-ui/db/s-ui.db ]] || [[ -f /usr/local/s-ui/s-ui ]] || command -v sui >/dev/null 2>&1 || [[ -f /usr/local/s-ui/sui ]]; then
     return 0
@@ -211,15 +338,32 @@ command_background="yes"
 pidfile="/run/sing-box.pid"
 output_log="/var/log/sing-box.log"
 error_log="/var/log/sing-box.err"
+respawn_delay=3
 
 depend() {
   need net
   after firewall
 }
+
+start_pre() {
+  if [ -f "$pidfile" ]; then
+    local p
+    p=$(cat "$pidfile" 2>/dev/null)
+    if [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; then
+      rm -f "$pidfile"
+    fi
+  fi
+}
+
+stop_post() {
+  rm -f "$pidfile"
+}
 SBRC
     chmod +x /etc/init.d/sing-box
     rc-update add sing-box default >/dev/null 2>&1 || true
-    rc-service sing-box restart >/dev/null 2>&1 || true
+    rc-service sing-box stop >/dev/null 2>&1 || true
+    sleep 0.3
+    rc-service sing-box start >/dev/null 2>&1 || true
   fi
 
   mkdir -p "$WORK_DIR"
@@ -626,6 +770,7 @@ SUI_ADMIN_USER=""
 SUI_ADMIN_PASS=""
 SUI_PASS_IS_RANDOM=0
 
+check_and_install_deps
 ensure_backend
 
 # 若未抓取到随机用户名（如已预装或用户在官方脚本中自定义设置），从数据库读取用户名
@@ -682,11 +827,26 @@ command_args="-dir /var/lib/sout"
 command_background="yes"
 pidfile="/run/sout.pid"
 output_log="/var/log/sout.log"
-error_log="/var/log/sout.err"
+error_log="/var/log/sout.log"
+respawn_delay=3
 
 depend() {
   need net
   after firewall
+}
+
+start_pre() {
+  if [ -f "$pidfile" ]; then
+    local p
+    p=$(cat "$pidfile" 2>/dev/null)
+    if [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; then
+      rm -f "$pidfile"
+    fi
+  fi
+}
+
+stop_post() {
+  rm -f "$pidfile"
 }
 OPENRCEOF
     chmod +x /etc/init.d/sout
@@ -696,12 +856,22 @@ OPENRCEOF
 
 svc_enable_start() {
   echo "      正在启动服务..."
+  local web_p="${WEB_PORT:-8899}"
+  if [[ -f "${WORK_DIR}/settings.json" ]]; then
+    local parsed_p
+    parsed_p=$(grep -oE '"port"[[:space:]]*:[[:space:]]*[0-9]+' "${WORK_DIR}/settings.json" 2>/dev/null | grep -oE '[0-9]+' || true)
+    [[ -n "$parsed_p" ]] && web_p="$parsed_p"
+  fi
+  kill_port "$web_p"
+
   if [[ "$INIT_SYS" == systemd ]]; then
     systemctl enable sout >/dev/null 2>&1 || true
     systemctl restart sout
   else
     rc-update add sout default >/dev/null 2>&1 || true
-    rc-service sout restart
+    rc-service sout stop >/dev/null 2>&1 || true
+    sleep 0.3
+    rc-service sout start
   fi
 }
 
@@ -721,91 +891,8 @@ svc_logs_hint() {
   fi
 }
 
-detect_pkg_mgr() {
-  if command -v apt-get >/dev/null 2>&1; then
-    echo "apt"
-  elif command -v dnf >/dev/null 2>&1; then
-    echo "dnf"
-  elif command -v yum >/dev/null 2>&1; then
-    echo "yum"
-  elif command -v pacman >/dev/null 2>&1; then
-    echo "pacman"
-  elif command -v zypper >/dev/null 2>&1; then
-    echo "zypper"
-  elif command -v apk >/dev/null 2>&1; then
-    echo "apk"
-  else
-    echo "unknown"
-  fi
-}
-
-install_pkgs() {
-  local mgr="$1"
-  shift
-  local pkgs=("$@")
-  case "$mgr" in
-    apt)
-      export DEBIAN_FRONTEND=noninteractive
-      apt-get update -qq && apt-get install -y -qq "${pkgs[@]}"
-      ;;
-    dnf)
-      dnf install -y -q "${pkgs[@]}"
-      ;;
-    yum)
-      yum install -y -q "${pkgs[@]}"
-      ;;
-    pacman)
-      pacman -Sy --noconfirm "${pkgs[@]}"
-      ;;
-    zypper)
-      zypper --non-interactive install -y "${pkgs[@]}"
-      ;;
-    apk)
-      apk add --no-cache "${pkgs[@]}"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-echo
-echo "================================================================"
-echo "  🚀 开始安装部署 sout - s-ui 动态家宽出口插件"
-echo "================================================================"
-
-echo "[1/6] 检查系统依赖..."
 MGR=$(detect_pkg_mgr)
-needed=()
-base_cmds=(curl tar ip ss python3)
-if check_sui; then
-  base_cmds+=(sqlite3)
-fi
-for cmd in "${base_cmds[@]}"; do
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    needed+=("$cmd")
-  fi
-done
 
-if [[ ${#needed[@]} -gt 0 ]]; then
-  echo "      发现缺失命令: ${needed[*]}，正在匹配软件包..."
-  pkgs=()
-  for cmd in "${needed[@]}"; do
-    case "$cmd" in
-      curl) pkgs+=("curl") ;;
-      tar)  pkgs+=("tar") ;;
-      ip)   [[ "$MGR" == "apk" ]] && pkgs+=("iproute2") || pkgs+=("iproute2") ;;
-      ss)   [[ "$MGR" == "apk" ]] && pkgs+=("iproute2") || pkgs+=("iproute2") ;;
-      python3) pkgs+=("python3") ;;
-      sqlite3) [[ "$MGR" == "apk" ]] && pkgs+=("sqlite") || pkgs+=("sqlite3") ;;
-    esac
-  done
-  echo "      正在自动安装: ${pkgs[*]}"
-  install_pkgs "$MGR" "${pkgs[@]}" || {
-    echo "      自动安装依赖失败，请手动安装: ${pkgs[*]}" >&2
-    exit 1
-  }
-fi
 
 echo "[2/6] 获取 sout 二进制文件..."
 ARCH=$(uname -m)
@@ -914,16 +1001,33 @@ command_background="yes"
 pidfile="/run/sing-box.pid"
 output_log="/var/log/sing-box.log"
 error_log="/var/log/sing-box.err"
+respawn_delay=3
 
 depend() {
   need net
   after firewall
 }
+
+start_pre() {
+  if [ -f "$pidfile" ]; then
+    local p
+    p=$(cat "$pidfile" 2>/dev/null)
+    if [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; then
+      rm -f "$pidfile"
+    fi
+  fi
+}
+
+stop_post() {
+  rm -f "$pidfile"
+}
 SBRC
       chmod +x /etc/init.d/sing-box
     fi
     rc-update add sing-box default >/dev/null 2>&1 || true
-    rc-service sing-box restart >/dev/null 2>&1 || true
+    rc-service sing-box stop >/dev/null 2>&1 || true
+    sleep 0.3
+    rc-service sing-box start >/dev/null 2>&1 || true
   fi
 elif [[ "$backend_kind" == "s-ui" ]] || check_sui; then
   echo -n "s-ui" > "${WORK_DIR}/panel_mode"

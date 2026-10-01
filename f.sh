@@ -52,6 +52,37 @@ EOF
   chmod +x "$init"
 }
 
+kill_port() {
+  local port="$1"
+  [[ -z "$port" ]] && return 0
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -k -9 "${port}/tcp" >/dev/null 2>&1 || true
+  elif command -v ss >/dev/null 2>&1; then
+    local pids
+    pids=$(ss -tlpn "sport = :${port}" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u)
+    if [[ -n "$pids" ]]; then
+      echo "$pids" | xargs -r kill -9 >/dev/null 2>&1 || true
+    fi
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -ti ":${port}" 2>/dev/null | xargs -r kill -9 >/dev/null 2>&1 || true
+  fi
+}
+
+_openrc_clean_ports() {
+  local name="$1"
+  case "$name" in
+    sout|fanout)
+      local p="8899"
+      if [[ -f "/var/lib/sout/settings.json" ]]; then
+        local sp
+        sp=$(grep -oE '"port"[[:space:]]*:[[:space:]]*[0-9]+' "/var/lib/sout/settings.json" 2>/dev/null | grep -oE '[0-9]+' || true)
+        [[ -n "$sp" ]] && p="$sp"
+      fi
+      kill_port "$p"
+      ;;
+  esac
+}
+
 _openrc_force_stop() {
   local name="$1"
   case "$name" in
@@ -68,6 +99,9 @@ _openrc_force_stop() {
       ;;
     cloudflared)
       pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
+      ;;
+    sing-box)
+      pkill -9 -f "/usr/local/bin/sing-box" 2>/dev/null || true
       ;;
   esac
 }
@@ -114,19 +148,23 @@ systemctl() {
       return 1
       ;;
     start|stop|restart)
-      if [[ "$name" == "caddy" || "$name" == "cloudflared" ]]; then
+      if [[ "$name" == "caddy" || "$name" == "cloudflared" || "$name" == "sing-box" ]]; then
         _openrc_init_from_unit "$name" || true
       fi
       if [[ -x /etc/init.d/${name} ]]; then
         if [[ "$action" == "restart" ]]; then
           rc-service "$name" stop >/dev/null 2>&1 || true
           _openrc_force_stop "$name"
+          _openrc_clean_ports "$name"
           sleep 0.3
           rc-service "$name" start
         elif [[ "$action" == "stop" ]]; then
           rc-service "$name" stop >/dev/null 2>&1 || true
           _openrc_force_stop "$name"
         else
+          _openrc_force_stop "$name"
+          _openrc_clean_ports "$name"
+          sleep 0.2
           rc-service "$name" start
         fi
       else
@@ -1051,6 +1089,14 @@ uninstall_sout_only() {
   svc_disable >/dev/null 2>&1 || true
   systemctl stop fanout 2>/dev/null || true
   systemctl disable fanout 2>/dev/null || true
+  rc-service sout stop 2>/dev/null || true
+  rc-update del sout default 2>/dev/null || true
+  rc-service fanout stop 2>/dev/null || true
+  rc-update del fanout default 2>/dev/null || true
+  rc-service caddy stop 2>/dev/null || true
+  rc-update del caddy default 2>/dev/null || true
+  rc-service cloudflared stop 2>/dev/null || true
+  rc-update del cloudflared default 2>/dev/null || true
 
   # 1. 彻底清理 s-ui 中由 sout 创建的出入站、分流路由、clients 与注入的 API Token
   cleanup_sui
@@ -1248,6 +1294,18 @@ uninstall_all() {
   svc_disable >/dev/null 2>&1 || true
   systemctl stop fanout 2>/dev/null || true
   systemctl disable fanout 2>/dev/null || true
+  rc-service sout stop 2>/dev/null || true
+  rc-update del sout default 2>/dev/null || true
+  rc-service fanout stop 2>/dev/null || true
+  rc-update del fanout default 2>/dev/null || true
+  rc-service caddy stop 2>/dev/null || true
+  rc-update del caddy default 2>/dev/null || true
+  rc-service cloudflared stop 2>/dev/null || true
+  rc-update del cloudflared default 2>/dev/null || true
+  rc-service s-ui stop 2>/dev/null || true
+  rc-update del s-ui default 2>/dev/null || true
+  rc-service sing-box stop 2>/dev/null || true
+  rc-update del sing-box default 2>/dev/null || true
   for ns in $(ip netns list 2>/dev/null | awk '{print $1}' | grep -E '^(fo|so)[0-9]'); do
     ip netns del "$ns" 2>/dev/null || true
   done

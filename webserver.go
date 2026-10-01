@@ -66,7 +66,19 @@ func (s *webServer) reload(cfg WebSettings) error {
 		}()
 	}
 
-	rawLn, err := net.Listen("tcp", addr)
+	var rawLn net.Listener
+	var err error
+	for attempt := 0; attempt < 5; attempt++ {
+		rawLn, err = net.Listen("tcp", addr)
+		if err == nil {
+			break
+		}
+		if strings.Contains(err.Error(), "address already in use") {
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		break
+	}
 	if err != nil {
 		if oldLn != nil && s.addr != "" && s.addr != addr {
 			if rln, rerr := net.Listen("tcp", s.addr); rerr == nil {
