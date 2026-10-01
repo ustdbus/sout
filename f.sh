@@ -456,21 +456,27 @@ EOF
       local svc_memlimit="35MiB"
       local svc_gogc="100"
 
+      local swap_opt=""
+      if [[ $mem_mb -le 270 ]]; then
+        swap_opt="MemorySwapMax=0"
+      fi
+
       if [[ $mem_mb -le 135 ]]; then
+        sb_memlimit="25MiB"
+        sb_gogc="100"
+        svc_memlimit="25MiB"
+        svc_gogc="50"
+      elif [[ $mem_mb -le 270 ]]; then
         sb_memlimit="35MiB"
         sb_gogc="100"
         svc_memlimit="30MiB"
-        svc_gogc="50"
-      elif [[ $mem_mb -le 270 ]]; then
-        sb_memlimit="45MiB"
-        sb_gogc="100"
-        svc_memlimit="35MiB"
         svc_gogc="50"
       fi
 
       mkdir -p /etc/systemd/system/sing-box.service.d 2>/dev/null || true
       cat > /etc/systemd/system/sing-box.service.d/override.conf <<EOF
 [Service]
+${swap_opt}
 Environment="GOMEMLIMIT=${sb_memlimit}"
 Environment="GOGC=${sb_gogc}"
 EOF
@@ -479,6 +485,7 @@ EOF
         mkdir -p "/etc/systemd/system/${svc}.service.d" 2>/dev/null || true
         cat > "/etc/systemd/system/${svc}.service.d/override.conf" <<EOF
 [Service]
+${swap_opt}
 Environment="GOMEMLIMIT=${svc_memlimit}"
 Environment="GOGC=${svc_gogc}"
 EOF
