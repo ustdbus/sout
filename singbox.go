@@ -868,7 +868,8 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 	}
 
 	var links []string
-	for _, item := range addrs {
+	for _, rawItem := range addrs {
+		item := sanitizeNodeAddrItem(rawItem, listenPort)
 		connectHost := strings.TrimSpace(item.Server)
 		if connectHost == "" {
 			connectHost = defaultHost
@@ -910,7 +911,15 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 				itemHasTLS = true
 			}
 			if sName, ok := item.TLS["server_name"].(string); ok && sName != "" {
-				itemSNI = sName
+				sName = strings.TrimSpace(sName)
+				// 若当前节点是 Reality，SNI 只能是伪装域名，严禁使用任何 IP 地址
+				if isReality {
+					if net.ParseIP(sName) == nil && !strings.Contains(sName, ":") {
+						itemSNI = sName
+					}
+				} else {
+					itemSNI = sName
+				}
 			}
 			if insec, ok := item.TLS["insecure"].(bool); ok && insec {
 				itemInsecure = "1"
@@ -945,7 +954,7 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 		if itemSNI == "" || itemSNI == "127.0.0.1" || itemSNI == "0.0.0.0" {
 			if wsHost != "" && net.ParseIP(wsHost) == nil {
 				itemSNI = wsHost
-			} else if net.ParseIP(connectHost) == nil {
+			} else if net.ParseIP(connectHost) == nil && !strings.Contains(connectHost, ":") {
 				itemSNI = connectHost
 			}
 		}
@@ -2026,7 +2035,7 @@ func (sb *SingBox) UpdateNodeConfig(id int, listen string, listenPort int, addrs
 		}
 		if tlsEnabled {
 			targetSNI := sni
-			if targetSNI == "" && net.ParseIP(a.Server) == nil {
+			if targetSNI == "" && net.ParseIP(a.Server) == nil && !strings.Contains(a.Server, ":") {
 				targetSNI = a.Server
 			}
 			item["tls"] = map[string]any{

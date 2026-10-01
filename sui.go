@@ -2037,8 +2037,9 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 	}
 
 	var links []string
-	for _, addr := range addrs {
-		host := addr.Server
+	for _, rawAddr := range addrs {
+		cleaned := sanitizeNodeAddrItem(NodeAddrItem{Server: rawAddr.Server, ServerPort: rawAddr.ServerPort, Remark: rawAddr.Remark}, out.ServerPort)
+		host := cleaned.Server
 		if host == "" {
 			host = publicHost
 		}
@@ -2049,7 +2050,7 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 				host = s.Host
 			}
 		}
-		port := addr.ServerPort
+		port := cleaned.ServerPort
 		if port <= 0 {
 			port = out.ServerPort
 		}
