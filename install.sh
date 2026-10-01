@@ -902,6 +902,28 @@ SBEU
     fi
     systemctl enable sing-box >/dev/null 2>&1 || true
     systemctl restart sing-box >/dev/null 2>&1 || true
+  else
+    if [[ ! -f /etc/init.d/sing-box ]]; then
+      cat > /etc/init.d/sing-box <<'SBRC'
+#!/sbin/openrc-run
+name="sing-box"
+description="sing-box service"
+command="/usr/local/bin/sing-box"
+command_args="run -c /etc/sing-box/config.json"
+command_background="yes"
+pidfile="/run/sing-box.pid"
+output_log="/var/log/sing-box.log"
+error_log="/var/log/sing-box.err"
+
+depend() {
+  need net
+  after firewall
+}
+SBRC
+      chmod +x /etc/init.d/sing-box
+    fi
+    rc-update add sing-box default >/dev/null 2>&1 || true
+    rc-service sing-box restart >/dev/null 2>&1 || true
   fi
 elif [[ "$backend_kind" == "s-ui" ]] || check_sui; then
   echo -n "s-ui" > "${WORK_DIR}/panel_mode"
