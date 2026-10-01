@@ -5015,7 +5015,10 @@ menu() {
       *) ;;
     esac
   done
-}
+# 如果是被 source 载入而非直接执行，直接返回，避免在无 TTY 环境下误入交互菜单死循环
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 need_root
 apply_sysctl_optimization
