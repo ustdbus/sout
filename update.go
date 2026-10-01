@@ -384,10 +384,8 @@ func restartSelf() {
 		if exec.Command("rc-service", "sout", "status").Run() != nil && exec.Command("rc-service", "fanout", "status").Run() == nil {
 			svc = "fanout"
 		}
-		_ = exec.Command("rc-service", svc, "stop").Run()
-		_ = exec.Command("rc-service", svc, "zap").Run()
-		time.Sleep(300 * time.Millisecond)
-		_ = exec.Command("rc-service", svc, "start").Start()
+		// 必须通过独立后台子进程延迟重启，否则当前 sout 进程会在被 stop 信号击中后直接退出，导致后续 start 无法执行
+		_ = exec.Command("sh", "-c", fmt.Sprintf("sleep 1 && rc-service %s zap && rc-service %s restart", svc, svc)).Start()
 		return
 	}
 	// 没有 init 系统托管：直接退出，让外部守护（若有）拉起；
