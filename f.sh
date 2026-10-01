@@ -110,19 +110,24 @@ _openrc_init_from_unit() {
 export GOGC=\"${ggc}\""
   fi
 
+  local supervisor_line="command_background=\"yes\""
+  if command -v supervise-daemon >/dev/null 2>&1; then
+    supervisor_line="supervisor=\"supervise-daemon\""
+  fi
+
   mkdir -p /var/log
   cat > "$init" <<EOF
 #!/sbin/openrc-run
 name="$name"
 description="$name service"
 ${env_export}
+${supervisor_line}
 command="$command"
 command_args="$command_args"
-command_background="yes"
-pidfile="/run/${name}.pid"
 output_log="/var/log/${name}.log"
 error_log="/var/log/${name}.log"
-respawn_delay=3
+respawn_delay=2
+respawn_max=0
 
 depend() {
     need net

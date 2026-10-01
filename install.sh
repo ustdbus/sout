@@ -409,19 +409,22 @@ SBEU
     systemctl daemon-reload
     systemctl enable sing-box >/dev/null 2>&1 || true
     systemctl restart sing-box >/dev/null 2>&1 || true
-  else
+    local supervisor_line="command_background=\"yes\"\npidfile=\"/run/sing-box.pid\""
+    if command -v supervise-daemon >/dev/null 2>&1; then
+      supervisor_line="supervisor=\"supervise-daemon\""
+    fi
     cat > /etc/init.d/sing-box <<SBRC
 #!/sbin/openrc-run
 name="sing-box"
 description="sing-box service"
 ${sb_env_openrc}
+${supervisor_line}
 command="/usr/local/bin/sing-box"
 command_args="run -c /etc/sing-box/config.json"
-command_background="yes"
-pidfile="/run/sing-box.pid"
 output_log="/var/log/sing-box.log"
 error_log="/var/log/sing-box.err"
-respawn_delay=3
+respawn_delay=2
+respawn_max=0
 
 depend() {
   need net
@@ -1203,19 +1206,22 @@ SBEU
     systemctl enable sing-box >/dev/null 2>&1 || true
     systemctl restart sing-box >/dev/null 2>&1 || true
   else
-    if [[ ! -f /etc/init.d/sing-box ]]; then
+      local supervisor_line="command_background=\"yes\"\npidfile=\"/run/sing-box.pid\""
+      if command -v supervise-daemon >/dev/null 2>&1; then
+        supervisor_line="supervisor=\"supervise-daemon\""
+      fi
       cat > /etc/init.d/sing-box <<SBRC
 #!/sbin/openrc-run
 name="sing-box"
 description="sing-box service"
 ${sb_env_openrc}
+${supervisor_line}
 command="/usr/local/bin/sing-box"
 command_args="run -c /etc/sing-box/config.json"
-command_background="yes"
-pidfile="/run/sing-box.pid"
 output_log="/var/log/sing-box.log"
 error_log="/var/log/sing-box.err"
-respawn_delay=3
+respawn_delay=2
+respawn_max=0
 
 depend() {
   need net
