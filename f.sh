@@ -1367,21 +1367,47 @@ update_singbox_kernel() {
   tmp_dir=$(mktemp -d)
   trap 'rm -rf "$tmp_dir"' RETURN
 
-  local download_urls=(
-    "https://github.com/SagerNet/sing-box/releases/download/${tag}/sing-box-${ver}-linux-${arch}.tar.gz"
-    "https://ghproxy.net/https://github.com/SagerNet/sing-box/releases/download/${tag}/sing-box-${ver}-linux-${arch}.tar.gz"
-    "https://mirror.ghproxy.com/https://github.com/SagerNet/sing-box/releases/download/${tag}/sing-box-${ver}-linux-${arch}.tar.gz"
-  )
+  local is_musl=0
+  if [[ -f /etc/alpine-release ]] || (ldd --version 2>&1 | grep -iq musl); then
+    is_musl=1
+  fi
+
+  local pkg_candidates=()
+  if [[ "$is_musl" -eq 1 ]]; then
+    pkg_candidates+=("sing-box-${ver}-linux-${arch}-musl.tar.gz" "sing-box-${ver}-linux-${arch}.tar.gz")
+  else
+    pkg_candidates+=("sing-box-${ver}-linux-${arch}.tar.gz" "sing-box-${ver}-linux-${arch}-glibc.tar.gz")
+  fi
+
+  local download_urls=()
+  for pkg in "${pkg_candidates[@]}"; do
+    download_urls+=(
+      "https://github.com/SagerNet/sing-box/releases/download/${tag}/${pkg}"
+      "https://ghproxy.net/https://github.com/SagerNet/sing-box/releases/download/${tag}/${pkg}"
+    )
+  done
 
   local dl_ok=0
   for u in "${download_urls[@]}"; do
     echo -e "  正在下载: ${u} ..."
-    rm -f /usr/local/bin/sing-box
-    if curl -fL -# --connect-timeout 10 --max-time 180 "$u" | tar -xzf - --wildcards "*/sing-box" -O > /usr/local/bin/sing-box 2>/dev/null && [[ -s /usr/local/bin/sing-box ]]; then
-      chmod 755 /usr/local/bin/sing-box
-      if /usr/local/bin/sing-box version >/dev/null 2>&1; then
-        dl_ok=1
-        break
+    rm -rf "${tmp_dir:?}"/* /usr/local/bin/sing-box
+    local archive_file="${tmp_dir}/sing-box.tar.gz"
+    if curl -fL -# --connect-timeout 10 --max-time 180 "$u" -o "$archive_file" && [[ -s "$archive_file" ]]; then
+      if tar -xzf "$archive_file" -C "$tmp_dir" --strip-components=1 2>/dev/null || tar -xzf "$archive_file" -C "$tmp_dir" 2>/dev/null; then
+        local extracted_bin=""
+        if [[ -f "${tmp_dir}/sing-box" ]]; then
+          extracted_bin="${tmp_dir}/sing-box"
+        else
+          extracted_bin=$(find "$tmp_dir" -type f -name "sing-box" 2>/dev/null | head -1)
+        fi
+        if [[ -n "$extracted_bin" && -f "$extracted_bin" ]]; then
+          mv -f "$extracted_bin" /usr/local/bin/sing-box
+          chmod 755 /usr/local/bin/sing-box
+          if /usr/local/bin/sing-box version >/dev/null 2>&1; then
+            dl_ok=1
+            break
+          fi
+        fi
       fi
     fi
   done
