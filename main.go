@@ -22,7 +22,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v3.7.4"
+var version = "v3.7.5"
 
 func initLowMemoryProtection() {
 	var memTotalKB int64
@@ -1135,6 +1135,12 @@ func apiNodeUpdate(m *Manager) http.HandlerFunc {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 			return
 		}
+
+		var cleanedAddrs []NodeAddrItem
+		for _, a := range req.Addrs {
+			cleanedAddrs = append(cleanedAddrs, sanitizeNodeAddrItem(a, req.ListenPort))
+		}
+		req.Addrs = cleanedAddrs
 
 		if err := p.UpdateNodeConfig(req.ID, req.Listen, req.ListenPort, req.Addrs, req.TLSEnabled, req.SNI, m.Tunnels()); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

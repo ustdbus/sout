@@ -2123,7 +2123,7 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 					v.Set("flow", flow)
 				}
 			}
-			links = append(links, fmt.Sprintf("vless://%s@%s:%d?%s#%s", uuidStr, host, port, v.Encode(), url.PathEscape(remark)))
+			links = append(links, fmt.Sprintf("vless://%s@%s:%d?%s#%s", uuidStr, formatURLHost(host), port, v.Encode(), url.PathEscape(remark)))
 
 		case "tuic":
 			uuidStr, _ := clientCfg["tuic"]["uuid"].(string)
@@ -2148,7 +2148,7 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 			if out.CongestionControl != "" {
 				v.Set("congestion_control", out.CongestionControl)
 			}
-			links = append(links, fmt.Sprintf("tuic://%s:%s@%s:%d?%s#%s", uuidStr, passStr, targetHost, port, v.Encode(), url.PathEscape(remark)))
+			links = append(links, fmt.Sprintf("tuic://%s:%s@%s:%d?%s#%s", uuidStr, passStr, formatURLHost(targetHost), port, v.Encode(), url.PathEscape(remark)))
 
 		case "trojan":
 			passStr, _ := clientCfg["trojan"]["password"].(string)
@@ -2159,15 +2159,15 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 					v.Set("sni", out.TLS.ServerName)
 				}
 			}
-			links = append(links, fmt.Sprintf("trojan://%s@%s:%d?%s#%s", passStr, host, port, v.Encode(), url.PathEscape(remark)))
+			links = append(links, fmt.Sprintf("trojan://%s@%s:%d?%s#%s", passStr, formatURLHost(host), port, v.Encode(), url.PathEscape(remark)))
 
 		case "socks", "socks5":
 			user, _ := clientCfg["socks"]["username"].(string)
 			pass, _ := clientCfg["socks"]["password"].(string)
 			if user != "" || pass != "" {
-				links = append(links, fmt.Sprintf("socks5://%s:%s@%s:%d#%s", url.QueryEscape(user), url.QueryEscape(pass), host, port, url.PathEscape(remark)))
+				links = append(links, fmt.Sprintf("socks5://%s:%s@%s:%d#%s", url.QueryEscape(user), url.QueryEscape(pass), formatURLHost(host), port, url.PathEscape(remark)))
 			} else {
-				links = append(links, fmt.Sprintf("socks5://%s:%d#%s", host, port, url.PathEscape(remark)))
+				links = append(links, fmt.Sprintf("socks5://%s:%d#%s", formatURLHost(host), port, url.PathEscape(remark)))
 			}
 
 		case "http", "mixed":
@@ -2178,9 +2178,9 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 				pass, _ = clientCfg["mixed"]["password"].(string)
 			}
 			if user != "" || pass != "" {
-				links = append(links, fmt.Sprintf("http://%s:%s@%s:%d#%s", url.QueryEscape(user), url.QueryEscape(pass), host, port, url.PathEscape(remark)))
+				links = append(links, fmt.Sprintf("http://%s:%s@%s:%d#%s", url.QueryEscape(user), url.QueryEscape(pass), formatURLHost(host), port, url.PathEscape(remark)))
 			} else {
-				links = append(links, fmt.Sprintf("http://%s:%d#%s", host, port, url.PathEscape(remark)))
+				links = append(links, fmt.Sprintf("http://%s:%d#%s", formatURLHost(host), port, url.PathEscape(remark)))
 			}
 
 		case "shadowsocks", "ss":
@@ -2190,7 +2190,7 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 				methodStr = "2022-blake3-aes-128-gcm"
 			}
 			auth := base64.URLEncoding.EncodeToString([]byte(methodStr + ":" + passStr))
-			links = append(links, fmt.Sprintf("ss://%s@%s:%d#%s", auth, host, port, url.PathEscape(remark)))
+			links = append(links, fmt.Sprintf("ss://%s@%s:%d#%s", auth, formatURLHost(host), port, url.PathEscape(remark)))
 
 		case "hysteria2", "hy2":
 			passStr, _ := clientCfg["hysteria2"]["password"].(string)
@@ -2211,7 +2211,7 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 			if out.TLS.Insecure {
 				v.Set("insecure", "1")
 			}
-			links = append(links, fmt.Sprintf("hysteria2://%s@%s:%d?%s#%s", passStr, targetHost, port, v.Encode(), url.PathEscape(remark)))
+			links = append(links, fmt.Sprintf("hysteria2://%s@%s:%d?%s#%s", passStr, formatURLHost(targetHost), port, v.Encode(), url.PathEscape(remark)))
 
 		case "vmess":
 			uuidStr, _ := clientCfg["vmess"]["uuid"].(string)

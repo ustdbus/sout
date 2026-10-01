@@ -3,11 +3,95 @@ package main
 import (
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 )
+
+// formatURLHost 保证在 URI（如 vless:// 等）中 host 部分符合 RFC 3986 规范（IPv6 地址自动包裹方括号）
+func formatURLHost(host string) string {
+	host = strings.TrimSpace(host)
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		return "[" + host + "]"
+	}
+	return host
+}
+
+// sanitizeNodeAddrItem 规范化处理 NodeAddrItem，确保 IPv6 地址干净且端口正确（自动剔除因重复追加造成的 :port:port 污染）
+func sanitizeNodeAddrItem(item NodeAddrItem, defaultPort int) NodeAddrItem {
+	server := strings.TrimSpace(item.Server)
+	port := item.ServerPort
+	if port <= 0 {
+		port = defaultPort
+	}
+	remark := strings.TrimSpace(item.Remark)
+
+	// 1. 若带有标准方括号形式: [2401:b60::2]:39192 或 [2401:b60::2]
+	if strings.HasPrefix(server, "[") {
+		if end := strings.Index(server, "]"); end != -1 {
+			rawHost := server[1:end]
+			after := strings.TrimSpace(server[end+1:])
+			if strings.HasPrefix(after, ":") {
+				if p, err := strconv.Atoi(strings.TrimSpace(after[1:])); err == nil && p > 0 && p <= 65535 {
+					port = p
+				}
+			}
+			server = rawHost
+		}
+	} else if ip := net.ParseIP(server); ip != nil {
+		// 2. 如果本身就是合法的纯 IP（IPv4 或 IPv6），直接使用，不剥离末段
+		server = ip.String()
+	} else if strings.Count(server, ":") > 1 {
+		// 3. 含有多个冒号且不是合法 IP，说明末尾可能附带了一个或多个被错误追加的端口（如 2401:...:39192 或 2401:...:39192:39192）
+		temp := server
+		for {
+			lastColon := strings.LastIndex(temp, ":")
+			if lastColon == -1 {
+				break
+			}
+			tail := strings.TrimSpace(temp[lastColon+1:])
+			left := strings.TrimSpace(temp[:lastColon])
+			if p, err := strconv.Atoi(tail); err == nil && p > 0 && p <= 65535 {
+				port = p
+				temp = left
+				if ip := net.ParseIP(temp); ip != nil {
+					temp = ip.String()
+					break
+				}
+				continue
+			}
+			break
+		}
+		server = temp
+	} else if strings.Count(server, ":") == 1 {
+		// 4. 只有一个冒号（标准 IPv4:port 或 domain:port）
+		lastColon := strings.LastIndex(server, ":")
+		tail := strings.TrimSpace(server[lastColon+1:])
+		left := strings.TrimSpace(server[:lastColon])
+		if p, err := strconv.Atoi(tail); err == nil && p > 0 && p <= 65535 {
+			server = left
+			port = p
+		}
+	}
+
+	server = strings.Trim(server, "[] \t")
+	return NodeAddrItem{
+		Server:     server,
+		ServerPort: port,
+		Remark:     remark,
+		TLS:        item.TLS,
+	}
+}
+
+type NodeAddrItem struct {
+	Server     string         `json:"server"`
+	ServerPort int            `json:"server_port"`
+	Remark     string         `json:"remark,omitempty"`
+	TLS        map[string]any `json:"tls,omitempty"`
+}
 
 // Panel 是 fanout 管理节点链接的后端。
 type Panel interface {
@@ -83,12 +167,6 @@ func sanitizeTag(name string) string {
 	return strings.ToLower(b.String())
 }
 
-type NodeAddrItem struct {
-	Server     string         `json:"server"`
-	ServerPort int            `json:"server_port"`
-	Remark     string         `json:"remark,omitempty"`
-	TLS        map[string]any `json:"tls,omitempty"`
-}
 
 type NodeDetailInfo struct {
 	ID           int            `json:"id"`

@@ -324,7 +324,7 @@ option{background:#161b22;color:var(--text);padding:8px}
         </div>
         <div style="color:var(--dim);font-size:11px;line-height:1.4;margin-top:6px">
           <div style="margin-bottom:2px">连接地址与端口 (一行一个，支持批量直接粘贴)</div>
-          格式示例：<code style="color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace">66.66.55.44</code>、<code style="color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace">66.66.55.44:443</code> 或 <code style="color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace">66.66.55.44:443#备注</code>（如未写端口将自动使用下方的监听端口）
+          格式示例：<code style="color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace">66.66.55.44:443</code>、<code style="color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace">[2401:b60::2]:443#HK1</code> 或纯 IP/域名（IPv6 请带方括号加端口，未写端口将使用下方监听端口）
         </div>
 
         <!-- 客户端 TLS 开关与 SNI -->
@@ -973,7 +973,19 @@ document.addEventListener('click', async e => {
 
         if(detail.addrs && detail.addrs.length){
           const lines = detail.addrs.map(a => {
-            let s = a.server || '';
+            let s = (a.server || '').trim();
+            if(s.startsWith('[') && s.endsWith(']')){
+              s = s.slice(1, -1).trim();
+            }
+            if(a.server_port){
+              const portSuffix = ':' + a.server_port;
+              while(s.endsWith(portSuffix) && s.includes(':')){
+                s = s.slice(0, -portSuffix.length).trim();
+              }
+            }
+            if(s.includes(':')){
+              s = '[' + s + ']';
+            }
             if(a.server_port) {
               s += ':' + a.server_port;
             }
@@ -1216,13 +1228,21 @@ $('#saveEditNodeBtn').onclick = async () => {
 
     if(hostPort.startsWith('[') && hostPort.includes(']')){
       const endBracket = hostPort.indexOf(']');
-      server = hostPort.substring(0, endBracket + 1);
+      server = hostPort.substring(1, endBracket).trim();
       const colon = hostPort.indexOf(':', endBracket);
       if(colon !== -1){
         const pStr = hostPort.substring(colon + 1).trim();
         const p = parseInt(pStr, 10);
         if(!isNaN(p) && p > 0 && p <= 65535) port = p;
       }
+    } else if(hostPort.includes(':') && hostPort.split(':').length > 2){
+      let clean = hostPort;
+      const portSuffix = ':' + listenPort;
+      while(clean.endsWith(portSuffix) && clean.split(':').length > 2){
+        clean = clean.slice(0, -portSuffix.length).trim();
+      }
+      server = clean;
+      port = listenPort;
     } else {
       const colonIdx = hostPort.lastIndexOf(':');
       if(colonIdx !== -1 && colonIdx === hostPort.indexOf(':')){
@@ -1233,6 +1253,10 @@ $('#saveEditNodeBtn').onclick = async () => {
           port = p;
         }
       }
+    }
+
+    if(server.startsWith('[') && server.endsWith(']')){
+      server = server.slice(1, -1).trim();
     }
 
     if(!server){
