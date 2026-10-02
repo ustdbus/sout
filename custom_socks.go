@@ -1638,6 +1638,14 @@ func parseSingBoxJSON(content string) (*CustomNode, error) {
 	pTypeLower := strings.ToLower(strings.TrimSpace(pType))
 	if pTypeLower == "" {
 		pTypeLower = "custom"
+	} else if pTypeLower == "socks" {
+		pTypeLower = "socks5"
+	} else if pTypeLower == "http" {
+		if tlsMap, ok := item["tls"].(map[string]any); ok {
+			if en, _ := tlsMap["enabled"].(bool); en {
+				pTypeLower = "https"
+			}
+		}
 	}
 	srv, _ := item["server"].(string)
 	port := 0
@@ -2178,6 +2186,14 @@ func ParseSubscriptionContent(content string) ([]CustomNode, error) {
 			pTypeLower := strings.ToLower(strings.TrimSpace(pType))
 			if pTypeLower == "" {
 				pTypeLower = "custom"
+			} else if pTypeLower == "socks" {
+				pTypeLower = "socks5"
+			} else if pTypeLower == "http" {
+				if tlsMap, ok := item["tls"].(map[string]any); ok {
+					if en, _ := tlsMap["enabled"].(bool); en {
+						pTypeLower = "https"
+					}
+				}
 			}
 			srv, _ := item["server"].(string)
 			port := 0
