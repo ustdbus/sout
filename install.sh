@@ -438,6 +438,11 @@ start_pre() {
     bin_name="\$(basename "\$command")"
     pkill -9 -x "\$bin_name" 2>/dev/null || true
   fi
+  if [ -f "/etc/sing-box/config.json" ]; then
+    for p in \$(grep -oE '"listen_port"[[:space:]]*:[[:space:]]*[0-9]+' /etc/sing-box/config.json 2>/dev/null | grep -oE '[0-9]+'); do
+      fuser -k -n tcp "\$p" 2>/dev/null || true
+    done
+  fi
   if [ -f "\$pidfile" ]; then
     local p
     p=\$(cat "\$pidfile" 2>/dev/null)
@@ -1223,12 +1228,11 @@ SBEU
     systemctl enable sing-box >/dev/null 2>&1 || true
     systemctl restart sing-box >/dev/null 2>&1 || true
   else
-    if [[ ! -f /etc/init.d/sing-box ]]; then
-      local supervisor_line="command_background=\"yes\"\npidfile=\"/run/sing-box.pid\""
-      if command -v supervise-daemon >/dev/null 2>&1; then
-        supervisor_line="supervisor=\"supervise-daemon\""
-      fi
-      cat > /etc/init.d/sing-box <<SBRC
+    local supervisor_line="command_background=\"yes\"\npidfile=\"/run/sing-box.pid\""
+    if command -v supervise-daemon >/dev/null 2>&1; then
+      supervisor_line="supervisor=\"supervise-daemon\""
+    fi
+    cat > /etc/init.d/sing-box <<SBRC
 #!/sbin/openrc-run
 name="sing-box"
 description="sing-box service"
@@ -1252,6 +1256,11 @@ start_pre() {
     bin_name="\$(basename "\$command")"
     pkill -9 -x "\$bin_name" 2>/dev/null || true
   fi
+  if [ -f "/etc/sing-box/config.json" ]; then
+    for p in \$(grep -oE '"listen_port"[[:space:]]*:[[:space:]]*[0-9]+' /etc/sing-box/config.json 2>/dev/null | grep -oE '[0-9]+'); do
+      fuser -k -n tcp "\$p" 2>/dev/null || true
+    done
+  fi
   if [ -f "\$pidfile" ]; then
     local p
     p=\$(cat "\$pidfile" 2>/dev/null)
@@ -1268,8 +1277,7 @@ stop_post() {
   fi
 }
 SBRC
-      chmod +x /etc/init.d/sing-box
-    fi
+    chmod +x /etc/init.d/sing-box
     rc-update add sing-box default >/dev/null 2>&1 || true
     rc-service sing-box stop >/dev/null 2>&1 || true
     rc-service sing-box zap >/dev/null 2>&1 || true

@@ -140,6 +140,11 @@ start_pre() {
     bin_name="\$(basename "\$command")"
     pkill -9 -x "\$bin_name" 2>/dev/null || true
   fi
+  if [ -f "/etc/sing-box/config.json" ] && [ "\$name" = "sing-box" ]; then
+    for p in \$(grep -oE '"listen_port"[[:space:]]*:[[:space:]]*[0-9]+' /etc/sing-box/config.json 2>/dev/null | grep -oE '[0-9]+'); do
+      fuser -k -n tcp "\$p" 2>/dev/null || true
+    done
+  fi
   if [ -f "\$pidfile" ]; then
     local p
     p=\$(cat "\$pidfile" 2>/dev/null)
@@ -3288,18 +3293,46 @@ target_web_uri = 'https://${domain}/' + path.strip('/') + '/'
 target_sub_uri = 'https://${domain}/${sub_p}/'
 
 changed = False
-if w_listen != '127.0.0.1':
-    cur.execute(\"UPDATE settings SET value='127.0.0.1' WHERE key='webListen'\")
-    changed = True
-if s_listen != '127.0.0.1':
-    cur.execute(\"UPDATE settings SET value='127.0.0.1' WHERE key='subListen'\")
-    changed = True
+api_success = False
+try:
+    token_file = '/var/lib/sout/sui-token'
+    token = ''
+    if os.path.exists(token_file):
+        with open(token_file, 'r') as tf:
+            token = tf.read().strip()
+    if token:
+        clean_p = '/' + path.strip('/') + '/'
+        base_api = f'http://127.0.0.1:{port}{clean_p}apiv2'
+        s_payload = {
+            'webListen': '127.0.0.1',
+            'subListen': '127.0.0.1',
+            'webURI': target_web_uri,
+            'subURI': target_sub_uri,
+        }
+        form_data = urllib.parse.urlencode({
+            'object': 'settings',
+            'action': 'set',
+            'data': json.dumps(s_payload),
+        }).encode()
+        req_save = urllib.request.Request(base_api.rstrip('/') + '/save', data=form_data, headers={'Token': token, 'Content-Type': 'application/x-www-form-urlencoded'})
+        with urllib.request.urlopen(req_save, timeout=5) as r_save:
+            r_save.read()
+        api_success = True
+except Exception:
+    pass
 
-cur.execute(\"UPDATE settings SET value=? WHERE key='webURI'\", (target_web_uri,))
-cur.execute(\"UPDATE settings SET value=? WHERE key='subURI'\", (target_sub_uri,))
+if not api_success:
+    if w_listen != '127.0.0.1':
+        cur.execute("UPDATE settings SET value='127.0.0.1' WHERE key='webListen'")
+        changed = True
+    if s_listen != '127.0.0.1':
+        cur.execute("UPDATE settings SET value='127.0.0.1' WHERE key='subListen'")
+        changed = True
+    cur.execute("UPDATE settings SET value=? WHERE key='webURI'", (target_web_uri,))
+    cur.execute("UPDATE settings SET value=? WHERE key='subURI'", (target_sub_uri,))
+    if changed:
+        con.commit()
 
-if changed:
-    con.commit()
 con.close()
 path = path.strip('/')
 print(f'{port}|{path}|{changed}|{sp_val}')
@@ -3540,28 +3573,23 @@ PYEOF
     handle /${sui_p}* {
         reverse_proxy 127.0.0.1:${sui_port}
     }"
+  fi
 
-    sub_caddy_rules="    # 3. s-ui 节点订阅接口 (直接反代至 s-ui 独立订阅服务)
-    handle /${sub_p}* {
-        reverse_proxy 127.0.0.1:${sub_port}
-    }"
-  else
-    local sout_pw=""
-    [[ -f "${WORK_DIR}/password" ]] && sout_pw=$(cat "${WORK_DIR}/password" 2>/dev/null | tr -d ' \r\n')
-    [[ -z "$sout_pw" && -f "/etc/sout/password" ]] && sout_pw=$(cat "/etc/sout/password" 2>/dev/null | tr -d ' \r\n')
-    if [[ -n "$sout_pw" ]]; then
-      sub_caddy_rules="    # 3. sout 节点订阅接口 (重写并转发至 sout 自身的 /sub 订阅端点)
+  local sout_pw=""
+  [[ -f "${WORK_DIR}/password" ]] && sout_pw=$(cat "${WORK_DIR}/password" 2>/dev/null | tr -d ' \r\n')
+  [[ -z "$sout_pw" && -f "/etc/sout/password" ]] && sout_pw=$(cat "/etc/sout/password" 2>/dev/null | tr -d ' \r\n')
+  if [[ -n "$sout_pw" ]]; then
+    sub_caddy_rules="    # 3. sout 节点订阅接口 (重写并转发至 sout 自身的 /sub 订阅端点)
     handle /${sub_p}* {
         rewrite * /${sout_p}/sub=${sout_pw}
         reverse_proxy 127.0.0.1:${sout_port}
     }"
-    else
-      sub_caddy_rules="    # 3. sout 节点订阅接口 (重写并转发至 sout 自身的 /sub 订阅端点)
+  else
+    sub_caddy_rules="    # 3. sout 节点订阅接口 (重写并转发至 sout 自身的 /sub 订阅端点)
     handle /${sub_p}* {
         rewrite * /${sout_p}/sub
         reverse_proxy 127.0.0.1:${sout_port}
     }"
-    fi
   fi
 
   mkdir -p /etc/caddy
