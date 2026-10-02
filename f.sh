@@ -497,11 +497,17 @@ Environment="GOGC=${sb_gogc}"
 EOF
 
       for svc in caddy cloudflared sout s-ui; do
+        local cur_memlimit="$svc_memlimit"
+        local cur_gogc="$svc_gogc"
+        if [[ "$svc" == "cloudflared" ]]; then
+          cur_gogc="100"
+          [[ $mem_mb -le 135 ]] && cur_memlimit="30MiB"
+        fi
         mkdir -p "/etc/systemd/system/${svc}.service.d" 2>/dev/null || true
         cat > "/etc/systemd/system/${svc}.service.d/override.conf" <<EOF
 [Service]
-Environment="GOMEMLIMIT=${svc_memlimit}"
-Environment="GOGC=${svc_gogc}"
+Environment="GOMEMLIMIT=${cur_memlimit}"
+Environment="GOGC=${cur_gogc}"
 EOF
       done
       systemctl daemon-reload >/dev/null 2>&1 || true
@@ -529,6 +535,10 @@ EOF
         local mlimit="$svc_memlimit"
         local ggc="$svc_gogc"
         [[ "$svc" == "sing-box" ]] && mlimit="$sb_memlimit" && ggc="$sb_gogc"
+        if [[ "$svc" == "cloudflared" ]]; then
+          ggc="100"
+          [[ $mem_mb -le 135 ]] && mlimit="30MiB"
+        fi
 
         mkdir -p /etc/conf.d 2>/dev/null || true
         cat > "/etc/conf.d/${svc}" <<EOF
