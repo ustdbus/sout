@@ -356,6 +356,7 @@ func (sb *SingBox) MigrateLegacyVmessArgo() error {
 		for oldTag, newTag := range tagMigrations {
 			if items, exists := rawAddrsMap[oldTag]; exists {
 				rawAddrsMap[newTag] = items
+				delete(rawAddrsMap, oldTag)
 				addrsChanged = true
 			}
 		}

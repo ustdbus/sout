@@ -808,11 +808,15 @@ show_info() {
       [[ -n "$tp" ]] && c_tun_p="$tp"
     fi
 
-    local cf_st="未运行"
-    if [[ $(systemctl is-active cloudflared 2>/dev/null || echo "") == "active" ]]; then
-      cf_st="${G}运行中 (active)${N}"
+    local cf_st="${R}未运行${N}"
+    if [[ "$INIT_SYS" == "systemd" ]]; then
+      if [[ $(systemctl is-active cloudflared 2>/dev/null || echo "") == "active" ]]; then
+        cf_st="${G}运行中 (active)${N}"
+      fi
     else
-      cf_st="${R}未运行${N}"
+      if rc-service cloudflared status >/dev/null 2>&1 || pgrep -f "cloudflared" >/dev/null 2>&1; then
+        cf_st="${G}运行中 (active)${N}"
+      fi
     fi
 
     # 如果是临时隧道，且记录域名失效/需要更新时，动态从 journalctl 抓取最新域名
