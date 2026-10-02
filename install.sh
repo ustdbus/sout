@@ -409,6 +409,7 @@ SBEU
     systemctl daemon-reload
     systemctl enable sing-box >/dev/null 2>&1 || true
     systemctl restart sing-box >/dev/null 2>&1 || true
+  else
     local supervisor_line="command_background=\"yes\"\npidfile=\"/run/sing-box.pid\""
     if command -v supervise-daemon >/dev/null 2>&1; then
       supervisor_line="supervisor=\"supervise-daemon\""
@@ -1206,6 +1207,7 @@ SBEU
     systemctl enable sing-box >/dev/null 2>&1 || true
     systemctl restart sing-box >/dev/null 2>&1 || true
   else
+    if [[ ! -f /etc/init.d/sing-box ]]; then
       local supervisor_line="command_background=\"yes\"\npidfile=\"/run/sing-box.pid\""
       if command -v supervise-daemon >/dev/null 2>&1; then
         supervisor_line="supervisor=\"supervise-daemon\""
