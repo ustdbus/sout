@@ -2215,7 +2215,7 @@ except Exception:
     sui_token=$(get_or_create_sui_token "$sui_db")
   fi
 
-  echo -e "  [+] 正在自动配置基础节点 (vmess-argo 路径分流与 vless-reality)..."
+  echo -e "  [+] 正在自动配置基础节点 (vless-argo 路径分流与 vless-reality)..."
   if ! SUI_API="http://127.0.0.1:${sui_port}/${sui_path}/apiv2" \
   SUI_TOKEN="$sui_token" \
   SUI_DB="$sui_db" \
@@ -2372,7 +2372,8 @@ else:
                     user_obj = {'name': admin_name, 'uuid': u_uuid}
                 elif proto == 'vless':
                     user_obj = {'name': admin_name, 'uuid': u_uuid}
-                    if u_flow: user_obj['flow'] = u_flow
+                    is_ws = (isinstance(ib.get('transport'), dict) and ib['transport'].get('type') == 'ws')
+                    if u_flow and not is_ws: user_obj['flow'] = u_flow
                 elif proto == 'tuic':
                     user_obj = {'name': admin_name, 'uuid': u_uuid, 'password': u_pass or os.urandom(8).hex()}
                 elif proto in ['hysteria2', 'shadowsocks', 'trojan']:
@@ -2519,36 +2520,63 @@ def gen_x25519_keypair():
 domain = os.environ['DOMAIN']
 created_inbound_tags = []
 
-# 固定启用 vmess-argo 与 vless-reality 基础节点
-vmess_tag, vmess_id = get_or_create_tag_and_id('vmess-argo')
-reality_tag, reality_id = get_or_create_tag_and_id('vless-reality')
-
-existing_vmess = None
+# 固定启用 vless-argo 与 vless-reality 基础节点
+# 优先查找已有的 vless-argo；若无则查找存量的旧 vmess-argo 进行平滑覆盖升级
+existing_argo = None
 for r in inbound_rows:
     t = r.get('tag', '')
-    if t.startswith('vmess-argo') or r.get('type') == 'vmess':
-        existing_vmess = r
+    if t.startswith('vless-argo') or (r.get('type') == 'vless' and 'argo' in t):
+        existing_argo = r
         break
+if not existing_argo:
+    for r in inbound_rows:
+        t = r.get('tag', '')
+        if t.startswith('vmess-argo') or r.get('type') == 'vmess':
+            existing_argo = r
+            break
+
+argo_id = None
+argo_tag = None
+old_vmess_tag = None
+if existing_argo:
+    argo_id = existing_argo.get('id')
+    old_tag = existing_argo.get('tag', '')
+    if old_tag.startswith('vless-argo-') and len(old_tag) == len('vless-argo-') + 4:
+        argo_tag = old_tag
+    elif old_tag.startswith('vmess-argo-') and len(old_tag) == len('vmess-argo-') + 4:
+        old_vmess_tag = old_tag
+        argo_tag = 'vless-argo-' + old_tag[len('vmess-argo-'):]
+    elif old_tag == 'vmess-argo':
+        old_vmess_tag = old_tag
+        argo_tag = f"vless-argo-{gen_rand_suffix()}"
+    else:
+        argo_tag = f"vless-argo-{gen_rand_suffix()}"
+else:
+    argo_tag = f"vless-argo-{gen_rand_suffix()}"
+
+reality_tag, reality_id = get_or_create_tag_and_id('vless-reality')
 
 node_port = int(os.environ['NODE_PORT'])
 ws_path = os.environ['WS_PATH']
-if existing_vmess:
-    if existing_vmess.get('listen_port'):
-        node_port = int(existing_vmess['listen_port'])
-    old_tr = existing_vmess.get('transport')
+if existing_argo:
+    if existing_argo.get('listen_port'):
+        node_port = int(existing_argo['listen_port'])
+    old_tr = existing_argo.get('transport')
     if isinstance(old_tr, dict) and old_tr.get('path'):
         ws_path = old_tr['path']
-    elif existing_vmess.get('raw', {}).get('transport', {}).get('path'):
-        ws_path = existing_vmess['raw']['transport']['path']
+    elif existing_argo.get('raw', {}).get('transport', {}).get('path'):
+        ws_path = existing_argo['raw']['transport']['path']
 
 # 优选 IP/域名：保留所有已有的条目与备注，仅更新其 TLS server_name 为新域名
-vmess_addrs = []
-old_addrs = existing_vmess.get('addrs') if existing_vmess else None
+argo_addrs = []
+old_addrs = existing_argo.get('addrs') if existing_argo else None
 if not old_addrs:
     try:
         with open('/var/lib/sout/singbox_inbound_addrs.json', 'r') as af:
             ad_map = json.load(af)
-            old_addrs = ad_map.get(vmess_tag)
+            old_addrs = ad_map.get(argo_tag)
+            if not old_addrs and old_vmess_tag:
+                old_addrs = ad_map.get(old_vmess_tag)
     except Exception:
         pass
 
@@ -2564,10 +2592,10 @@ if old_addrs and isinstance(old_addrs, list) and len(old_addrs) > 0:
         new_item['tls'] = tls_info
         if len(old_addrs) == 1 and (new_item.get('server') == '' or '.trycloudflare.com' in str(new_item.get('server'))):
             new_item['server'] = domain
-        vmess_addrs.append(new_item)
+        argo_addrs.append(new_item)
 
-if not vmess_addrs:
-    vmess_addrs = [{
+if not argo_addrs:
+    argo_addrs = [{
         'server': domain,
         'server_port': 443,
         'tls': {
@@ -2579,14 +2607,27 @@ if not vmess_addrs:
         }
     }]
 
-vmess_payload = {
-    'id': vmess_id or 0,
-    'type': 'vmess',
-    'tag': vmess_tag,
+# 若从旧的 vmess-argo 升级，同步迁移 singbox_inbound_addrs.json 中的 key
+if old_vmess_tag and old_vmess_tag != argo_tag:
+    try:
+        af_path = '/var/lib/sout/singbox_inbound_addrs.json'
+        with open(af_path, 'r') as af:
+            ad_map = json.load(af)
+        if old_vmess_tag in ad_map:
+            ad_map[argo_tag] = argo_addrs
+            with open(af_path, 'w') as af:
+                json.dump(ad_map, af, indent=2)
+    except Exception:
+        pass
+
+vless_payload = {
+    'id': argo_id or 0,
+    'type': 'vless',
+    'tag': argo_tag,
     'tls_id': 0,
     'listen': '127.0.0.1',
     'listen_port': node_port,
-    'addrs': vmess_addrs,
+    'addrs': argo_addrs,
     'transport': {
         'early_data_header_name': 'Sec-WebSocket-Protocol',
         'max_early_data': 2560,
@@ -2597,10 +2638,10 @@ vmess_payload = {
 }
 api('POST', 'save', {
     'object': 'inbounds',
-    'action': 'edit' if vmess_id else 'new',
-    'data': json.dumps(vmess_payload)
+    'action': 'edit' if argo_id else 'new',
+    'data': json.dumps(vless_payload)
 })
-created_inbound_tags.append(vmess_tag)
+created_inbound_tags.append(argo_tag)
 
 # 先检查/创建 reality tls 对象
 all_tls_resp = api('GET', 'tls') or {}
@@ -3388,19 +3429,34 @@ try:
 
     node_tag = None
     existing_id = None
+    existing_row = None
     for r in inbound_rows:
         t = r.get('tag', '')
-        if t == 'vmess-argo' or t.startswith('vmess-argo-'):
+        if t == 'vless-argo' or t.startswith('vless-argo-'):
             node_tag = t
             existing_id = r.get('id')
             existing_row = r
             break
 
     if not node_tag:
+        for r in inbound_rows:
+            t = r.get('tag', '')
+            if t == 'vmess-argo' or t.startswith('vmess-argo-') or (r.get('type') == 'vmess' and 'argo' in t):
+                existing_id = r.get('id')
+                existing_row = r
+                if t.startswith('vmess-argo-') and len(t) == len('vmess-argo-') + 4:
+                    node_tag = 'vless-argo-' + t[len('vmess-argo-'):]
+                else:
+                    import string, random
+                    chars = string.ascii_lowercase + string.digits
+                    node_tag = f"vless-argo-{''.join(random.choices(chars, k=4))}"
+                break
+
+    if not node_tag:
         import string, random
         chars = string.ascii_lowercase + string.digits
         rand_suffix = "".join(random.choices(chars, k=4))
-        node_tag = f"vmess-argo-{rand_suffix}"
+        node_tag = f"vless-argo-{rand_suffix}"
 
     client_uuid = str(uuid.uuid4())
     node_port = int(os.environ['NODE_PORT'])
@@ -3443,7 +3499,7 @@ try:
 
     inbound_payload = {
         'id': existing_id or 0,
-        'type': 'vmess',
+        'type': 'vless',
         'tag': node_tag,
         'tls_id': 0,
         'listen': '127.0.0.1',

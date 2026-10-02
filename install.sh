@@ -717,7 +717,7 @@ ask_tunnel_setup() {
       echo
       echo "  [Cloudflare SSL 证书 (Caddy DNS-01)]"
       echo "  • 令牌需含「区域.DNS / 编辑」权限，用于自动签发证书并开启 TUIC / Hysteria2 节点"
-      echo "  • 直接按回车将跳过申请，自动配置常规节点 (vmess-argo / vless-reality)"
+      echo "  • 直接按回车将跳过申请，自动配置常规节点 (vless-argo / vless-reality)"
       if [[ -t 0 ]]; then
         read -rp "  4. 请输入 Cloudflare API 令牌 (直接回车跳过): " CF_DNS_KEY
       else
@@ -731,7 +731,7 @@ ask_tunnel_setup() {
         echo "  [✓] Cloudflare 令牌已记录，部署时将通过 DNS-01 验证自动签发证书。"
       else
         APPLY_CERT="n"
-        echo "  [✓] 已跳过证书申请，将自动配置常规节点 (vmess-argo 与 vless-reality)。"
+        echo "  [✓] 已跳过证书申请，将自动配置常规节点 (vless-argo 与 vless-reality)。"
       fi
     fi
   fi

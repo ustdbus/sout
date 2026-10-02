@@ -205,7 +205,7 @@ try:
     changed = False
     for ib in conf.get('inbounds', []):
         tag = ib.get('tag', '')
-        if 'vmess-argo' in tag or 'argo' in tag:
+        if 'vless-argo' in tag or 'vmess-argo' in tag or 'argo' in tag:
             trans = ib.setdefault('transport', {})
             hdrs = trans.setdefault('headers', {})
             hdrs['Host'] = os.environ['CUR_DOMAIN']
@@ -270,12 +270,12 @@ api('POST', 'save', {
     'data': json.dumps(settings_data),
 })
 
-# 更新 vmess-argo 入站 addrs（域名变化）
+# 更新 argo 入站 addrs（域名变化）
 inbounds_resp = api('GET', 'inbounds')
 inbound_id = None
 for row in inbounds_resp.get('obj', {}).get('inbounds') or []:
     t = row.get('tag', '')
-    if t == 'vmess-argo' or t.startswith('vmess-argo-'):
+    if t == 'vless-argo' or t.startswith('vless-argo-') or t == 'vmess-argo' or t.startswith('vmess-argo-'):
         inbound_id = row.get('id')
         break
 if inbound_id:
@@ -736,30 +736,41 @@ if not ws_path.endswith('/'):
     ws_path = ws_path + '/'
 domain = os.environ['DOMAIN']
 
-# 1. 查找并清理所有旧 vmess-argo 相关的残留入站，只保留一个主入站
-vmess_nodes = []
+# 1. 查找并清理所有旧 argo 相关的残留入站，只保留一个主入站 (优先升级为 vless-argo)
+argo_nodes = []
 kept_inbounds = []
 for ib in inbounds:
     tag = str(ib.get('tag', ''))
     itype = str(ib.get('type', ''))
-    if itype == 'vmess' and (tag == 'vmess-argo' or tag.startswith('vmess-argo-')):
-        vmess_nodes.append(ib)
+    if tag == 'vless-argo' or tag.startswith('vless-argo-') or tag == 'vmess-argo' or tag.startswith('vmess-argo-'):
+        argo_nodes.append(ib)
     else:
         kept_inbounds.append(ib)
 
 users = [{'name': 'default', 'uuid': str(uuid.uuid4())}]
-vmess_tag = f"vmess-argo-{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}"
-if vmess_nodes:
-    old_users = vmess_nodes[0].get('users')
+argo_tag = f"vless-argo-{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}"
+old_vmess_tag = None
+if argo_nodes:
+    old_users = argo_nodes[0].get('users')
     if old_users and isinstance(old_users, list) and len(old_users) > 0:
-        users = old_users
-    old_tag = vmess_nodes[0].get('tag', '')
-    if old_tag.startswith('vmess-argo-') and len(old_tag) == len('vmess-argo-') + 4:
-        vmess_tag = old_tag
-    old_port = vmess_nodes[0].get('listen_port')
+        clean_users = []
+        for u in old_users:
+            if isinstance(u, dict):
+                clean_users.append({'name': u.get('name', 'default'), 'uuid': u.get('uuid') or str(uuid.uuid4())})
+        if clean_users:
+            users = clean_users
+    old_tag = argo_nodes[0].get('tag', '')
+    if old_tag.startswith('vless-argo-') and len(old_tag) == len('vless-argo-') + 4:
+        argo_tag = old_tag
+    elif old_tag.startswith('vmess-argo-') and len(old_tag) == len('vmess-argo-') + 4:
+        old_vmess_tag = old_tag
+        argo_tag = 'vless-argo-' + old_tag[len('vmess-argo-'):]
+    elif old_tag.startswith('vmess-argo'):
+        old_vmess_tag = old_tag
+    old_port = argo_nodes[0].get('listen_port')
     if old_port:
         node_port = int(old_port)
-    old_tr = vmess_nodes[0].get('transport')
+    old_tr = argo_nodes[0].get('transport')
     if isinstance(old_tr, dict) and old_tr.get('path'):
         ws_path = old_tr['path']
 
@@ -771,7 +782,11 @@ try:
 except Exception:
     addrs_map = {}
 
-cur_addrs = addrs_map.get(vmess_tag, [])
+# 若从旧的 vmess-argo 升级，同步继承优选列表
+if old_vmess_tag and old_vmess_tag in addrs_map and argo_tag not in addrs_map:
+    addrs_map[argo_tag] = addrs_map[old_vmess_tag]
+
+cur_addrs = addrs_map.get(argo_tag, [])
 if cur_addrs and isinstance(cur_addrs, list) and len(cur_addrs) > 0:
     for it in cur_addrs:
         if isinstance(it, dict):
@@ -792,7 +807,7 @@ else:
             'utls': {'enabled': True, 'fingerprint': 'chrome'}
         }
     }]
-addrs_map[vmess_tag] = cur_addrs
+addrs_map[argo_tag] = cur_addrs
 try:
     os.makedirs(os.path.dirname(addrs_file), exist_ok=True)
     with open(addrs_file, 'w', encoding='utf-8') as af:
@@ -800,9 +815,9 @@ try:
 except Exception:
     pass
 
-primary_vmess = {
-    'type': 'vmess',
-    'tag': vmess_tag,
+primary_vless = {
+    'type': 'vless',
+    'tag': argo_tag,
     'listen': '127.0.0.1',
     'listen_port': node_port,
     'users': users,
@@ -814,7 +829,7 @@ primary_vmess = {
         'early_data_header_name': 'Sec-WebSocket-Protocol'
     }
 }
-kept_inbounds.append(primary_vmess)
+kept_inbounds.append(primary_vless)
 
 # 2. 检查并确保 vless-reality 基础节点存在，且规范带有 4 位随机后缀
 has_reality = False
@@ -858,7 +873,7 @@ with open(p, 'w') as f:
     json.dump(conf, f, indent=2)
 PYEOF
     systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true
-    echo -e "  [✓] 已在 sing-box 中配置基础节点 (vmess-argo 端口: ${node_port}, 路径: /${ws_p}/ 及 vless-reality)"
+    echo -e "  [✓] 已在 sing-box 中配置基础节点 (vless-argo 端口: ${node_port}, 路径: /${ws_p}/ 及 vless-reality)"
   else
     # 配置 s-ui 面板（通过 s-ui API，避免直接写库）
     if [[ -f "$SUI_DB" ]]; then
@@ -1290,30 +1305,37 @@ if not ws_path.endswith('/'):
     ws_path = ws_path + '/'
 domain = os.environ['DOMAIN']
 
-# 1. 查找并清理所有旧 vmess-argo 相关的残留入站，只保留一个主入站
-vmess_nodes = []
+# 1. 查找并清理所有旧 argo 相关的残留入站，只保留一个主入站 (优先升级为 vless-argo)
+argo_nodes = []
 kept_inbounds = []
 for ib in inbounds:
     tag = str(ib.get('tag', ''))
     itype = str(ib.get('type', ''))
-    if itype == 'vmess' and (tag == 'vmess-argo' or tag.startswith('vmess-argo-')):
-        vmess_nodes.append(ib)
+    if tag == 'vless-argo' or tag.startswith('vless-argo-') or tag == 'vmess-argo' or tag.startswith('vmess-argo-'):
+        argo_nodes.append(ib)
     else:
         kept_inbounds.append(ib)
 
 users = [{'name': 'default', 'uuid': str(uuid.uuid4())}]
-vmess_tag = f"vmess-argo-{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}"
-if vmess_nodes:
-    old_users = vmess_nodes[0].get('users')
+argo_tag = f"vless-argo-{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}"
+if argo_nodes:
+    old_users = argo_nodes[0].get('users')
     if old_users and isinstance(old_users, list) and len(old_users) > 0:
-        users = old_users
-    old_tag = vmess_nodes[0].get('tag', '')
-    if old_tag.startswith('vmess-argo-') and len(old_tag) == len('vmess-argo-') + 4:
-        vmess_tag = old_tag
+        clean_users = []
+        for u in old_users:
+            if isinstance(u, dict):
+                clean_users.append({'name': u.get('name', 'default'), 'uuid': u.get('uuid') or str(uuid.uuid4())})
+        if clean_users:
+            users = clean_users
+    old_tag = argo_nodes[0].get('tag', '')
+    if old_tag.startswith('vless-argo-') and len(old_tag) == len('vless-argo-') + 4:
+        argo_tag = old_tag
+    elif old_tag.startswith('vmess-argo-') and len(old_tag) == len('vmess-argo-') + 4:
+        argo_tag = 'vless-argo-' + old_tag[len('vmess-argo-'):]
 
-primary_vmess = {
-    'type': 'vmess',
-    'tag': vmess_tag,
+primary_vless = {
+    'type': 'vless',
+    'tag': argo_tag,
     'listen': '127.0.0.1',
     'listen_port': node_port,
     'users': users,
@@ -1325,7 +1347,7 @@ primary_vmess = {
         'early_data_header_name': 'Sec-WebSocket-Protocol'
     }
 }
-kept_inbounds.append(primary_vmess)
+kept_inbounds.append(primary_vless)
 
 # 2. 检查并确保 vless-reality 基础节点存在，且规范带有 4 位随机后缀
 has_reality = False
@@ -1478,16 +1500,29 @@ try:
     existing_id = None
     for r in inbound_rows:
         t = r.get('tag', '')
-        if t == 'vmess-argo' or t.startswith('vmess-argo-'):
+        if t == 'vless-argo' or t.startswith('vless-argo-'):
             node_tag = t
             existing_id = r.get('id')
             break
 
     if not node_tag:
+        for r in inbound_rows:
+            t = r.get('tag', '')
+            if t == 'vmess-argo' or t.startswith('vmess-argo-') or (r.get('type') == 'vmess' and 'argo' in t):
+                existing_id = r.get('id')
+                if t.startswith('vmess-argo-') and len(t) == len('vmess-argo-') + 4:
+                    node_tag = 'vless-argo-' + t[len('vmess-argo-'):]
+                else:
+                    import string, random
+                    chars = string.ascii_lowercase + string.digits
+                    node_tag = f"vless-argo-{''.join(random.choices(chars, k=4))}"
+                break
+
+    if not node_tag:
         import string, random
         chars = string.ascii_lowercase + string.digits
         rand_suffix = "".join(random.choices(chars, k=4))
-        node_tag = f"vmess-argo-{rand_suffix}"
+        node_tag = f"vless-argo-{rand_suffix}"
 
     client_uuid = str(uuid.uuid4())
     addrs_data = [{
@@ -1503,7 +1538,7 @@ try:
     }]
     inbound_payload = {
         'id': existing_id or 0,
-        'type': 'vmess',
+        'type': 'vless',
         'tag': node_tag,
         'tls_id': 0,
         'listen': '127.0.0.1',

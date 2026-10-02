@@ -172,10 +172,133 @@ func DetectSingBox(workDir string) (*SingBox, error) {
 		return nil, fmt.Errorf("未检测到 sing-box 内核或配置文件")
 	}
 
-	return &SingBox{
+	sb := &SingBox{
 		configPath: foundPath,
 		workDir:    workDir,
-	}, nil
+	}
+	_ = sb.MigrateLegacyVmessArgo()
+	return sb, nil
+}
+
+// MigrateLegacyVmessArgo 检查并平滑迁移存量旧的 vmess-argo 节点至 vless-argo
+func (sb *SingBox) MigrateLegacyVmessArgo() error {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+
+	cfg, err := sb.loadConfig()
+	if err != nil {
+		return err
+	}
+
+	inboundsRaw, _ := cfg["inbounds"].([]any)
+	if len(inboundsRaw) == 0 {
+		return nil
+	}
+
+	changed := false
+	var updatedInbounds []any
+	tagMigrations := make(map[string]string) // oldTag -> newTag
+
+	for _, ibRaw := range inboundsRaw {
+		ib, ok := ibRaw.(map[string]any)
+		if !ok {
+			updatedInbounds = append(updatedInbounds, ibRaw)
+			continue
+		}
+
+		tag, _ := ib["tag"].(string)
+		typ, _ := ib["type"].(string)
+		listen, _ := ib["listen"].(string)
+		trMap, _ := ib["transport"].(map[string]any)
+		trType := ""
+		if trMap != nil {
+			trType, _ = trMap["type"].(string)
+		}
+
+		isLegacyArgo := false
+		if typ == "vmess" && (strings.HasPrefix(tag, "vmess-argo") || tag == "vmess-argo" || (listen == "127.0.0.1" && trType == "ws")) {
+			isLegacyArgo = true
+		} else if strings.HasPrefix(tag, "vmess-argo") {
+			isLegacyArgo = true
+		}
+
+		if !isLegacyArgo {
+			updatedInbounds = append(updatedInbounds, ib)
+			continue
+		}
+
+		// 存量节点平滑升级为 vless
+		newTag := tag
+		if strings.HasPrefix(tag, "vmess-argo") {
+			newTag = "vless-argo" + strings.TrimPrefix(tag, "vmess-argo")
+		} else if !strings.HasPrefix(tag, "vless-argo") {
+			newTag = "vless-argo"
+		}
+		if newTag != tag {
+			tagMigrations[tag] = newTag
+			ib["tag"] = newTag
+		}
+		ib["type"] = "vless"
+
+		// 确保 transport 规范配置 (VLESS + WebSocket + EarlyData)
+		if trMap == nil {
+			trMap = make(map[string]any)
+		}
+		trMap["type"] = "ws"
+		trMap["early_data_header_name"] = "Sec-WebSocket-Protocol"
+		trMap["max_early_data"] = 2560
+		ib["transport"] = trMap
+
+		// users 净化：保留 name 与 uuid，去除 flow 与 alterId
+		if rawUsers, ok := ib["users"].([]any); ok {
+			var cleanUsers []any
+			for _, uRaw := range rawUsers {
+				if uMap, ok := uRaw.(map[string]any); ok {
+					name, _ := uMap["name"].(string)
+					uID, _ := uMap["uuid"].(string)
+					cleanU := map[string]any{
+						"name": name,
+						"uuid": uID,
+					}
+					cleanUsers = append(cleanUsers, cleanU)
+				} else {
+					cleanUsers = append(cleanUsers, uRaw)
+				}
+			}
+			ib["users"] = cleanUsers
+		}
+
+		updatedInbounds = append(updatedInbounds, ib)
+		changed = true
+	}
+
+	if !changed {
+		return nil
+	}
+
+	cfg["inbounds"] = updatedInbounds
+	if err := sb.saveConfig(cfg); err != nil {
+		return fmt.Errorf("保存迁移后的 sing-box 配置失败: %w", err)
+	}
+
+	// 迁移 singbox_inbound_addrs.json 中的优选域名/IP 映射
+	if len(tagMigrations) > 0 {
+		rawAddrsMap := sb.loadRawInboundAddrs()
+		addrsChanged := false
+		for oldTag, newTag := range tagMigrations {
+			if items, exists := rawAddrsMap[oldTag]; exists {
+				rawAddrsMap[newTag] = items
+				addrsChanged = true
+			}
+		}
+		if addrsChanged {
+			sb.saveRawInboundAddrs(rawAddrsMap)
+		}
+	}
+
+	sb.restartService()
+	log.Printf("[sing-box] 已自动将存量 vmess-argo 节点平滑升级覆盖为 vless-argo (VLESS+WebSocket+EarlyData)")
+	return nil
 }
 
 func initDefaultSingBoxConfig(path string) error {
@@ -847,14 +970,15 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 		}
 	}
 
-	if proto == "vmess" && wsHost != "" && net.ParseIP(wsHost) == nil {
+	isArgoWs := (proto == "vmess" || (proto == "vless" && transportType == "ws")) && wsHost != "" && net.ParseIP(wsHost) == nil
+	if isArgoWs {
 		serverSNI = wsHost
 	}
 
 	if len(addrs) == 0 {
 		serverAddr := defaultHost
 		serverPort := listenPort
-		if proto == "vmess" && wsHost != "" && net.ParseIP(wsHost) == nil {
+		if isArgoWs {
 			serverAddr = wsHost
 			serverPort = 443
 		}

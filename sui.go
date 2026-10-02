@@ -197,6 +197,7 @@ func DetectSUI(workDir string) (*SUI, error) {
 		if s.tokenValid() {
 			s.cleanLegacyClonedInbounds()
 			_ = s.cleanStaleRoutesAndClients(nil)
+			_ = s.MigrateLegacyVmessArgo()
 			s.syncSUIDatabaseLinks(hostPublicIP())
 			return s, nil
 		}
@@ -210,6 +211,7 @@ func DetectSUI(workDir string) (*SUI, error) {
 				cachedSUIToken = saved
 				s.cleanDuplicateTokens(saved)
 				s.cleanLegacyClonedInbounds()
+				_ = s.MigrateLegacyVmessArgo()
 				s.syncSUIDatabaseLinks(hostPublicIP())
 				return s, nil
 			}
@@ -237,6 +239,7 @@ func DetectSUI(workDir string) (*SUI, error) {
 					s.cleanDuplicateTokens(item.Token)
 					s.cleanLegacyClonedInbounds()
 					_ = s.cleanStaleRoutesAndClients(nil)
+					_ = s.MigrateLegacyVmessArgo()
 					s.syncSUIDatabaseLinks(hostPublicIP())
 					return s, nil
 				}
@@ -264,9 +267,173 @@ func DetectSUI(workDir string) (*SUI, error) {
 		saveTokenFile(workDir, suiTokenFile, newToken)
 	}
 	s.cleanLegacyClonedInbounds()
+	_ = s.MigrateLegacyVmessArgo()
 	s.syncSUIDatabaseLinks(hostPublicIP())
 
 	return s, nil
+}
+
+// MigrateLegacyVmessArgo 检查并平滑迁移存量旧的 vmess-argo 节点至 vless-argo
+func (s *SUI) MigrateLegacyVmessArgo() error {
+	if s == nil {
+		return nil
+	}
+
+	// 1. 获取所有当前入站
+	inboundsObj, err := s.callAPI(http.MethodGet, "inbounds", nil)
+	if err != nil {
+		return err
+	}
+
+	var inboundsList []map[string]any
+	var rawWrap struct {
+		Inbounds []map[string]any `json:"inbounds"`
+	}
+	if err := json.Unmarshal(inboundsObj, &rawWrap); err == nil && len(rawWrap.Inbounds) > 0 {
+		inboundsList = rawWrap.Inbounds
+	} else {
+		_ = json.Unmarshal(inboundsObj, &inboundsList)
+	}
+
+	if len(inboundsList) == 0 {
+		return nil
+	}
+
+	migratedAny := false
+	var migratedInboundIDs []int
+
+	for _, ib := range inboundsList {
+		idVal, _ := ib["id"].(float64)
+		id := int(idVal)
+		tag, _ := ib["tag"].(string)
+		typ, _ := ib["type"].(string)
+		listen, _ := ib["listen"].(string)
+
+		trMap, _ := ib["transport"].(map[string]any)
+		trType := ""
+		if trMap != nil {
+			trType, _ = trMap["type"].(string)
+		}
+
+		isLegacyArgo := false
+		if typ == "vmess" && (strings.HasPrefix(tag, "vmess-argo") || tag == "vmess-argo" || (listen == "127.0.0.1" && trType == "ws")) {
+			isLegacyArgo = true
+		} else if strings.HasPrefix(tag, "vmess-argo") {
+			isLegacyArgo = true
+		}
+
+		if !isLegacyArgo {
+			continue
+		}
+
+		// 存量节点平滑升级为 vless
+		newTag := tag
+		if strings.HasPrefix(tag, "vmess-argo") {
+			newTag = "vless-argo" + strings.TrimPrefix(tag, "vmess-argo")
+		} else if !strings.HasPrefix(tag, "vless-argo") {
+			newTag = "vless-argo"
+		}
+
+		ib["tag"] = newTag
+		ib["type"] = "vless"
+
+		// 规范 transport (VLESS + WebSocket + early data)
+		if trMap == nil {
+			trMap = make(map[string]any)
+		}
+		trMap["type"] = "ws"
+		trMap["early_data_header_name"] = "Sec-WebSocket-Protocol"
+		trMap["max_early_data"] = 2560
+		ib["transport"] = trMap
+
+		// 提交保存修改后的入站 (调用原生 API)
+		if err := s.apiSaveInbound("edit", ib); err != nil {
+			log.Printf("[s-ui] API 更新入站 %d (vmess -> vless) 失败: %v，尝试直接更新 SQLite", id, err)
+			if s.dbPath != "" {
+				optBytes, _ := json.Marshal(ib)
+				_, _ = runSQLite(s.dbPath, fmt.Sprintf("UPDATE inbounds SET type='vless', tag=%s, options=%s WHERE id=%d;",
+					sqliteQuote(newTag), sqliteQuote(string(optBytes)), id))
+			}
+		}
+
+		migratedInboundIDs = append(migratedInboundIDs, id)
+		migratedAny = true
+		log.Printf("[s-ui] 已自动将存量旧节点 %s (ID: %d) 平滑升级覆盖为 %s (VLESS+WebSocket+EarlyData)", tag, id, newTag)
+	}
+
+	if !migratedAny {
+		return nil
+	}
+
+	// 2. 检查并确保相关 Clients 具有有效的 vless 配置（继承旧的 vmess UUID）
+	allClients, err := s.apiClients(0)
+	if err == nil && len(allClients) > 0 {
+		for _, raw := range allClients {
+			idVal, _ := raw["id"].(float64)
+			cID := int(idVal)
+			if cID <= 0 {
+				continue
+			}
+			fullClients, err := s.apiClients(cID)
+			if err != nil || len(fullClients) == 0 {
+				continue
+			}
+			client := fullClients[0]
+
+			// 检查该 client 是否关联了被迁移的入站
+			associated := false
+			if inbList, ok := client["inbounds"].([]any); ok {
+				for _, inbVal := range inbList {
+					if iVal, ok := inbVal.(float64); ok {
+						for _, mID := range migratedInboundIDs {
+							if int(iVal) == mID {
+								associated = true
+								break
+							}
+						}
+					}
+					if associated {
+						break
+					}
+				}
+			}
+
+			if !associated {
+				continue
+			}
+
+			cfgMap, ok := client["config"].(map[string]any)
+			if !ok || cfgMap == nil {
+				cfgMap = make(map[string]any)
+			}
+
+			// 获取已有 vmess uuid 作为迁移凭据
+			vmessUUID := ""
+			if vmessCfg, ok := cfgMap["vmess"].(map[string]any); ok && vmessCfg != nil {
+				if u, ok := vmessCfg["uuid"].(string); ok {
+					vmessUUID = u
+				}
+			}
+
+			vlessCfg, ok := cfgMap["vless"].(map[string]any)
+			if !ok || vlessCfg == nil || vlessCfg["uuid"] == nil || vlessCfg["uuid"] == "" {
+				cName, _ := client["name"].(string)
+				if vmessUUID != "" {
+					cfgMap["vless"] = map[string]any{
+						"name": cName,
+						"uuid": vmessUUID,
+					}
+					client["config"] = cfgMap
+					_ = s.apiSaveClient("edit", client)
+				}
+			}
+		}
+	}
+
+	// 3. 刷新 s-ui 权威链接并重启生效
+	s.syncSUIDatabaseLinks(hostPublicIP())
+	s.restartSingBox()
+	return nil
 }
 
 func (s *SUI) cleanDuplicateTokens(keepToken string) {
@@ -2068,6 +2235,7 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 				uuidStr = "auto"
 			}
 			v := url.Values{}
+			v.Set("encryption", "none")
 			tp := out.Transport.Type
 			if tp == "" {
 				tp = "tcp"
