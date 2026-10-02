@@ -300,15 +300,18 @@ func (s *SUI) MigrateLegacyVmessArgo() error {
 	}
 
 	var caddyDomain, caddyWsPath string
+	var caddyNodePort int
 	if s.workDir != "" {
 		if b, err := os.ReadFile(filepath.Join(s.workDir, "caddy_meta.json")); err == nil {
 			var m struct {
-				Domain string `json:"domain"`
-				WsPath string `json:"ws_path"`
+				Domain   string `json:"domain"`
+				WsPath   string `json:"ws_path"`
+				NodePort int    `json:"node_port"`
 			}
 			if json.Unmarshal(b, &m) == nil {
 				caddyDomain = strings.TrimSpace(m.Domain)
 				caddyWsPath = strings.TrimSpace(m.WsPath)
+				caddyNodePort = m.NodePort
 			}
 		}
 		if caddyDomain == "" {
@@ -395,12 +398,6 @@ func (s *SUI) MigrateLegacyVmessArgo() error {
 			trMap["path"] = "/"
 		}
 		ib["transport"] = trMap
-		if optMap != nil {
-			optMap["type"] = "vless"
-			optMap["tag"] = newTag
-			optMap["transport"] = trMap
-			ib["options"] = optMap
-		}
 
 		// 规范 addrs：为 Argo 节点的所有入站地址注入完备的 TLS / SNI / uTLS 指纹配置
 		var finalAddrs []any
@@ -455,21 +452,78 @@ func (s *SUI) MigrateLegacyVmessArgo() error {
 			ib["addrs"] = finalAddrs
 		}
 
+		// 构建纯粹合法的 sing-box inbound options（严禁混入 s-ui 数据库自身的列如 id, tag, type, addrs 等）
+		cleanOpt := make(map[string]any)
+		if optMap != nil {
+			for k, v := range optMap {
+				cleanOpt[k] = v
+			}
+		} else {
+			if l, ok := ib["listen"]; ok {
+				cleanOpt["listen"] = l
+			}
+			if lp, ok := ib["listen_port"]; ok {
+				cleanOpt["listen_port"] = lp
+			}
+		}
+		cleanOpt["listen"] = "127.0.0.1"
+		if caddyNodePort > 0 {
+			cleanOpt["listen_port"] = caddyNodePort
+		} else if lp, ok := cleanOpt["listen_port"].(float64); ok && lp > 0 {
+			cleanOpt["listen_port"] = int(lp)
+		}
+		if trMap != nil {
+			cleanOpt["transport"] = trMap
+		}
+		delete(cleanOpt, "id")
+		delete(cleanOpt, "tag")
+		delete(cleanOpt, "type")
+		delete(cleanOpt, "tls_id")
+		delete(cleanOpt, "addrs")
+		delete(cleanOpt, "out_json")
+		delete(cleanOpt, "users")
+		delete(cleanOpt, "clients")
+
+		ib["options"] = cleanOpt
+
+		// 检查当前节点是否需要变更持久化
+		needsMigrate := false
+		if typ != "vless" || tag != newTag {
+			needsMigrate = true
+		}
+		if caddyNodePort > 0 {
+			curPort := 0
+			if lp, ok := ib["listen_port"].(float64); ok {
+				curPort = int(lp)
+			}
+			if curPort != caddyNodePort {
+				needsMigrate = true
+			}
+		}
+
+		if !needsMigrate && len(finalAddrs) > 0 {
+			// 检查现有 addrs 是否缺少 TLS
+			if rawAddrs, ok := ib["addrs"].([]any); !ok || len(rawAddrs) == 0 {
+				needsMigrate = true
+			}
+		}
+
+		if !needsMigrate {
+			continue
+		}
+
 		// 提交保存修改后的入站 (优先原生 API，同时更新 SQLite 确保 addrs 与 options 完全持久化)
 		if err := s.apiSaveInbound("edit", ib); err != nil {
 			log.Printf("[s-ui] API 更新入站 %d (vmess -> vless) 失败: %v，尝试直接更新 SQLite", id, err)
 		}
 		if s.dbPath != "" {
-			optBytes, _ := json.Marshal(ib)
-			if optMap != nil {
-				optBytes, _ = json.Marshal(optMap)
-			}
+			optBytes, _ := json.Marshal(cleanOpt)
 			addrsBytes, _ := json.Marshal(finalAddrs)
 			if len(finalAddrs) > 0 {
-				_, _ = runSQLite(s.dbPath, fmt.Sprintf("UPDATE inbounds SET type='vless', tag=%s, options=%s, addrs=%s WHERE id=%d;",
+				_, _ = runSQLite(s.dbPath, fmt.Sprintf("UPDATE inbounds SET type='vless', tag=%s, options=CAST(%s AS BLOB), addrs=CAST(%s AS BLOB) WHERE id=%d;",
 					sqliteQuote(newTag), sqliteQuote(string(optBytes)), sqliteQuote(string(addrsBytes)), id))
 			} else {
-				_, _ = runSQLite(s.dbPath, fmt.Sprintf("UPDATE inbounds SET type='vless', tag=%s, options=%s WHERE id=%d;",
+				_, _ = runSQLite(s.dbPath, fmt.Sprintf("UPDATE inbounds SET type='vless', tag=%s, options=CAST(%s AS BLOB) WHERE id=%d;",
 					sqliteQuote(newTag), sqliteQuote(string(optBytes)), id))
 			}
 		}
@@ -482,6 +536,8 @@ func (s *SUI) MigrateLegacyVmessArgo() error {
 	if !migratedAny {
 		return nil
 	}
+
+	restartSUI()
 
 	// 2. 检查并确保相关 Clients 具有有效的 vless 配置（继承旧的 vmess UUID）并清理旧 vmess 链接
 	allClients, err := s.apiClients(0)
@@ -555,7 +611,12 @@ func (s *SUI) MigrateLegacyVmessArgo() error {
 					if lMap, ok := lItem.(map[string]any); ok {
 						uri, _ := lMap["uri"].(string)
 						rem, _ := lMap["remark"].(string)
+						// 清理旧的 vmess-argo 以及缺失 TLS/SNI 的残缺 vless-argo 链接
 						if strings.HasPrefix(uri, "vmess://") && (strings.Contains(rem, "argo") || strings.Contains(uri, "argo")) {
+							linksChanged = true
+							continue
+						}
+						if strings.HasPrefix(uri, "vless://") && (strings.Contains(rem, "argo") || strings.Contains(uri, "argo")) && (!strings.Contains(uri, "security=tls") || !strings.Contains(uri, "sni=") || !strings.Contains(uri, "host=")) {
 							linksChanged = true
 							continue
 						}
@@ -573,7 +634,7 @@ func (s *SUI) MigrateLegacyVmessArgo() error {
 					if s.dbPath != "" {
 						cfgBytes, _ := json.Marshal(cfgMap)
 						lBytes, _ := json.Marshal(client["links"])
-						_, _ = runSQLite(s.dbPath, fmt.Sprintf("UPDATE clients SET config=%s, links=%s WHERE id=%d;",
+						_, _ = runSQLite(s.dbPath, fmt.Sprintf("UPDATE clients SET config=CAST(%s AS BLOB), links=CAST(%s AS BLOB) WHERE id=%d;",
 							sqliteQuote(string(cfgBytes)), sqliteQuote(string(lBytes)), cID))
 					}
 				}
