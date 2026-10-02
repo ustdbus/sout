@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -165,5 +167,80 @@ func TestBuildLinksFromInbound_SUI_TLSComplete(t *testing.T) {
 	}
 	if q.Get("fp") != "chrome" {
 		t.Errorf("s-ui 模式下 vless-argo fp 必须为 chrome，实际: %s", q.Get("fp"))
+	}
+}
+
+func TestFormatNodeURI_EncryptionNone(t *testing.T) {
+	// 1. 测试原始缺少 encryption=none 的 vless 链接
+	raw := "vless://610fa06f-36a3-4779-a60c-61e2ddb2907f@154.64.251.220:17554?type=ws&path=%2Fvlws019e2ec5%3Fed%3D2560&host=dgn.20023.bond&security=tls&fp=chrome&sni=dgn.20023.bond#vless-argo-37kp"
+	formatted := formatNodeURI(raw, "vless-argo-37kp")
+	u, err := url.Parse(formatted)
+	if err != nil {
+		t.Fatalf("url.Parse failed: %v", err)
+	}
+	if u.Query().Get("encryption") != "none" {
+		t.Fatalf("expected encryption=none, got %s in %s", u.Query().Get("encryption"), formatted)
+	}
+
+	// 2. 测试已有 encryption=none 的 vless 链接不被破坏
+	raw2 := "vless://610fa06f-36a3-4779-a60c-61e2ddb2907f@154.64.251.220:17554?encryption=none&type=ws&security=tls#node"
+	formatted2 := formatNodeURI(raw2, "node")
+	u2, err := url.Parse(formatted2)
+	if err != nil {
+		t.Fatalf("url.Parse failed: %v", err)
+	}
+	if u2.Query().Get("encryption") != "none" {
+		t.Fatalf("expected encryption=none, got %s", u2.Query().Get("encryption"))
+	}
+}
+
+func TestAuthWrap_SubscriptionBypass(t *testing.T) {
+	tmpDir := t.TempDir()
+	auth, _, err := NewAuth(tmpDir)
+	if err != nil {
+		t.Fatalf("NewAuth failed: %v", err)
+	}
+	pw := auth.currentPassword()
+
+	hit := false
+	handler := auth.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+
+	// 测试 /sub=PASSWORD 放行
+	req := httptest.NewRequest(http.MethodGet, "/sub="+pw, nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if !hit || rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for /sub=password, got %d, hit=%v", rec.Code, hit)
+	}
+
+	// 测试 /sub=PASSWORD/clash 带子路径放行
+	hit = false
+	req = httptest.NewRequest(http.MethodGet, "/sub="+pw+"/clash", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if !hit || rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for /sub=password/clash, got %d, hit=%v", rec.Code, hit)
+	}
+
+	// 测试 /sub?token=PASSWORD 查询参数放行
+	hit = false
+	req = httptest.NewRequest(http.MethodGet, "/sub?token="+pw, nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if !hit || rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for /sub?token=password, got %d, hit=%v", rec.Code, hit)
+	}
+
+	// 测试错误密码应返回 401
+	hit = false
+	req = httptest.NewRequest(http.MethodGet, "/sub=wrongpw", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if hit || rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for wrong password, got %d", rec.Code)
 	}
 }
