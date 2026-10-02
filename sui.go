@@ -309,7 +309,23 @@ func (s *SUI) MigrateLegacyVmessArgo() error {
 		typ, _ := ib["type"].(string)
 		listen, _ := ib["listen"].(string)
 
+		optMap, _ := ib["options"].(map[string]any)
+		if optMap != nil {
+			if tag == "" {
+				tag, _ = optMap["tag"].(string)
+			}
+			if typ == "" {
+				typ, _ = optMap["type"].(string)
+			}
+			if listen == "" {
+				listen, _ = optMap["listen"].(string)
+			}
+		}
+
 		trMap, _ := ib["transport"].(map[string]any)
+		if trMap == nil && optMap != nil {
+			trMap, _ = optMap["transport"].(map[string]any)
+		}
 		trType := ""
 		if trMap != nil {
 			trType, _ = trMap["type"].(string)
@@ -344,13 +360,25 @@ func (s *SUI) MigrateLegacyVmessArgo() error {
 		trMap["type"] = "ws"
 		trMap["early_data_header_name"] = "Sec-WebSocket-Protocol"
 		trMap["max_early_data"] = 2560
+		if p, ok := trMap["path"].(string); !ok || p == "" {
+			trMap["path"] = "/"
+		}
 		ib["transport"] = trMap
+		if optMap != nil {
+			optMap["type"] = "vless"
+			optMap["tag"] = newTag
+			optMap["transport"] = trMap
+			ib["options"] = optMap
+		}
 
 		// 提交保存修改后的入站 (调用原生 API)
 		if err := s.apiSaveInbound("edit", ib); err != nil {
 			log.Printf("[s-ui] API 更新入站 %d (vmess -> vless) 失败: %v，尝试直接更新 SQLite", id, err)
 			if s.dbPath != "" {
 				optBytes, _ := json.Marshal(ib)
+				if optMap != nil {
+					optBytes, _ = json.Marshal(optMap)
+				}
 				_, _ = runSQLite(s.dbPath, fmt.Sprintf("UPDATE inbounds SET type='vless', tag=%s, options=%s WHERE id=%d;",
 					sqliteQuote(newTag), sqliteQuote(string(optBytes)), id))
 			}
@@ -365,7 +393,7 @@ func (s *SUI) MigrateLegacyVmessArgo() error {
 		return nil
 	}
 
-	// 2. 检查并确保相关 Clients 具有有效的 vless 配置（继承旧的 vmess UUID）
+	// 2. 检查并确保相关 Clients 具有有效的 vless 配置（继承旧的 vmess UUID）并清理旧 vmess 链接
 	allClients, err := s.apiClients(0)
 	if err == nil && len(allClients) > 0 {
 		for _, raw := range allClients {
@@ -415,6 +443,7 @@ func (s *SUI) MigrateLegacyVmessArgo() error {
 				}
 			}
 
+			clientModified := false
 			vlessCfg, ok := cfgMap["vless"].(map[string]any)
 			if !ok || vlessCfg == nil || vlessCfg["uuid"] == nil || vlessCfg["uuid"] == "" {
 				cName, _ := client["name"].(string)
@@ -424,7 +453,39 @@ func (s *SUI) MigrateLegacyVmessArgo() error {
 						"uuid": vmessUUID,
 					}
 					client["config"] = cfgMap
-					_ = s.apiSaveClient("edit", client)
+					clientModified = true
+				}
+			}
+
+			// 清理 client.links 中与旧 vmess-argo 关联的失效链接，促使 s-ui 重新生成 vless 链接
+			if rawLinks, ok := client["links"].([]any); ok && len(rawLinks) > 0 {
+				var keptLinks []any
+				linksChanged := false
+				for _, lItem := range rawLinks {
+					if lMap, ok := lItem.(map[string]any); ok {
+						uri, _ := lMap["uri"].(string)
+						rem, _ := lMap["remark"].(string)
+						if strings.HasPrefix(uri, "vmess://") && (strings.Contains(rem, "argo") || strings.Contains(uri, "argo")) {
+							linksChanged = true
+							continue
+						}
+					}
+					keptLinks = append(keptLinks, lItem)
+				}
+				if linksChanged {
+					client["links"] = keptLinks
+					clientModified = true
+				}
+			}
+
+			if clientModified {
+				if err := s.apiSaveClient("edit", client); err != nil {
+					if s.dbPath != "" {
+						cfgBytes, _ := json.Marshal(cfgMap)
+						lBytes, _ := json.Marshal(client["links"])
+						_, _ = runSQLite(s.dbPath, fmt.Sprintf("UPDATE clients SET config=%s, links=%s WHERE id=%d;",
+							sqliteQuote(string(cfgBytes)), sqliteQuote(string(lBytes)), cID))
+					}
 				}
 			}
 		}
@@ -1845,8 +1906,16 @@ func (s *SUI) syncSUIDatabaseLinks(publicHost string) {
 				needSave = true
 			}
 			if links, ok := client["links"].([]any); ok {
+				var preserved []any
 				for _, item := range links {
 					if m, ok := item.(map[string]any); ok {
+						uri, _ := m["uri"].(string)
+						rem, _ := m["remark"].(string)
+						// 净化清除旧的 vmess-argo 链接，确保切换为 vless 后的权威订阅干净
+						if strings.HasPrefix(uri, "vmess://") && (strings.Contains(rem, "argo") || strings.Contains(uri, "argo")) {
+							needSave = true
+							continue
+						}
 						if u, ok := m["uri"].(string); ok {
 							cleaned := cleanDefaultUserPrefix(u)
 							if cleaned != u {
@@ -1858,8 +1927,12 @@ func (s *SUI) syncSUIDatabaseLinks(publicHost string) {
 							m["remark"] = strings.TrimPrefix(r, "默认用户-")
 							needSave = true
 						}
+						preserved = append(preserved, item)
+					} else {
+						preserved = append(preserved, item)
 					}
 				}
+				client["links"] = preserved
 			}
 			if needSave {
 				if err := s.apiSaveClient("edit", client); err != nil {
@@ -2105,6 +2178,7 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 		Type       string `json:"type"`
 		Server     string `json:"server"`
 		ServerPort int    `json:"server_port"`
+		ListenPort int    `json:"listen_port"`
 		Tag        string `json:"tag"`
 		TLS        struct {
 			Enabled    bool   `json:"enabled"`
@@ -2183,6 +2257,27 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 			}
 		}
 		port := out.ServerPort
+		if port <= 0 {
+			port = out.ListenPort
+		}
+		isArgo := (strings.Contains(out.Tag, "argo") || strings.Contains(tag, "argo")) && out.Transport.Type == "ws"
+		if isArgo {
+			tunnelHost := ""
+			if out.Transport.Headers != nil && out.Transport.Headers["Host"] != "" {
+				tunnelHost = out.Transport.Headers["Host"]
+			} else if out.Transport.Headers != nil && out.Transport.Headers["host"] != "" {
+				tunnelHost = out.Transport.Headers["host"]
+			} else if out.Transport.Host != "" {
+				tunnelHost = out.Transport.Host
+			} else if out.TLS.ServerName != "" && net.ParseIP(out.TLS.ServerName) == nil {
+				tunnelHost = out.TLS.ServerName
+			}
+			if tunnelHost != "" {
+				serverHost = tunnelHost
+			}
+			port = 443
+			out.TLS.Enabled = true
+		}
 		addrs = append(addrs, AddrItem{
 			Server:     serverHost,
 			ServerPort: port,
@@ -2252,8 +2347,16 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 				}
 				v.Set("path", path)
 			}
+			hostToUse := ""
 			if out.Transport.Headers != nil && out.Transport.Headers["Host"] != "" {
-				v.Set("host", out.Transport.Headers["Host"])
+				hostToUse = out.Transport.Headers["Host"]
+			} else if out.Transport.Headers != nil && out.Transport.Headers["host"] != "" {
+				hostToUse = out.Transport.Headers["host"]
+			} else if out.Transport.Host != "" {
+				hostToUse = out.Transport.Host
+			}
+			if hostToUse != "" {
+				v.Set("host", hostToUse)
 			}
 			if out.Transport.ServiceName != "" {
 				v.Set("serviceName", out.Transport.ServiceName)
@@ -2285,12 +2388,18 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 				if fp == "" {
 					fp = addr.TLS.UTLS.Fingerprint
 				}
-				if fp != "" {
-					v.Set("fp", fp)
+				if fp == "" {
+					fp = "chrome"
 				}
+				v.Set("fp", fp)
 				if flow, ok := clientCfg["vless"]["flow"].(string); ok && flow != "" && tp == "tcp" {
 					v.Set("flow", flow)
 				}
+				if tp == "ws" && v.Get("host") == "" && sniToUse != "" && net.ParseIP(sniToUse) == nil {
+					v.Set("host", sniToUse)
+				}
+			} else {
+				v.Set("security", "none")
 			}
 			links = append(links, fmt.Sprintf("vless://%s@%s:%d?%s#%s", uuidStr, formatURLHost(host), port, v.Encode(), url.PathEscape(remark)))
 
@@ -2473,6 +2582,12 @@ func replaceLinkCredential(uri string, proto string, oldClientCfg, newClientCfg 
 		newUUID := getCfgVal(newClientCfg, proto, "uuid")
 		if oldUUID != "" && newUUID != "" && strings.Contains(uri, oldUUID) {
 			return strings.ReplaceAll(uri, oldUUID, newUUID)
+		}
+		if newUUID != "" && strings.HasPrefix(uri, "vless://") {
+			atIdx := strings.Index(uri, "@")
+			if atIdx != -1 {
+				return "vless://" + newUUID + uri[atIdx:]
+			}
 		}
 	case "tuic":
 		oldUUID := getCfgVal(oldClientCfg, "tuic", "uuid")
@@ -2724,6 +2839,9 @@ func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, 
 			for _, item := range linksArr {
 				if item.Remark == inbTag || item.Remark == baseInbTag || getBaseTag(item.Remark) == baseInbTag {
 					if item.URI != "" {
+						if inbType != "" && !strings.HasPrefix(item.URI, inbType+"://") {
+							continue
+						}
 						matchedURIs = append(matchedURIs, item.URI)
 					}
 				}
@@ -2761,6 +2879,9 @@ func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, 
 			for _, item := range tmplLinks {
 				if item.Remark == inbTag || item.Remark == baseInbTag || getBaseTag(item.Remark) == baseInbTag {
 					if item.URI != "" {
+						if inbType != "" && !strings.HasPrefix(item.URI, inbType+"://") {
+							continue
+						}
 						derivedURI := replaceLinkCredential(item.URI, inbType, tmplCfg, clientCfg)
 						matchedURIs = append(matchedURIs, derivedURI)
 					}

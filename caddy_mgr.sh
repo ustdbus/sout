@@ -1318,6 +1318,7 @@ for ib in inbounds:
 
 users = [{'name': 'default', 'uuid': str(uuid.uuid4())}]
 argo_tag = f"vless-argo-{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}"
+old_vmess_tag = None
 if argo_nodes:
     old_users = argo_nodes[0].get('users')
     if old_users and isinstance(old_users, list) and len(old_users) > 0:
@@ -1331,7 +1332,58 @@ if argo_nodes:
     if old_tag.startswith('vless-argo-') and len(old_tag) == len('vless-argo-') + 4:
         argo_tag = old_tag
     elif old_tag.startswith('vmess-argo-') and len(old_tag) == len('vmess-argo-') + 4:
+        old_vmess_tag = old_tag
         argo_tag = 'vless-argo-' + old_tag[len('vmess-argo-'):]
+    elif old_tag == 'vmess-argo' or old_tag.startswith('vmess-argo'):
+        old_vmess_tag = old_tag
+    old_port = argo_nodes[0].get('listen_port')
+    if old_port:
+        node_port = int(old_port)
+    old_tr = argo_nodes[0].get('transport')
+    if isinstance(old_tr, dict) and old_tr.get('path'):
+        ws_path = old_tr['path']
+
+# 保持已有的优选 IP 列表，仅更新 TLS SNI 为新域名
+addrs_file = '/var/lib/sout/singbox_inbound_addrs.json'
+try:
+    with open(addrs_file, 'r', encoding='utf-8') as af:
+        addrs_map = json.load(af)
+except Exception:
+    addrs_map = {}
+
+# 若从旧的 vmess-argo 升级，同步继承优选列表
+if old_vmess_tag and old_vmess_tag in addrs_map and argo_tag not in addrs_map:
+    addrs_map[argo_tag] = addrs_map[old_vmess_tag]
+
+cur_addrs = addrs_map.get(argo_tag, [])
+if cur_addrs and isinstance(cur_addrs, list) and len(cur_addrs) > 0:
+    for it in cur_addrs:
+        if isinstance(it, dict):
+            if 'tls' not in it or not isinstance(it['tls'], dict):
+                it['tls'] = {'enabled': True, 'insecure': False, 'utls': {'enabled': True, 'fingerprint': 'chrome'}}
+            it['tls']['server_name'] = domain
+            it['tls']['enabled'] = True
+            if len(cur_addrs) == 1 and (it.get('server') == '' or '.trycloudflare.com' in str(it.get('server'))):
+                it['server'] = domain
+else:
+    cur_addrs = [{
+        'server': domain,
+        'server_port': 443,
+        'tls': {
+            'disable_sni': False,
+            'enabled': True,
+            'insecure': False,
+            'server_name': domain,
+            'utls': {'enabled': True, 'fingerprint': 'chrome'}
+        }
+    }]
+addrs_map[argo_tag] = cur_addrs
+try:
+    os.makedirs(os.path.dirname(addrs_file), exist_ok=True)
+    with open(addrs_file, 'w', encoding='utf-8') as af:
+        json.dump(addrs_map, af, indent=2)
+except Exception:
+    pass
 
 primary_vless = {
     'type': 'vless',
@@ -1498,11 +1550,13 @@ try:
 
     node_tag = None
     existing_id = None
+    existing_row = None
     for r in inbound_rows:
         t = r.get('tag', '')
         if t == 'vless-argo' or t.startswith('vless-argo-'):
             node_tag = t
             existing_id = r.get('id')
+            existing_row = r
             break
 
     if not node_tag:
@@ -1510,6 +1564,7 @@ try:
             t = r.get('tag', '')
             if t == 'vmess-argo' or t.startswith('vmess-argo-') or (r.get('type') == 'vmess' and 'argo' in t):
                 existing_id = r.get('id')
+                existing_row = r
                 if t.startswith('vmess-argo-') and len(t) == len('vmess-argo-') + 4:
                     node_tag = 'vless-argo-' + t[len('vmess-argo-'):]
                 else:
@@ -1525,30 +1580,57 @@ try:
         node_tag = f"vless-argo-{rand_suffix}"
 
     client_uuid = str(uuid.uuid4())
-    addrs_data = [{
-        'server': os.environ['DOMAIN'],
-        'server_port': 443,
-        'tls': {
-            'disable_sni': False,
-            'enabled': True,
-            'insecure': False,
-            'server_name': os.environ['DOMAIN'],
-            'utls': {'enabled': True, 'fingerprint': 'chrome'}
-        }
-    }]
+    node_port = int(os.environ['NODE_PORT'])
+    ws_path = os.environ['WS_PATH']
+    if existing_row:
+        if existing_row.get('listen_port'):
+            node_port = int(existing_row['listen_port'])
+        old_tr = existing_row.get('transport')
+        if isinstance(old_tr, dict) and old_tr.get('path'):
+            ws_path = old_tr['path']
+
+    addrs_data = []
+    old_addrs = existing_row.get('addrs') if existing_row else None
+    if old_addrs and isinstance(old_addrs, list) and len(old_addrs) > 0:
+        for item in old_addrs:
+            if not isinstance(item, dict): continue
+            new_item = dict(item)
+            tls_info = new_item.get('tls')
+            if not isinstance(tls_info, dict):
+                tls_info = {'enabled': True, 'insecure': False, 'utls': {'enabled': True, 'fingerprint': 'chrome'}}
+            tls_info['server_name'] = os.environ['DOMAIN']
+            tls_info['enabled'] = True
+            new_item['tls'] = tls_info
+            if len(old_addrs) == 1 and (new_item.get('server') == '' or '.trycloudflare.com' in str(new_item.get('server'))):
+                new_item['server'] = os.environ['DOMAIN']
+            addrs_data.append(new_item)
+
+    if not addrs_data:
+        addrs_data = [{
+            'server': os.environ['DOMAIN'],
+            'server_port': 443,
+            'tls': {
+                'disable_sni': False,
+                'enabled': True,
+                'insecure': False,
+                'server_name': os.environ['DOMAIN'],
+                'utls': {'enabled': True, 'fingerprint': 'chrome'}
+            }
+        }]
+
     inbound_payload = {
         'id': existing_id or 0,
         'type': 'vless',
         'tag': node_tag,
         'tls_id': 0,
         'listen': '127.0.0.1',
-        'listen_port': int(os.environ['NODE_PORT']),
+        'listen_port': node_port,
         'addrs': addrs_data,
         'transport': {
             'early_data_header_name': 'Sec-WebSocket-Protocol',
             'max_early_data': 2560,
             'headers': {'Host': os.environ['DOMAIN']},
-            'path': os.environ['WS_PATH'],
+            'path': ws_path,
             'type': 'ws'
         }
     }

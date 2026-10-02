@@ -247,6 +247,9 @@ func (sb *SingBox) MigrateLegacyVmessArgo() error {
 		trMap["type"] = "ws"
 		trMap["early_data_header_name"] = "Sec-WebSocket-Protocol"
 		trMap["max_early_data"] = 2560
+		if p, ok := trMap["path"].(string); !ok || p == "" {
+			trMap["path"] = "/"
+		}
 		ib["transport"] = trMap
 
 		// users 净化：保留 name 与 uuid，去除 flow 与 alterId
@@ -256,6 +259,9 @@ func (sb *SingBox) MigrateLegacyVmessArgo() error {
 				if uMap, ok := uRaw.(map[string]any); ok {
 					name, _ := uMap["name"].(string)
 					uID, _ := uMap["uuid"].(string)
+					if uID == "" {
+						uID = generateUUID()
+					}
 					cleanU := map[string]any{
 						"name": name,
 						"uuid": uID,
@@ -265,7 +271,20 @@ func (sb *SingBox) MigrateLegacyVmessArgo() error {
 					cleanUsers = append(cleanUsers, uRaw)
 				}
 			}
+			if len(cleanUsers) == 0 {
+				cleanUsers = append(cleanUsers, map[string]any{
+					"name": "default",
+					"uuid": generateUUID(),
+				})
+			}
 			ib["users"] = cleanUsers
+		} else {
+			ib["users"] = []any{
+				map[string]any{
+					"name": "default",
+					"uuid": generateUUID(),
+				},
+			}
 		}
 
 		updatedInbounds = append(updatedInbounds, ib)
@@ -277,6 +296,49 @@ func (sb *SingBox) MigrateLegacyVmessArgo() error {
 	}
 
 	cfg["inbounds"] = updatedInbounds
+
+	// 同步更新 route.rules 中匹配了 oldTag 的路由规则 (inbound 或 auth_user)
+	if len(tagMigrations) > 0 {
+		if routeRaw, ok := cfg["route"].(map[string]any); ok && routeRaw != nil {
+			if rulesRaw, ok := routeRaw["rules"].([]any); ok {
+				for _, rRaw := range rulesRaw {
+					if rMap, ok := rRaw.(map[string]any); ok {
+						if inbStr, ok := rMap["inbound"].(string); ok {
+							if nTag, exists := tagMigrations[inbStr]; exists {
+								rMap["inbound"] = nTag
+							}
+						} else if inbArr, ok := rMap["inbound"].([]any); ok {
+							var updatedArr []any
+							for _, it := range inbArr {
+								if s, ok := it.(string); ok {
+									if nTag, exists := tagMigrations[s]; exists {
+										updatedArr = append(updatedArr, nTag)
+										continue
+									}
+								}
+								updatedArr = append(updatedArr, it)
+							}
+							rMap["inbound"] = updatedArr
+						}
+						if authUsers, ok := rMap["auth_user"].([]any); ok {
+							var updatedUsers []any
+							for _, u := range authUsers {
+								if uStr, ok := u.(string); ok {
+									if nTag, exists := tagMigrations[uStr]; exists {
+										updatedUsers = append(updatedUsers, nTag)
+										continue
+									}
+								}
+								updatedUsers = append(updatedUsers, u)
+							}
+							rMap["auth_user"] = updatedUsers
+						}
+					}
+				}
+			}
+		}
+	}
+
 	if err := sb.saveConfig(cfg); err != nil {
 		return fmt.Errorf("保存迁移后的 sing-box 配置失败: %w", err)
 	}
@@ -947,6 +1009,13 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 		if hdrs, ok := trMap["headers"].(map[string]any); ok {
 			if h, ok := hdrs["Host"].(string); ok && h != "" {
 				wsHost = h
+			} else if h, ok := hdrs["host"].(string); ok && h != "" {
+				wsHost = h
+			}
+		}
+		if wsHost == "" {
+			if h, ok := trMap["host"].(string); ok && h != "" {
+				wsHost = h
 			}
 		}
 		if edName, ok := trMap["early_data_header_name"].(string); ok {
@@ -1151,8 +1220,12 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 
 			if transportType == "ws" && finalWsPath != "" {
 				v.Set("path", finalWsPath)
-				if wsHost != "" {
-					v.Set("host", wsHost)
+				hostToSet := wsHost
+				if hostToSet == "" {
+					hostToSet = itemSNI
+				}
+				if hostToSet != "" && net.ParseIP(hostToSet) == nil {
+					v.Set("host", hostToSet)
 				}
 			}
 
