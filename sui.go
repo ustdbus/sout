@@ -299,6 +299,25 @@ func (s *SUI) MigrateLegacyVmessArgo() error {
 		return nil
 	}
 
+	var caddyDomain, caddyWsPath string
+	if s.workDir != "" {
+		if b, err := os.ReadFile(filepath.Join(s.workDir, "caddy_meta.json")); err == nil {
+			var m struct {
+				Domain string `json:"domain"`
+				WsPath string `json:"ws_path"`
+			}
+			if json.Unmarshal(b, &m) == nil {
+				caddyDomain = strings.TrimSpace(m.Domain)
+				caddyWsPath = strings.TrimSpace(m.WsPath)
+			}
+		}
+		if caddyDomain == "" {
+			if b, err := os.ReadFile(filepath.Join(s.workDir, "tunnel_domain")); err == nil {
+				caddyDomain = strings.TrimSpace(string(b))
+			}
+		}
+	}
+
 	migratedAny := false
 	var migratedInboundIDs []int
 
@@ -338,7 +357,9 @@ func (s *SUI) MigrateLegacyVmessArgo() error {
 			isLegacyArgo = true
 		}
 
-		if !isLegacyArgo {
+		isCurrentArgo := strings.HasPrefix(tag, "vless-argo") || tag == "vless-argo" || (listen == "127.0.0.1" && trType == "ws" && typ == "vless")
+
+		if !isLegacyArgo && !isCurrentArgo {
 			continue
 		}
 
@@ -353,14 +374,24 @@ func (s *SUI) MigrateLegacyVmessArgo() error {
 		ib["tag"] = newTag
 		ib["type"] = "vless"
 
-		// 规范 transport (VLESS + WebSocket + early data)
+		// 规范 transport (VLESS + WebSocket + early data + Caddy 反代对齐)
 		if trMap == nil {
 			trMap = make(map[string]any)
 		}
 		trMap["type"] = "ws"
 		trMap["early_data_header_name"] = "Sec-WebSocket-Protocol"
 		trMap["max_early_data"] = 2560
-		if p, ok := trMap["path"].(string); !ok || p == "" {
+		if caddyDomain != "" {
+			hdrs, _ := trMap["headers"].(map[string]any)
+			if hdrs == nil {
+				hdrs = make(map[string]any)
+			}
+			hdrs["Host"] = caddyDomain
+			trMap["headers"] = hdrs
+		}
+		if caddyWsPath != "" {
+			trMap["path"] = "/" + strings.TrimPrefix(caddyWsPath, "/")
+		} else if p, ok := trMap["path"].(string); !ok || p == "" {
 			trMap["path"] = "/"
 		}
 		ib["transport"] = trMap
@@ -371,14 +402,73 @@ func (s *SUI) MigrateLegacyVmessArgo() error {
 			ib["options"] = optMap
 		}
 
-		// 提交保存修改后的入站 (调用原生 API)
+		// 规范 addrs：为 Argo 节点的所有入站地址注入完备的 TLS / SNI / uTLS 指纹配置
+		var finalAddrs []any
+		if rawAddrs, ok := ib["addrs"].([]any); ok && len(rawAddrs) > 0 {
+			for _, aRaw := range rawAddrs {
+				if aMap, ok := aRaw.(map[string]any); ok {
+					itemDict := make(map[string]any)
+					for k, v := range aMap {
+						itemDict[k] = v
+					}
+					tlsVal, _ := itemDict["tls"].(map[string]any)
+					if tlsVal == nil {
+						tlsVal = make(map[string]any)
+					}
+					tlsVal["enabled"] = true
+					tlsVal["insecure"] = false
+					if caddyDomain != "" {
+						tlsVal["server_name"] = caddyDomain
+					}
+					utlsVal, _ := tlsVal["utls"].(map[string]any)
+					if utlsVal == nil {
+						utlsVal = make(map[string]any)
+					}
+					utlsVal["enabled"] = true
+					utlsVal["fingerprint"] = "chrome"
+					tlsVal["utls"] = utlsVal
+					itemDict["tls"] = tlsVal
+					finalAddrs = append(finalAddrs, itemDict)
+				} else {
+					finalAddrs = append(finalAddrs, aRaw)
+				}
+			}
+		}
+		if len(finalAddrs) == 0 && caddyDomain != "" {
+			finalAddrs = []any{
+				map[string]any{
+					"server":      caddyDomain,
+					"server_port": 443,
+					"tls": map[string]any{
+						"enabled":     true,
+						"insecure":    false,
+						"server_name": caddyDomain,
+						"utls": map[string]any{
+							"enabled":     true,
+							"fingerprint": "chrome",
+						},
+					},
+				},
+			}
+		}
+		if len(finalAddrs) > 0 {
+			ib["addrs"] = finalAddrs
+		}
+
+		// 提交保存修改后的入站 (优先原生 API，同时更新 SQLite 确保 addrs 与 options 完全持久化)
 		if err := s.apiSaveInbound("edit", ib); err != nil {
 			log.Printf("[s-ui] API 更新入站 %d (vmess -> vless) 失败: %v，尝试直接更新 SQLite", id, err)
-			if s.dbPath != "" {
-				optBytes, _ := json.Marshal(ib)
-				if optMap != nil {
-					optBytes, _ = json.Marshal(optMap)
-				}
+		}
+		if s.dbPath != "" {
+			optBytes, _ := json.Marshal(ib)
+			if optMap != nil {
+				optBytes, _ = json.Marshal(optMap)
+			}
+			addrsBytes, _ := json.Marshal(finalAddrs)
+			if len(finalAddrs) > 0 {
+				_, _ = runSQLite(s.dbPath, fmt.Sprintf("UPDATE inbounds SET type='vless', tag=%s, options=%s, addrs=%s WHERE id=%d;",
+					sqliteQuote(newTag), sqliteQuote(string(optBytes)), sqliteQuote(string(addrsBytes)), id))
+			} else {
 				_, _ = runSQLite(s.dbPath, fmt.Sprintf("UPDATE inbounds SET type='vless', tag=%s, options=%s WHERE id=%d;",
 					sqliteQuote(newTag), sqliteQuote(string(optBytes)), id))
 			}
@@ -386,7 +476,7 @@ func (s *SUI) MigrateLegacyVmessArgo() error {
 
 		migratedInboundIDs = append(migratedInboundIDs, id)
 		migratedAny = true
-		log.Printf("[s-ui] 已自动将存量旧节点 %s (ID: %d) 平滑升级覆盖为 %s (VLESS+WebSocket+EarlyData)", tag, id, newTag)
+		log.Printf("[s-ui] 已自动校准并将存量节点 %s (ID: %d) 平滑升级覆盖为 %s (VLESS+WebSocket+EarlyData+TLS)", tag, id, newTag)
 	}
 
 	if !migratedAny {
@@ -1911,8 +2001,12 @@ func (s *SUI) syncSUIDatabaseLinks(publicHost string) {
 					if m, ok := item.(map[string]any); ok {
 						uri, _ := m["uri"].(string)
 						rem, _ := m["remark"].(string)
-						// 净化清除旧的 vmess-argo 链接，确保切换为 vless 后的权威订阅干净
+						// 净化清除旧的 vmess-argo 链接以及缺失 TLS 的残缺 vless-argo 链接
 						if strings.HasPrefix(uri, "vmess://") && (strings.Contains(rem, "argo") || strings.Contains(uri, "argo")) {
+							needSave = true
+							continue
+						}
+						if strings.HasPrefix(uri, "vless://") && (strings.Contains(rem, "argo") || strings.Contains(uri, "argo")) && (!strings.Contains(uri, "security=tls") || !strings.Contains(uri, "sni=") || !strings.Contains(uri, "host=")) {
 							needSave = true
 							continue
 						}
@@ -2244,10 +2338,53 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 		_ = json.Unmarshal(addrsBytes, &addrs)
 	}
 
+	isArgo := (strings.Contains(out.Tag, "argo") || strings.Contains(tag, "argo")) || (out.Transport.Type == "ws" && (out.ServerPort == 0 || out.ListenPort > 0))
+	tunnelHost := ""
+	if out.Transport.Headers != nil && out.Transport.Headers["Host"] != "" {
+		tunnelHost = out.Transport.Headers["Host"]
+	} else if out.Transport.Headers != nil && out.Transport.Headers["host"] != "" {
+		tunnelHost = out.Transport.Headers["host"]
+	} else if out.Transport.Host != "" {
+		tunnelHost = out.Transport.Host
+	} else if out.TLS.ServerName != "" && net.ParseIP(out.TLS.ServerName) == nil {
+		tunnelHost = out.TLS.ServerName
+	}
+	var caddyWsPath string
+	if s != nil && s.workDir != "" {
+		metaPath := filepath.Join(s.workDir, "caddy_meta.json")
+		if b, err := os.ReadFile(metaPath); err == nil {
+			var meta struct {
+				Domain string `json:"domain"`
+				WsPath string `json:"ws_path"`
+			}
+			if json.Unmarshal(b, &meta) == nil {
+				if meta.Domain != "" && tunnelHost == "" {
+					tunnelHost = strings.TrimSpace(meta.Domain)
+				}
+				caddyWsPath = strings.TrimSpace(meta.WsPath)
+			}
+		}
+		if tunnelHost == "" {
+			domPath := filepath.Join(s.workDir, "tunnel_domain")
+			if b, err := os.ReadFile(domPath); err == nil {
+				d := strings.TrimSpace(string(b))
+				if d != "" && net.ParseIP(d) == nil {
+					tunnelHost = d
+				}
+			}
+		}
+	}
+	if isArgo {
+		out.TLS.Enabled = true
+		if out.TLS.ServerName == "" && tunnelHost != "" {
+			out.TLS.ServerName = tunnelHost
+		}
+	}
+
 	if len(addrs) == 0 {
 		serverHost := publicHost
-		if serverHost == "" {
-			serverHost = out.Server
+		if isArgo && tunnelHost != "" {
+			serverHost = tunnelHost
 		}
 		if serverHost == "127.0.0.1" || serverHost == "localhost" || serverHost == "" {
 			if publicHost != "" {
@@ -2260,23 +2397,8 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 		if port <= 0 {
 			port = out.ListenPort
 		}
-		isArgo := (strings.Contains(out.Tag, "argo") || strings.Contains(tag, "argo")) && out.Transport.Type == "ws"
 		if isArgo {
-			tunnelHost := ""
-			if out.Transport.Headers != nil && out.Transport.Headers["Host"] != "" {
-				tunnelHost = out.Transport.Headers["Host"]
-			} else if out.Transport.Headers != nil && out.Transport.Headers["host"] != "" {
-				tunnelHost = out.Transport.Headers["host"]
-			} else if out.Transport.Host != "" {
-				tunnelHost = out.Transport.Host
-			} else if out.TLS.ServerName != "" && net.ParseIP(out.TLS.ServerName) == nil {
-				tunnelHost = out.TLS.ServerName
-			}
-			if tunnelHost != "" {
-				serverHost = tunnelHost
-			}
 			port = 443
-			out.TLS.Enabled = true
 		}
 		addrs = append(addrs, AddrItem{
 			Server:     serverHost,
@@ -2314,7 +2436,14 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 		}
 		port := cleaned.ServerPort
 		if port <= 0 {
-			port = out.ServerPort
+			if isArgo {
+				port = 443
+			} else {
+				port = out.ServerPort
+				if port <= 0 {
+					port = out.ListenPort
+				}
+			}
 		}
 
 		remark := baseRemark
@@ -2336,14 +2465,25 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 				tp = "tcp"
 			}
 			v.Set("type", tp)
-			if out.Transport.Path != "" {
-				path := out.Transport.Path
-				if out.Transport.MaxEarlyData > 0 && out.Transport.EarlyDataHeaderName == "Sec-WebSocket-Protocol" {
+			path := out.Transport.Path
+			if isArgo && (path == "" || path == "/") && caddyWsPath != "" {
+				path = "/" + strings.TrimPrefix(caddyWsPath, "/")
+			}
+			if path != "" {
+				maxEd := out.Transport.MaxEarlyData
+				if maxEd <= 0 && isArgo {
+					maxEd = 2560
+				}
+				edHdr := out.Transport.EarlyDataHeaderName
+				if edHdr == "" && isArgo {
+					edHdr = "Sec-WebSocket-Protocol"
+				}
+				if maxEd > 0 && (edHdr == "Sec-WebSocket-Protocol" || edHdr == "") {
 					sep := "?"
 					if strings.Contains(path, "?") {
 						sep = "&"
 					}
-					path = fmt.Sprintf("%s%sed=%d", path, sep, out.Transport.MaxEarlyData)
+					path = fmt.Sprintf("%s%sed=%d", path, sep, maxEd)
 				}
 				v.Set("path", path)
 			}
@@ -2354,6 +2494,8 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 				hostToUse = out.Transport.Headers["host"]
 			} else if out.Transport.Host != "" {
 				hostToUse = out.Transport.Host
+			} else if isArgo && tunnelHost != "" {
+				hostToUse = tunnelHost
 			}
 			if hostToUse != "" {
 				v.Set("host", hostToUse)
@@ -2361,11 +2503,16 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 			if out.Transport.ServiceName != "" {
 				v.Set("serviceName", out.Transport.ServiceName)
 			}
-			tlsEnabled := out.TLS.Enabled || rawAddr.TLS.Enabled || port == 443
+			tlsEnabled := out.TLS.Enabled || rawAddr.TLS.Enabled || port == 443 || (isArgo && port != 80)
 			if tlsEnabled {
 				sniToUse := rawAddr.TLS.ServerName
 				if sniToUse == "" {
 					sniToUse = out.TLS.ServerName
+				}
+				if isArgo && tunnelHost != "" {
+					if sniToUse == "" || net.ParseIP(sniToUse) != nil {
+						sniToUse = tunnelHost
+					}
 				}
 				if sniToUse == "" {
 					sniToUse = publicHost
@@ -2395,8 +2542,18 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 				if flow, ok := clientCfg["vless"]["flow"].(string); ok && flow != "" && tp == "tcp" {
 					v.Set("flow", flow)
 				}
-				if tp == "ws" && v.Get("host") == "" && sniToUse != "" && net.ParseIP(sniToUse) == nil {
-					v.Set("host", sniToUse)
+				if tp == "ws" {
+					h := v.Get("host")
+					if h == "" {
+						if tunnelHost != "" {
+							h = tunnelHost
+						} else if sniToUse != "" && net.ParseIP(sniToUse) == nil {
+							h = sniToUse
+						}
+					}
+					if h != "" {
+						v.Set("host", h)
+					}
 				}
 			} else {
 				v.Set("security", "none")
@@ -2842,6 +2999,12 @@ func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, 
 						if inbType != "" && !strings.HasPrefix(item.URI, inbType+"://") {
 							continue
 						}
+						// 若为 argo 节点且链接缺少 security=tls 或 sni 或 host，视为残缺链接丢弃，由 buildLinksFromInbound 动态构建
+						if (strings.Contains(inbTag, "argo") || strings.Contains(baseInbTag, "argo")) && strings.HasPrefix(item.URI, "vless://") {
+							if !strings.Contains(item.URI, "security=tls") || !strings.Contains(item.URI, "sni=") || !strings.Contains(item.URI, "host=") {
+								continue
+							}
+						}
 						matchedURIs = append(matchedURIs, item.URI)
 					}
 				}
@@ -2881,6 +3044,11 @@ func (s *SUI) InboundBranchLinks(inboundID int, clientID int, branchTag string, 
 					if item.URI != "" {
 						if inbType != "" && !strings.HasPrefix(item.URI, inbType+"://") {
 							continue
+						}
+						if (strings.Contains(inbTag, "argo") || strings.Contains(baseInbTag, "argo")) && strings.HasPrefix(item.URI, "vless://") {
+							if !strings.Contains(item.URI, "security=tls") || !strings.Contains(item.URI, "sni=") || !strings.Contains(item.URI, "host=") {
+								continue
+							}
 						}
 						derivedURI := replaceLinkCredential(item.URI, inbType, tmplCfg, clientCfg)
 						matchedURIs = append(matchedURIs, derivedURI)

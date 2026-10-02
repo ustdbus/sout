@@ -201,6 +201,25 @@ func (sb *SingBox) MigrateLegacyVmessArgo() error {
 		return nil
 	}
 
+	var caddyDomain, caddyWsPath string
+	if sb.workDir != "" {
+		if b, err := os.ReadFile(filepath.Join(sb.workDir, "caddy_meta.json")); err == nil {
+			var m struct {
+				Domain string `json:"domain"`
+				WsPath string `json:"ws_path"`
+			}
+			if json.Unmarshal(b, &m) == nil {
+				caddyDomain = strings.TrimSpace(m.Domain)
+				caddyWsPath = strings.TrimSpace(m.WsPath)
+			}
+		}
+		if caddyDomain == "" {
+			if b, err := os.ReadFile(filepath.Join(sb.workDir, "tunnel_domain")); err == nil {
+				caddyDomain = strings.TrimSpace(string(b))
+			}
+		}
+	}
+
 	changed := false
 	var updatedInbounds []any
 	tagMigrations := make(map[string]string) // oldTag -> newTag
@@ -228,7 +247,9 @@ func (sb *SingBox) MigrateLegacyVmessArgo() error {
 			isLegacyArgo = true
 		}
 
-		if !isLegacyArgo {
+		isCurrentArgo := strings.HasPrefix(tag, "vless-argo") || tag == "vless-argo" || (listen == "127.0.0.1" && trType == "ws" && typ == "vless")
+
+		if !isLegacyArgo && !isCurrentArgo {
 			updatedInbounds = append(updatedInbounds, ib)
 			continue
 		}
@@ -243,18 +264,50 @@ func (sb *SingBox) MigrateLegacyVmessArgo() error {
 		if newTag != tag {
 			tagMigrations[tag] = newTag
 			ib["tag"] = newTag
+			changed = true
 		}
-		ib["type"] = "vless"
+		if ib["type"] != "vless" {
+			ib["type"] = "vless"
+			changed = true
+		}
 
 		// 确保 transport 规范配置 (VLESS + WebSocket + EarlyData)
 		if trMap == nil {
 			trMap = make(map[string]any)
+			changed = true
 		}
-		trMap["type"] = "ws"
-		trMap["early_data_header_name"] = "Sec-WebSocket-Protocol"
-		trMap["max_early_data"] = 2560
-		if p, ok := trMap["path"].(string); !ok || p == "" {
+		if trMap["type"] != "ws" {
+			trMap["type"] = "ws"
+			changed = true
+		}
+		if trMap["early_data_header_name"] != "Sec-WebSocket-Protocol" {
+			trMap["early_data_header_name"] = "Sec-WebSocket-Protocol"
+			changed = true
+		}
+		if trMap["max_early_data"] != 2560 {
+			trMap["max_early_data"] = 2560
+			changed = true
+		}
+		if caddyDomain != "" {
+			hdrs, _ := trMap["headers"].(map[string]any)
+			if hdrs == nil {
+				hdrs = make(map[string]any)
+			}
+			if curH, _ := hdrs["Host"].(string); curH != caddyDomain {
+				hdrs["Host"] = caddyDomain
+				trMap["headers"] = hdrs
+				changed = true
+			}
+		}
+		if caddyWsPath != "" {
+			expectedPath := "/" + strings.TrimPrefix(caddyWsPath, "/")
+			if curP, _ := trMap["path"].(string); curP == "" || curP == "/" || curP != expectedPath {
+				trMap["path"] = expectedPath
+				changed = true
+			}
+		} else if p, ok := trMap["path"].(string); !ok || p == "" {
 			trMap["path"] = "/"
+			changed = true
 		}
 		ib["transport"] = trMap
 
@@ -349,10 +402,10 @@ func (sb *SingBox) MigrateLegacyVmessArgo() error {
 		return fmt.Errorf("保存迁移后的 sing-box 配置失败: %w", err)
 	}
 
-	// 迁移 singbox_inbound_addrs.json 中的优选域名/IP 映射
+	// 迁移与补全 singbox_inbound_addrs.json 中的优选域名/IP 映射
+	rawAddrsMap := sb.loadRawInboundAddrs()
+	addrsChanged := false
 	if len(tagMigrations) > 0 {
-		rawAddrsMap := sb.loadRawInboundAddrs()
-		addrsChanged := false
 		for oldTag, newTag := range tagMigrations {
 			if items, exists := rawAddrsMap[oldTag]; exists {
 				rawAddrsMap[newTag] = items
@@ -360,9 +413,39 @@ func (sb *SingBox) MigrateLegacyVmessArgo() error {
 				addrsChanged = true
 			}
 		}
-		if addrsChanged {
-			sb.saveRawInboundAddrs(rawAddrsMap)
+	}
+	// 确保所有 vless-argo 节点的优选 IP/域名都具备规范完整的 TLS/SNI/uTLS 指纹
+	for aTag, items := range rawAddrsMap {
+		if strings.HasPrefix(aTag, "vless-argo") || strings.Contains(aTag, "argo") {
+			for _, it := range items {
+				tlsMap, _ := it["tls"].(map[string]any)
+				if tlsMap == nil {
+					tlsMap = make(map[string]any)
+				}
+				if en, _ := tlsMap["enabled"].(bool); !en {
+					tlsMap["enabled"] = true
+					addrsChanged = true
+				}
+				if sn, _ := tlsMap["server_name"].(string); (sn == "" || net.ParseIP(sn) != nil) && caddyDomain != "" {
+					tlsMap["server_name"] = caddyDomain
+					addrsChanged = true
+				}
+				utlsMap, _ := tlsMap["utls"].(map[string]any)
+				if utlsMap == nil {
+					utlsMap = make(map[string]any)
+				}
+				if fp, _ := utlsMap["fingerprint"].(string); fp == "" {
+					utlsMap["enabled"] = true
+					utlsMap["fingerprint"] = "chrome"
+					tlsMap["utls"] = utlsMap
+					addrsChanged = true
+				}
+				it["tls"] = tlsMap
+			}
 		}
+	}
+	if addrsChanged {
+		sb.saveRawInboundAddrs(rawAddrsMap)
 	}
 
 	sb.restartService()
@@ -1046,7 +1129,32 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 		}
 	}
 
-	isArgoWs := (proto == "vmess" || (proto == "vless" && transportType == "ws")) && wsHost != "" && net.ParseIP(wsHost) == nil
+	isArgoWs := (proto == "vmess" || (proto == "vless" && (transportType == "ws" || strings.Contains(tag, "argo")))) && wsHost != "" && net.ParseIP(wsHost) == nil
+	if !isArgoWs && strings.Contains(tag, "argo") {
+		// 尝试从 caddy_meta.json 或 tunnel_domain 补齐域名
+		if sb.workDir != "" {
+			metaPath := filepath.Join(sb.workDir, "caddy_meta.json")
+			if b, err := os.ReadFile(metaPath); err == nil {
+				var meta struct {
+					Domain string `json:"domain"`
+				}
+				if json.Unmarshal(b, &meta) == nil && meta.Domain != "" {
+					wsHost = strings.TrimSpace(meta.Domain)
+					isArgoWs = true
+				}
+			}
+			if !isArgoWs {
+				domPath := filepath.Join(sb.workDir, "tunnel_domain")
+				if b, err := os.ReadFile(domPath); err == nil {
+					d := strings.TrimSpace(string(b))
+					if d != "" && net.ParseIP(d) == nil {
+						wsHost = d
+						isArgoWs = true
+					}
+				}
+			}
+		}
+	}
 	if isArgoWs {
 		serverSNI = wsHost
 	}
@@ -1069,14 +1177,22 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 
 	var links []string
 	for _, rawItem := range addrs {
-		item := sanitizeNodeAddrItem(rawItem, listenPort)
+		defaultP := listenPort
+		if isArgoWs {
+			defaultP = 443
+		}
+		item := sanitizeNodeAddrItem(rawItem, defaultP)
 		connectHost := strings.TrimSpace(item.Server)
 		if connectHost == "" {
 			connectHost = defaultHost
 		}
 		connectPort := item.ServerPort
 		if connectPort <= 0 {
-			connectPort = listenPort
+			if isArgoWs {
+				connectPort = 443
+			} else {
+				connectPort = listenPort
+			}
 		}
 
 		remark := baseRemark
@@ -1145,13 +1261,20 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 			itemHasTLS = true
 		}
 
+		// 走 Argo 隧道时，只要连接端口不是纯明文 80，默认强制开启 TLS（与原 VMess 逻辑完全对齐）
+		if isArgoWs && connectPort != 80 {
+			itemHasTLS = true
+		}
+
 		// 若开启了 TLS（或 Reality），且 itemFP 为空，默认对齐 s-ui 规范，赋予 "chrome"
 		if itemHasTLS && itemFP == "" {
 			itemFP = "chrome"
 		}
 
-		// SNI 兜底
-		if itemSNI == "" || itemSNI == "127.0.0.1" || itemSNI == "0.0.0.0" {
+		// SNI 兜底：若当前是 Argo 节点且 itemSNI 为空或为 IP，强制使用 wsHost (隧道域名)
+		if isArgoWs && (itemSNI == "" || net.ParseIP(itemSNI) != nil || itemSNI == "127.0.0.1" || itemSNI == "0.0.0.0") && wsHost != "" {
+			itemSNI = wsHost
+		} else if itemSNI == "" || itemSNI == "127.0.0.1" || itemSNI == "0.0.0.0" {
 			if wsHost != "" && net.ParseIP(wsHost) == nil {
 				itemSNI = wsHost
 			} else if net.ParseIP(connectHost) == nil && !strings.Contains(connectHost, ":") {
