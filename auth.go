@@ -144,7 +144,28 @@ func (a *Auth) Wrap(next http.Handler) http.Handler {
 
 		if strings.HasPrefix(r.URL.Path, "/sub=") {
 			pw := strings.TrimPrefix(r.URL.Path, "/sub=")
+			subPath := ""
+			if idx := strings.Index(pw, "/"); idx != -1 {
+				subPath = pw[idx:]
+				pw = pw[:idx]
+			}
 			if a.check(pw) {
+				r.URL.Path = "/sub" + subPath
+				next.ServeHTTP(w, r)
+				return
+			}
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "访问口令不正确"})
+			return
+		}
+		if (r.URL.Path == "/sub" || r.URL.Path == "/sub/") && (r.URL.Query().Get("token") != "" || r.URL.Query().Get("pw") != "" || r.URL.Query().Get("password") != "") {
+			token := r.URL.Query().Get("token")
+			if token == "" {
+				token = r.URL.Query().Get("pw")
+			}
+			if token == "" {
+				token = r.URL.Query().Get("password")
+			}
+			if a.check(token) {
 				r.URL.Path = "/sub"
 				next.ServeHTTP(w, r)
 				return

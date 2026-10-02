@@ -512,20 +512,19 @@ func (s *SUI) MigrateLegacyVmessArgo() error {
 			continue
 		}
 
-		// 提交保存修改后的入站 (优先原生 API，同时更新 SQLite 确保 addrs 与 options 完全持久化)
-		if err := s.apiSaveInbound("edit", ib); err != nil {
-			log.Printf("[s-ui] API 更新入站 %d (vmess -> vless) 失败: %v，尝试直接更新 SQLite", id, err)
+		// 提交保存修改后的入站 (100% 收敛至 s-ui 官方 HTTP API)
+		targetIB := ib
+		if fullIBs, err := s.apiInbounds(id); err == nil && len(fullIBs) > 0 {
+			targetIB = fullIBs[0]
+			targetIB["tag"] = newTag
+			targetIB["type"] = "vless"
+			targetIB["transport"] = trMap
+			targetIB["addrs"] = finalAddrs
+			targetIB["options"] = cleanOpt
 		}
-		if s.dbPath != "" {
-			optBytes, _ := json.Marshal(cleanOpt)
-			addrsBytes, _ := json.Marshal(finalAddrs)
-			if len(finalAddrs) > 0 {
-				_, _ = runSQLite(s.dbPath, fmt.Sprintf("UPDATE inbounds SET type='vless', tag=%s, options=CAST(%s AS BLOB), addrs=CAST(%s AS BLOB) WHERE id=%d;",
-					sqliteQuote(newTag), sqliteQuote(string(optBytes)), sqliteQuote(string(addrsBytes)), id))
-			} else {
-				_, _ = runSQLite(s.dbPath, fmt.Sprintf("UPDATE inbounds SET type='vless', tag=%s, options=CAST(%s AS BLOB) WHERE id=%d;",
-					sqliteQuote(newTag), sqliteQuote(string(optBytes)), id))
-			}
+		if err := s.apiSaveInbound("edit", targetIB); err != nil {
+			log.Printf("[s-ui] API 更新入站 %d (vmess -> vless) 失败: %v", id, err)
+			continue
 		}
 
 		migratedInboundIDs = append(migratedInboundIDs, id)
@@ -536,8 +535,6 @@ func (s *SUI) MigrateLegacyVmessArgo() error {
 	if !migratedAny {
 		return nil
 	}
-
-	restartSUI()
 
 	// 2. 检查并确保相关 Clients 具有有效的 vless 配置（继承旧的 vmess UUID）并清理旧 vmess 链接
 	allClients, err := s.apiClients(0)
@@ -631,12 +628,7 @@ func (s *SUI) MigrateLegacyVmessArgo() error {
 
 			if clientModified {
 				if err := s.apiSaveClient("edit", client); err != nil {
-					if s.dbPath != "" {
-						cfgBytes, _ := json.Marshal(cfgMap)
-						lBytes, _ := json.Marshal(client["links"])
-						_, _ = runSQLite(s.dbPath, fmt.Sprintf("UPDATE clients SET config=CAST(%s AS BLOB), links=CAST(%s AS BLOB) WHERE id=%d;",
-							sqliteQuote(string(cfgBytes)), sqliteQuote(string(lBytes)), cID))
-					}
+					log.Printf("[s-ui] API 更新客户端 %d 失败: %v", cID, err)
 				}
 			}
 		}
@@ -2072,6 +2064,18 @@ func (s *SUI) syncSUIDatabaseLinks(publicHost string) {
 							continue
 						}
 						if u, ok := m["uri"].(string); ok {
+							if strings.HasPrefix(u, "vless://") {
+								if pu, err := url.Parse(u); err == nil {
+									q := pu.Query()
+									if q.Get("encryption") == "" {
+										q.Set("encryption", "none")
+										pu.RawQuery = q.Encode()
+										u = pu.String()
+										m["uri"] = u
+										needSave = true
+									}
+								}
+							}
 							cleaned := cleanDefaultUserPrefix(u)
 							if cleaned != u {
 								m["uri"] = cleaned
@@ -2911,6 +2915,16 @@ func cleanDefaultUserPrefix(uri string) string {
 
 func formatNodeURI(uri string, tagToUse string) string {
 	uri = cleanDefaultUserPrefix(uri)
+	if strings.HasPrefix(uri, "vless://") {
+		if u, err := url.Parse(uri); err == nil {
+			q := u.Query()
+			if q.Get("encryption") == "" {
+				q.Set("encryption", "none")
+				u.RawQuery = q.Encode()
+				uri = u.String()
+			}
+		}
+	}
 	if strings.HasPrefix(uri, "tuic://") || strings.HasPrefix(uri, "hysteria2://") || strings.HasPrefix(uri, "hy2://") {
 		if u, err := url.Parse(uri); err == nil && u.Host != "" {
 			hostOnly := u.Hostname()

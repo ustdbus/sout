@@ -433,6 +433,11 @@ depend() {
 }
 
 start_pre() {
+  if [ -n "\$command" ]; then
+    local bin_name
+    bin_name="\$(basename "\$command")"
+    pkill -9 -x "\$bin_name" 2>/dev/null || true
+  fi
   if [ -f "\$pidfile" ]; then
     local p
     p=\$(cat "\$pidfile" 2>/dev/null)
@@ -444,6 +449,9 @@ start_pre() {
 
 stop_post() {
   rm -f "\$pidfile"
+  if [ -n "\$command" ]; then
+    pkill -9 -x "\$(basename "\$command")" 2>/dev/null || true
+  fi
 }
 SBRC
     chmod +x /etc/init.d/sing-box
@@ -1036,6 +1044,11 @@ depend() {
 }
 
 start_pre() {
+  if [ -n "\$command" ]; then
+    local bin_name
+    bin_name="\$(basename "\$command")"
+    pkill -9 -x "\$bin_name" 2>/dev/null || true
+  fi
   if [ -f "\$pidfile" ]; then
     local p
     p=\$(cat "\$pidfile" 2>/dev/null)
@@ -1047,6 +1060,9 @@ start_pre() {
 
 stop_post() {
   rm -f "\$pidfile"
+  if [ -n "\$command" ]; then
+    pkill -9 -x "\$(basename "\$command")" 2>/dev/null || true
+  fi
 }
 OPENRCEOF
     chmod +x /etc/init.d/sout
@@ -1231,6 +1247,11 @@ depend() {
 }
 
 start_pre() {
+  if [ -n "\$command" ]; then
+    local bin_name
+    bin_name="\$(basename "\$command")"
+    pkill -9 -x "\$bin_name" 2>/dev/null || true
+  fi
   if [ -f "\$pidfile" ]; then
     local p
     p=\$(cat "\$pidfile" 2>/dev/null)
@@ -1242,6 +1263,9 @@ start_pre() {
 
 stop_post() {
   rm -f "\$pidfile"
+  if [ -n "\$command" ]; then
+    pkill -9 -x "\$(basename "\$command")" 2>/dev/null || true
+  fi
 }
 SBRC
       chmod +x /etc/init.d/sing-box

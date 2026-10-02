@@ -135,6 +135,11 @@ depend() {
 }
 
 start_pre() {
+  if [ -n "\$command" ]; then
+    local bin_name
+    bin_name="\$(basename "\$command")"
+    pkill -9 -x "\$bin_name" 2>/dev/null || true
+  fi
   if [ -f "\$pidfile" ]; then
     local p
     p=\$(cat "\$pidfile" 2>/dev/null)
@@ -146,6 +151,9 @@ start_pre() {
 
 stop_post() {
   rm -f "\$pidfile"
+  if [ -n "\$command" ]; then
+    pkill -9 -x "\$(basename "\$command")" 2>/dev/null || true
+  fi
 }
 EOF
   chmod +x "$init"
@@ -1892,6 +1900,11 @@ depend() {
 }
 
 start_pre() {
+  if [ -n "\$command" ]; then
+    local bin_name
+    bin_name="\$(basename "\$command")"
+    pkill -9 -x "\$bin_name" 2>/dev/null || true
+  fi
   if [ -f "\$pidfile" ]; then
     local p
     p=\$(cat "\$pidfile" 2>/dev/null)
@@ -1903,6 +1916,9 @@ start_pre() {
 
 stop_post() {
   rm -f "\$pidfile"
+  if [ -n "\$command" ]; then
+    pkill -9 -x "\$(basename "\$command")" 2>/dev/null || true
+  fi
 }
 
 reload() {
@@ -2037,6 +2053,11 @@ depend() {
 }
 
 start_pre() {
+  if [ -n "\$command" ]; then
+    local bin_name
+    bin_name="\$(basename "\$command")"
+    pkill -9 -x "\$bin_name" 2>/dev/null || true
+  fi
   if [ -f "\$pidfile" ]; then
     local p
     p=\$(cat "\$pidfile" 2>/dev/null)
@@ -2048,6 +2069,9 @@ start_pre() {
 
 stop_post() {
   rm -f "\$pidfile"
+  if [ -n "\$command" ]; then
+    pkill -9 -x "\$(basename "\$command")" 2>/dev/null || true
+  fi
 }
 EOF
     chmod +x /etc/init.d/cloudflared
@@ -3348,30 +3372,6 @@ for r in rows:
         else:
             found_path = 'vlws'
             
-        # 同步更新节点域名与 SNI 及 transport Header 中的 Host
-        try:
-            domain_val = '${domain}'
-            if domain_val:
-                addrs = json.loads(addrs_raw) if addrs_raw else []
-                if isinstance(addrs, list) and len(addrs) > 0:
-                    for it in addrs:
-                        if not isinstance(it, dict): continue
-                        if 'tls' not in it or not isinstance(it['tls'], dict):
-                            it['tls'] = {'enabled': True, 'insecure': False, 'utls': {'enabled': True, 'fingerprint': 'chrome'}}
-                        it['tls']['server_name'] = domain_val
-                        it['tls']['enabled'] = True
-                    if len(addrs) == 1 and (addrs[0].get('server') == '' or '.trycloudflare.com' in str(addrs[0].get('server'))):
-                        addrs[0]['server'] = domain_val
-                    cur.execute('UPDATE inbounds SET addrs=? WHERE id=?', (sqlite3.Binary(json.dumps(addrs).encode('utf-8')), ib_id))
-                    
-                if isinstance(tr, dict) and 'headers' in tr and isinstance(tr['headers'], dict):
-                    tr['headers']['Host'] = domain_val
-                    opt['transport'] = tr
-                    cur.execute('UPDATE inbounds SET options=? WHERE id=?', (sqlite3.Binary(json.dumps(opt).encode('utf-8')), ib_id))
-                    
-                con.commit()
-        except Exception:
-            pass
         break
 
 con.close()
@@ -3541,20 +3541,27 @@ PYEOF
         reverse_proxy 127.0.0.1:${sui_port}
     }"
 
-    sub_caddy_rules="    redir /${sub_p} /${sub_p}/ 308
-
-    # 3. s-ui 节点订阅接口 (直接反代至 s-ui 独立订阅服务)
+    sub_caddy_rules="    # 3. s-ui 节点订阅接口 (直接反代至 s-ui 独立订阅服务)
     handle /${sub_p}* {
         reverse_proxy 127.0.0.1:${sub_port}
     }"
   else
-    sub_caddy_rules="    redir /${sub_p} /${sub_p}/ 308
-
-    # 3. sout 节点订阅接口 (重写并转发至 sout 自身的 /sub 订阅端点)
+    local sout_pw=""
+    [[ -f "${WORK_DIR}/password" ]] && sout_pw=$(cat "${WORK_DIR}/password" 2>/dev/null | tr -d ' \r\n')
+    [[ -z "$sout_pw" && -f "/etc/sout/password" ]] && sout_pw=$(cat "/etc/sout/password" 2>/dev/null | tr -d ' \r\n')
+    if [[ -n "$sout_pw" ]]; then
+      sub_caddy_rules="    # 3. sout 节点订阅接口 (重写并转发至 sout 自身的 /sub 订阅端点)
+    handle /${sub_p}* {
+        rewrite * /${sout_p}/sub=${sout_pw}
+        reverse_proxy 127.0.0.1:${sout_port}
+    }"
+    else
+      sub_caddy_rules="    # 3. sout 节点订阅接口 (重写并转发至 sout 自身的 /sub 订阅端点)
     handle /${sub_p}* {
         rewrite * /${sout_p}/sub
         reverse_proxy 127.0.0.1:${sout_port}
     }"
+    fi
   fi
 
   mkdir -p /etc/caddy

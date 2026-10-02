@@ -357,6 +357,11 @@ depend() {
 }
 
 start_pre() {
+  if [ -n "\$command" ]; then
+    local bin_name
+    bin_name="\$(basename "\$command")"
+    pkill -9 -x "\$bin_name" 2>/dev/null || true
+  fi
   if [ -f "\$pidfile" ]; then
     local p
     p=\$(cat "\$pidfile" 2>/dev/null)
@@ -368,6 +373,9 @@ start_pre() {
 
 stop_post() {
   rm -f "\$pidfile"
+  if [ -n "\$command" ]; then
+    pkill -9 -x "\$(basename "\$command")" 2>/dev/null || true
+  fi
 }
 EOF
     chmod +x /etc/init.d/cloudflared
@@ -457,6 +465,11 @@ depend() {
 }
 
 start_pre() {
+  if [ -n "\$command" ]; then
+    local bin_name
+    bin_name="\$(basename "\$command")"
+    pkill -9 -x "\$bin_name" 2>/dev/null || true
+  fi
   if [ -f "\$pidfile" ]; then
     local p
     p=\$(cat "\$pidfile" 2>/dev/null)
@@ -468,6 +481,9 @@ start_pre() {
 
 stop_post() {
   rm -f "\$pidfile"
+  if [ -n "\$command" ]; then
+    pkill -9 -x "\$(basename "\$command")" 2>/dev/null || true
+  fi
 }
 
 reload() {
@@ -614,20 +630,27 @@ setup_caddy_proxy() {
         reverse_proxy 127.0.0.1:${sui_port}
     }"
 
-    sub_caddy_block="    redir /${sub_p} /${sub_p}/ 308
-
-    # 3. s-ui 节点订阅接口 (直接反代至 s-ui 独立订阅服务)
+    sub_caddy_block="    # 3. s-ui 节点订阅接口 (直接反代至 s-ui 独立订阅服务)
     handle /${sub_p}* {
         reverse_proxy 127.0.0.1:${sub_port}
     }"
   else
-    sub_caddy_block="    redir /${sub_p} /${sub_p}/ 308
-
-    # 3. sout 节点订阅接口 (重写并转发至 sout 自身的 /sub 订阅端点)
+    local sout_pw=""
+    [[ -f "${WORK_DIR}/password" ]] && sout_pw=$(cat "${WORK_DIR}/password" 2>/dev/null | tr -d ' \r\n')
+    [[ -z "$sout_pw" && -f "/etc/sout/password" ]] && sout_pw=$(cat "/etc/sout/password" 2>/dev/null | tr -d ' \r\n')
+    if [[ -n "$sout_pw" ]]; then
+      sub_caddy_block="    # 3. sout 节点订阅接口 (重写并转发至 sout 自身的 /sub 订阅端点)
+    handle /${sub_p}* {
+        rewrite * /${sout_p}/sub=${sout_pw}
+        reverse_proxy 127.0.0.1:${sout_port}
+    }"
+    else
+      sub_caddy_block="    # 3. sout 节点订阅接口 (重写并转发至 sout 自身的 /sub 订阅端点)
     handle /${sub_p}* {
         rewrite * /${sout_p}/sub
         reverse_proxy 127.0.0.1:${sout_port}
     }"
+    fi
   fi
 
   # 生成通配监听的 Caddyfile
@@ -928,45 +951,72 @@ req = urllib.request.Request(BASE.rstrip('/') + '/save', data=form, headers={'To
 with urllib.request.urlopen(req, timeout=20) as resp:
     resp.read()
 
-# 同步更新 s-ui 数据库中 127.0.0.1 节点的 TLS SNI 与 Host，绝不清空原有优选列表
+# 同步更新 s-ui 中 127.0.0.1 节点的 TLS SNI 与 Host（100% 收敛至 s-ui 官方 HTTP API）
 try:
-    con_s = sqlite3.connect(os.environ['SUI_DB'])
-    cur_s = con_s.cursor()
-    cur_s.execute('SELECT id, options, addrs FROM inbounds')
-    for row in cur_s.fetchall():
-        ib_id, opt_raw, addrs_raw = row[0], row[1], row[2]
-        opt_str = opt_raw.decode('utf-8', errors='replace') if isinstance(opt_raw, bytes) else str(opt_raw or '')
-        addrs_str = addrs_raw.decode('utf-8', errors='replace') if isinstance(addrs_raw, bytes) else str(addrs_raw or '')
+    req_ibs = urllib.request.Request(BASE.rstrip('/') + '/inbounds', headers={'Token': TOKEN})
+    with urllib.request.urlopen(req_ibs, timeout=10) as resp_ibs:
+        ibs_json = json.loads(resp_ibs.read().decode('utf-8'))
+    inbounds_list = []
+    if isinstance(ibs_json, dict):
+        if 'inbounds' in ibs_json and isinstance(ibs_json['inbounds'], list):
+            inbounds_list = ibs_json['inbounds']
+        elif 'obj' in ibs_json and isinstance(ibs_json['obj'], dict):
+            inbounds_list = ibs_json['obj'].get('inbounds', [])
+        elif 'obj' in ibs_json and isinstance(ibs_json['obj'], list):
+            inbounds_list = ibs_json['obj']
+    for ib_summary in inbounds_list:
+        ib_id = ib_summary.get('id')
+        if not ib_id:
+            continue
         try:
-            opt_dict = json.loads(opt_str) if opt_str else {}
+            req_single = urllib.request.Request(f"{BASE.rstrip('/')}/inbounds?id={ib_id}", headers={'Token': TOKEN})
+            with urllib.request.urlopen(req_single, timeout=10) as resp_s:
+                s_json = json.loads(resp_s.read().decode('utf-8'))
+            single_list = s_json.get('inbounds', []) if isinstance(s_json, dict) else []
+            ib_obj = single_list[0] if single_list else ib_summary
         except Exception:
-            opt_dict = {}
+            ib_obj = ib_summary
+
+        opt_dict = ib_obj.get('options') or {}
         if opt_dict.get('listen') == '127.0.0.1':
+            changed = False
             tr = opt_dict.get('transport', {})
             if isinstance(tr, dict) and 'headers' in tr and isinstance(tr['headers'], dict):
-                tr['headers']['Host'] = os.environ['DOMAIN']
-                opt_dict['transport'] = tr
-                cur_s.execute('UPDATE inbounds SET options=? WHERE id=?', (sqlite3.Binary(json.dumps(opt_dict).encode('utf-8')), ib_id))
-            try:
-                addrs_list = json.loads(addrs_str) if addrs_str else []
-            except Exception:
-                addrs_list = []
+                if tr['headers'].get('Host') != os.environ['DOMAIN']:
+                    tr['headers']['Host'] = os.environ['DOMAIN']
+                    opt_dict['transport'] = tr
+                    ib_obj['options'] = opt_dict
+                    changed = True
+            addrs_list = ib_obj.get('addrs') or []
             if isinstance(addrs_list, list) and len(addrs_list) > 0:
                 for it in addrs_list:
                     if isinstance(it, dict):
-                        if 'tls' not in it or not isinstance(it['tls'], dict):
-                            it['tls'] = {'enabled': True, 'insecure': False, 'utls': {'enabled': True, 'fingerprint': 'chrome'}}
-                        it['tls']['server_name'] = os.environ['DOMAIN']
-                        it['tls']['enabled'] = True
+                        tls_d = it.get('tls')
+                        if not isinstance(tls_d, dict):
+                            tls_d = {'enabled': True, 'insecure': False, 'utls': {'enabled': True, 'fingerprint': 'chrome'}}
+                            changed = True
+                        if tls_d.get('server_name') != os.environ['DOMAIN']:
+                            tls_d['server_name'] = os.environ['DOMAIN']
+                            tls_d['enabled'] = True
+                            changed = True
+                        it['tls'] = tls_d
                 if len(addrs_list) == 1 and (addrs_list[0].get('server') == '' or '.trycloudflare.com' in str(addrs_list[0].get('server'))):
-                    addrs_list[0]['server'] = os.environ['DOMAIN']
-                cur_s.execute('UPDATE inbounds SET addrs=? WHERE id=?', (sqlite3.Binary(json.dumps(addrs_list).encode('utf-8')), ib_id))
-    con_s.commit()
-    con_s.close()
+                    if addrs_list[0].get('server') != os.environ['DOMAIN']:
+                        addrs_list[0]['server'] = os.environ['DOMAIN']
+                        changed = True
+                ib_obj['addrs'] = addrs_list
+            if changed:
+                save_data = urllib.parse.urlencode({
+                    'object': 'inbounds',
+                    'action': 'edit',
+                    'data': json.dumps(ib_obj),
+                }).encode()
+                req_save = urllib.request.Request(BASE.rstrip('/') + '/save', data=save_data, headers={'Token': TOKEN, 'Content-Type': 'application/x-www-form-urlencoded'})
+                with urllib.request.urlopen(req_save, timeout=10) as resp_save:
+                    resp_save.read()
 except Exception:
     pass
 PY
-        systemctl restart s-ui 2>/dev/null || true
       fi
     fi
     [[ -z "$sui_u" ]] && sui_u="admin"
@@ -1658,20 +1708,27 @@ PYEOF
         reverse_proxy 127.0.0.1:${sui_port}
     }"
 
-    sub_caddy_rules="    redir /${sub_p} /${sub_p}/ 308
-
-    # 3. s-ui 节点订阅接口 (直接反代至 s-ui 独立订阅服务)
+    sub_caddy_rules="    # 3. s-ui 节点订阅接口 (直接反代至 s-ui 独立订阅服务)
     handle /${sub_p}* {
         reverse_proxy 127.0.0.1:${sub_port}
     }"
   else
-    sub_caddy_rules="    redir /${sub_p} /${sub_p}/ 308
-
-    # 3. sout 节点订阅接口 (重写并转发至 sout 自身的 /sub 订阅端点)
+    local sout_pw=""
+    [[ -f "${WORK_DIR}/password" ]] && sout_pw=$(cat "${WORK_DIR}/password" 2>/dev/null | tr -d ' \r\n')
+    [[ -z "$sout_pw" && -f "/etc/sout/password" ]] && sout_pw=$(cat "/etc/sout/password" 2>/dev/null | tr -d ' \r\n')
+    if [[ -n "$sout_pw" ]]; then
+      sub_caddy_rules="    # 3. sout 节点订阅接口 (重写并转发至 sout 自身的 /sub 订阅端点)
+    handle /${sub_p}* {
+        rewrite * /${sout_p}/sub=${sout_pw}
+        reverse_proxy 127.0.0.1:${sout_port}
+    }"
+    else
+      sub_caddy_rules="    # 3. sout 节点订阅接口 (重写并转发至 sout 自身的 /sub 订阅端点)
     handle /${sub_p}* {
         rewrite * /${sout_p}/sub
         reverse_proxy 127.0.0.1:${sout_port}
     }"
+    fi
   fi
 
   mkdir -p /etc/caddy
