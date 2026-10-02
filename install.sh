@@ -579,7 +579,8 @@ MaxRetentionSec=3day
 EOF
       systemctl restart systemd-journald >/dev/null 2>&1 || true
 
-      # 2. 为各核心 Go 服务注入合理的内存保护限制 (为代理转发留出充足缓冲区，避免GC中断转发限速)
+      # 2. 为各核心 Go 服务注入合理的内存保护限制 (拔除 MemorySwapMax 避免突发 OOM 硬杀，为代理转发留出充足缓冲区)
+      sed -i '/MemorySwapMax/d' /etc/systemd/system/*.service.d/override.conf 2>/dev/null || true
       mkdir -p /etc/systemd/system/sing-box.service.d 2>/dev/null || true
       cat > /etc/systemd/system/sing-box.service.d/override.conf <<'EOF'
 [Service]
@@ -915,10 +916,8 @@ EOF
       local svc_memlimit="35MiB"
       local svc_gogc="100"
 
-      local swap_opt=""
-      if [[ $mem_mb -le 270 ]]; then
-        swap_opt="MemorySwapMax=0"
-      fi
+      # 彻底清除历史强加的 MemorySwapMax=0，避免突发瞬时尖峰因 0 容错直接触发内核 OOM Killer
+      sed -i '/MemorySwapMax/d' /etc/systemd/system/*.service.d/override.conf 2>/dev/null || true
 
       if [[ $mem_mb -le 135 ]]; then
         sb_memlimit="25MiB"
@@ -935,7 +934,6 @@ EOF
       mkdir -p /etc/systemd/system/sing-box.service.d 2>/dev/null || true
       cat > /etc/systemd/system/sing-box.service.d/override.conf <<EOF
 [Service]
-${swap_opt}
 Environment="GOMEMLIMIT=${sb_memlimit}"
 Environment="GOGC=${sb_gogc}"
 EOF
@@ -944,7 +942,6 @@ EOF
         mkdir -p "/etc/systemd/system/${svc}.service.d" 2>/dev/null || true
         cat > "/etc/systemd/system/${svc}.service.d/override.conf" <<EOF
 [Service]
-${swap_opt}
 Environment="GOMEMLIMIT=${svc_memlimit}"
 Environment="GOGC=${svc_gogc}"
 EOF

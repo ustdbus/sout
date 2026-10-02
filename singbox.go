@@ -233,6 +233,13 @@ func (sb *SingBox) MigrateLegacyVmessArgo() error {
 
 		tag, _ := ib["tag"].(string)
 		typ, _ := ib["type"].(string)
+
+		// 检查并彻底清除画蛇添足的 multiplex（多路复用）配置，与 s-ui 纯净规范对齐
+		if _, hasMux := ib["multiplex"]; hasMux {
+			delete(ib, "multiplex")
+			changed = true
+		}
+
 		listen, _ := ib["listen"].(string)
 		trMap, _ := ib["transport"].(map[string]any)
 		trType := ""
