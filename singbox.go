@@ -68,6 +68,12 @@ func (sb *SingBox) saveInboundAddrs(m map[string][]NodeAddrItem) {
 	_ = os.WriteFile(sb.addrsFilePath(), b, 0644)
 }
 
+func (sb *SingBox) saveRawInboundAddrs(m map[string][]map[string]any) {
+	_ = os.MkdirAll(sb.workDir, 0755)
+	b, _ := json.MarshalIndent(m, "", "  ")
+	_ = os.WriteFile(sb.addrsFilePath(), b, 0644)
+}
+
 func (sb *SingBox) branchBindingsPath() string {
 	if sb.workDir == "" {
 		sb.workDir = "/var/lib/sout"
