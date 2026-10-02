@@ -2361,9 +2361,9 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 			if out.Transport.ServiceName != "" {
 				v.Set("serviceName", out.Transport.ServiceName)
 			}
-			tlsEnabled := out.TLS.Enabled || addr.TLS.Enabled || port == 443
+			tlsEnabled := out.TLS.Enabled || rawAddr.TLS.Enabled || port == 443
 			if tlsEnabled {
-				sniToUse := addr.TLS.ServerName
+				sniToUse := rawAddr.TLS.ServerName
 				if sniToUse == "" {
 					sniToUse = out.TLS.ServerName
 				}
@@ -2377,16 +2377,16 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 					v.Set("sid", out.TLS.Reality.ShortID)
 				} else {
 					v.Set("security", "tls")
-					if out.TLS.Insecure || addr.TLS.Insecure {
+					if out.TLS.Insecure || rawAddr.TLS.Insecure {
 						v.Set("allowInsecure", "1")
 					}
 				}
-				if sniToUse != "" && !addr.TLS.DisableSNI {
+				if sniToUse != "" && !rawAddr.TLS.DisableSNI {
 					v.Set("sni", sniToUse)
 				}
 				fp := out.TLS.UTLS.Fingerprint
 				if fp == "" {
-					fp = addr.TLS.UTLS.Fingerprint
+					fp = rawAddr.TLS.UTLS.Fingerprint
 				}
 				if fp == "" {
 					fp = "chrome"
