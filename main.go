@@ -22,10 +22,11 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v3.8.6"
+var version = "v3.8.7"
 
 func initLowMemoryProtection() {
 	var memTotalKB int64
+	var swapTotalKB int64
 	// 1. 读取 /proc/meminfo
 	if data, err := os.ReadFile("/proc/meminfo"); err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
@@ -36,7 +37,13 @@ func initLowMemoryProtection() {
 						memTotalKB = kb
 					}
 				}
-				break
+			} else if strings.HasPrefix(line, "SwapTotal:") {
+				fields := strings.Fields(line)
+				if len(fields) >= 2 {
+					if kb, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
+						swapTotalKB = kb
+					}
+				}
 			}
 		}
 	}
@@ -90,34 +97,40 @@ func initLowMemoryProtection() {
 		return
 	}
 
-	// 4. 自适应 CPU + 内存调优 (根据物理/cgroup 真实边界分级)
+	hasSwap := swapTotalKB >= 32768
+	if hasSwap {
+		log.Printf("检测到有效 Swap 缓冲 (SwapTotal: %d KB)，启用零限制全速原生 Go 运行时配置 (德邦模式)", swapTotalKB)
+		return
+	}
+
+	// 4. 自适应 CPU + 内存调优 (针对无 Swap 机器，确保留足 15% 系统安全防爆余量)
 	if effectiveMB <= 135 {
 		// <= 128MB (如 125MB/128MB Alpine/Debian 极限环境)
 		if os.Getenv("GOMEMLIMIT") == "" {
-			debug.SetMemoryLimit(22 * 1024 * 1024)
+			debug.SetMemoryLimit(18 * 1024 * 1024)
 		}
 		if os.Getenv("GOGC") == "" {
 			debug.SetGCPercent(50)
 		}
-		log.Printf("检测到超低内存环境 (有效内存限额 %d MB)，已自动启用 22MB 堆限制与 GOGC=50 防护", effectiveMB)
+		log.Printf("检测到无 Swap 缓冲 (有效物理内存 %d MB)，为确保留足 15%% 系统安全防爆余量，启用精细分层内存防护 (阿尔法安全模式，sout-server 堆限制 18MB，GOGC=50)", effectiveMB)
 	} else if effectiveMB <= 270 {
 		// <= 256MB
 		if os.Getenv("GOMEMLIMIT") == "" {
-			debug.SetMemoryLimit(30 * 1024 * 1024)
+			debug.SetMemoryLimit(25 * 1024 * 1024)
 		}
 		if os.Getenv("GOGC") == "" {
 			debug.SetGCPercent(50)
 		}
-		log.Printf("检测到低内存环境 (有效内存限额 %d MB)，已自动启用 30MB 堆限制与 GOGC=50 保护", effectiveMB)
+		log.Printf("检测到无 Swap 低内存环境 (有效内存限额 %d MB)，已自动启用 25MB 堆限制与 GOGC=50 保护", effectiveMB)
 	} else if effectiveMB <= 400 {
 		// <= 384MB
 		if os.Getenv("GOMEMLIMIT") == "" {
-			debug.SetMemoryLimit(40 * 1024 * 1024)
+			debug.SetMemoryLimit(35 * 1024 * 1024)
 		}
 		if os.Getenv("GOGC") == "" {
 			debug.SetGCPercent(100)
 		}
-		log.Printf("检测到轻量低内存环境 (有效内存限额 %d MB)，已自动启用 40MB 堆限制与 GOGC=100 保护", effectiveMB)
+		log.Printf("检测到无 Swap 轻量低内存环境 (有效内存限额 %d MB)，已自动启用 35MB 堆限制与 GOGC=100 保护", effectiveMB)
 	}
 }
 

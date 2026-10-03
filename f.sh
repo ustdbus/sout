@@ -15,8 +15,10 @@ INIT_SYS=$(detect_init)
 
 detect_adaptive_mem_tuning() {
   local mem_kb=0
+  local swap_kb=0
   if [[ -f /proc/meminfo ]]; then
     mem_kb=$(grep -i 'MemTotal' /proc/meminfo 2>/dev/null | awk '{print $2}')
+    swap_kb=$(grep -i 'SwapTotal' /proc/meminfo 2>/dev/null | awk '{print $2}')
   fi
 
   local cg_bytes=0
@@ -54,18 +56,29 @@ detect_adaptive_mem_tuning() {
     mem_mb=$(( min_bytes / 1024 / 1024 ))
   fi
 
+  HAS_SWAP=0
+  if [[ -n "$swap_kb" && "$swap_kb" =~ ^[0-9]+$ && "$swap_kb" -ge 32768 ]]; then
+    HAS_SWAP=1
+  fi
+  AUTO_HAS_SWAP="$HAS_SWAP"
+
   AUTO_MEM_MB="$mem_mb"
   AUTO_GOMEMLIMIT=""
   AUTO_GOGC=""
-  if [[ "$mem_mb" -gt 0 && "$mem_mb" -le 135 ]]; then
-    AUTO_GOMEMLIMIT="25MiB"
-    AUTO_GOGC="50"
+  if [[ "$HAS_SWAP" -eq 1 ]]; then
+    # 德邦模式 (有 Swap 气囊)：不施加 GOMEMLIMIT 软限制，GOGC 默认 100 释放极致吞吐
+    AUTO_GOMEMLIMIT=""
+    AUTO_GOGC=""
+  elif [[ "$mem_mb" -gt 0 && "$mem_mb" -le 135 ]]; then
+    # 阿尔法安全模式 (无 Swap 气囊，预留 >=15% 物理内存防爆隔离区，收紧 GOGC 至 60 避免堆瞬时翻倍溢出)
+    AUTO_GOMEMLIMIT="18MiB"
+    AUTO_GOGC="60"
   elif [[ "$mem_mb" -gt 0 && "$mem_mb" -le 270 ]]; then
-    AUTO_GOMEMLIMIT="35MiB"
-    AUTO_GOGC="50"
+    AUTO_GOMEMLIMIT="25MiB"
+    AUTO_GOGC="60"
   elif [[ "$mem_mb" -gt 0 && "$mem_mb" -le 384 ]]; then
-    AUTO_GOMEMLIMIT="45MiB"
-    AUTO_GOGC="100"
+    AUTO_GOMEMLIMIT="35MiB"
+    AUTO_GOGC="80"
   fi
 }
 
@@ -94,20 +107,28 @@ _openrc_init_from_unit() {
 
   detect_adaptive_mem_tuning
   local env_export=""
-  local mlimit="${AUTO_GOMEMLIMIT}"
-  local ggc="${AUTO_GOGC}"
-  if [[ "$name" == "sing-box" ]]; then
-    mlimit="35MiB"
-    ggc="100"
-    [[ "$AUTO_MEM_MB" -gt 135 ]] && mlimit="45MiB"
-  elif [[ "$name" == "cloudflared" ]]; then
-    mlimit="30MiB"
-    ggc="50"
-    [[ "$AUTO_MEM_MB" -gt 135 ]] && mlimit="35MiB"
-  fi
-  if [[ -n "$mlimit" ]]; then
-    env_export="export GOMEMLIMIT=\"${mlimit}\"
+  if [[ "$HAS_SWAP" -eq 1 ]]; then
+    env_export=""
+  else
+    local mlimit="${AUTO_GOMEMLIMIT:-18MiB}"
+    local ggc="${AUTO_GOGC:-60}"
+    if [[ "$name" == "sing-box" ]]; then
+      mlimit="35MiB"
+      ggc="60"
+      [[ "$AUTO_MEM_MB" -gt 135 ]] && mlimit="45MiB" && ggc="100"
+    elif [[ "$name" == "cloudflared" ]]; then
+      mlimit="35MiB"
+      ggc="60"
+      [[ "$AUTO_MEM_MB" -gt 135 ]] && mlimit="45MiB" && ggc="100"
+    elif [[ "$name" == "caddy" ]]; then
+      mlimit="25MiB"
+      ggc="60"
+      [[ "$AUTO_MEM_MB" -gt 135 ]] && mlimit="35MiB" && ggc="100"
+    fi
+    if [[ -n "$mlimit" ]]; then
+      env_export="export GOMEMLIMIT=\"${mlimit}\"
 export GOGC=\"${ggc}\""
+    fi
   fi
 
   local supervisor_line="command_background=\"yes\""
@@ -456,39 +477,99 @@ net.ipv4.tcp_congestion_control = bbr
 optimize_low_memory() {
   detect_adaptive_mem_tuning
   local mem_mb="${AUTO_MEM_MB:-${1:-512}}"
-  if [[ $mem_mb -le 384 ]]; then
-    echo "      检测到轻量低内存环境 (${mem_mb} MB)，正在配置系统级内存防爆与自适应垃圾回收策略..."
-    # 1. 限制 journald 运行时内存
-    if [[ -d /run/systemd/system ]]; then
-      mkdir -p /etc/systemd/journald.conf.d 2>/dev/null || true
-      cat > /etc/systemd/journald.conf.d/00-mem-limit.conf <<'EOF'
+  local has_swap="${AUTO_HAS_SWAP:-0}"
+
+  # 1. 清理 /tmp 内存文件系统历史残留的 tar.gz 与二进制
+  rm -f /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/fanout /tmp/f.sh 2>/dev/null || true
+
+  # 2. 彻底清除历史强加的 MemorySwapMax=0，避免突发瞬时尖峰因 0 容错直接触发内核 OOM Killer
+  sed -i '/MemorySwapMax/d' /etc/systemd/system/*.service.d/override.conf 2>/dev/null || true
+
+  # 3. 清理 OpenRC /etc/init.d/ 历史遗留硬编码的 export GOMEMLIMIT 与 export GOGC
+  for s in cloudflared sing-box caddy sout fanout s-ui; do
+    if [[ -f "/etc/init.d/${s}" ]]; then
+      sed -i '/export GOMEMLIMIT/d' "/etc/init.d/${s}" 2>/dev/null || true
+      sed -i '/export GOGC/d' "/etc/init.d/${s}" 2>/dev/null || true
+    fi
+  done
+
+  # 4. 调低 swappiness（从默认 100 降为 30），防止过早向虚拟 Swap 剧烈换页
+  sysctl -w vm.swappiness=30 >/dev/null 2>&1 || true
+
+  # 5. 限制 journald 运行时内存
+  if [[ -d /run/systemd/system ]]; then
+    mkdir -p /etc/systemd/journald.conf.d 2>/dev/null || true
+    cat > /etc/systemd/journald.conf.d/00-mem-limit.conf <<'EOF'
 [Journal]
 RuntimeMaxUse=8M
 SystemMaxUse=8M
 MaxRetentionSec=3day
 EOF
-      systemctl restart systemd-journald >/dev/null 2>&1 || true
+    systemctl restart systemd-journald >/dev/null 2>&1 || true
+  fi
 
-      local sb_memlimit="45MiB"
-      local sb_gogc="100"
-      local svc_memlimit="35MiB"
-      local svc_gogc="100"
+  # 分支 A：若存在有效 Swap (has_swap=1，德邦模式)
+  if [[ "$has_swap" -eq 1 ]]; then
+    echo "      检测到有效 Swap 缓冲，启用零限制全速原生 Go 运行时配置 (德邦模式)"
+    if [[ -d /run/systemd/system ]]; then
+      for svc in cloudflared sing-box caddy sout s-ui; do
+        if [[ -f "/etc/systemd/system/${svc}.service.d/override.conf" ]]; then
+          sed -i '/GOMEMLIMIT/d' "/etc/systemd/system/${svc}.service.d/override.conf" 2>/dev/null || true
+          sed -i '/GOGC/d' "/etc/systemd/system/${svc}.service.d/override.conf" 2>/dev/null || true
+          if ! grep -qE 'Environment|Exec|Limit' "/etc/systemd/system/${svc}.service.d/override.conf" 2>/dev/null; then
+            rm -f "/etc/systemd/system/${svc}.service.d/override.conf" 2>/dev/null || true
+          fi
+        fi
+      done
+      systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
 
-      # 彻底清除历史强加的 MemorySwapMax=0，避免突发瞬时尖峰因 0 容错直接触发内核 OOM Killer
-      sed -i '/MemorySwapMax/d' /etc/systemd/system/*.service.d/override.conf 2>/dev/null || true
+    if [[ -f /etc/alpine-release ]] || command -v rc-service >/dev/null 2>&1; then
+      for svc in cloudflared sing-box caddy sout s-ui; do
+        if [[ -f "/etc/conf.d/${svc}" ]]; then
+          sed -i '/GOMEMLIMIT/d' "/etc/conf.d/${svc}" 2>/dev/null || true
+          sed -i '/GOGC/d' "/etc/conf.d/${svc}" 2>/dev/null || true
+        fi
+      done
+    fi
+    return 0
+  fi
 
-      if [[ $mem_mb -le 135 ]]; then
-        sb_memlimit="25MiB"
-        sb_gogc="100"
-        svc_memlimit="25MiB"
-        svc_gogc="50"
-      elif [[ $mem_mb -le 270 ]]; then
-        sb_memlimit="35MiB"
-        sb_gogc="100"
-        svc_memlimit="30MiB"
-        svc_gogc="50"
-      fi
+  # 分支 B：若不存在有效 Swap (has_swap=0，阿尔法安全模式，收紧 GOGC 至 60 确保留足 >=15% 物理内存防爆隔离区)
+  if [[ $mem_mb -le 384 ]]; then
+    echo "      检测到无 Swap 缓冲，为确保留足 15% 系统安全防爆余量，启用精细分层内存防护 (阿尔法安全模式)"
 
+    local cf_memlimit="35MiB"
+    local cf_gogc="60"
+    local sb_memlimit="35MiB"
+    local sb_gogc="60"
+    local caddy_memlimit="25MiB"
+    local caddy_gogc="60"
+    local aux_memlimit="18MiB"
+    local aux_gogc="50"
+
+    if [[ $mem_mb -gt 135 && $mem_mb -le 270 ]]; then
+      cf_memlimit="35MiB"
+      cf_gogc="80"
+      sb_memlimit="35MiB"
+      sb_gogc="80"
+      caddy_memlimit="30MiB"
+      caddy_gogc="80"
+      aux_memlimit="25MiB"
+      aux_gogc="50"
+    elif [[ $mem_mb -gt 270 ]]; then
+      cf_memlimit="45MiB"
+      cf_gogc="100"
+      sb_memlimit="45MiB"
+      sb_gogc="100"
+      caddy_memlimit="35MiB"
+      caddy_gogc="100"
+      aux_memlimit="35MiB"
+      aux_gogc="100"
+    fi
+
+    # 1. systemd 环境注入
+    if [[ -d /run/systemd/system ]]; then
       mkdir -p /etc/systemd/system/sing-box.service.d 2>/dev/null || true
       cat > /etc/systemd/system/sing-box.service.d/override.conf <<EOF
 [Service]
@@ -496,66 +577,51 @@ Environment="GOMEMLIMIT=${sb_memlimit}"
 Environment="GOGC=${sb_gogc}"
 EOF
 
-      for svc in caddy cloudflared sout s-ui; do
-        local cur_memlimit="$svc_memlimit"
-        local cur_gogc="$svc_gogc"
-        if [[ "$svc" == "cloudflared" ]]; then
-          cur_gogc="100"
-          [[ $mem_mb -le 135 ]] && cur_memlimit="30MiB"
-        fi
+      mkdir -p /etc/systemd/system/cloudflared.service.d 2>/dev/null || true
+      cat > /etc/systemd/system/cloudflared.service.d/override.conf <<EOF
+[Service]
+Environment="GOMEMLIMIT=${cf_memlimit}"
+Environment="GOGC=${cf_gogc}"
+EOF
+
+      mkdir -p /etc/systemd/system/caddy.service.d 2>/dev/null || true
+      cat > /etc/systemd/system/caddy.service.d/override.conf <<EOF
+[Service]
+Environment="GOMEMLIMIT=${caddy_memlimit}"
+Environment="GOGC=${caddy_gogc}"
+EOF
+
+      for svc in sout s-ui; do
         mkdir -p "/etc/systemd/system/${svc}.service.d" 2>/dev/null || true
         cat > "/etc/systemd/system/${svc}.service.d/override.conf" <<EOF
 [Service]
-Environment="GOMEMLIMIT=${cur_memlimit}"
-Environment="GOGC=${cur_gogc}"
+Environment="GOMEMLIMIT=${aux_memlimit}"
+Environment="GOGC=${aux_gogc}"
 EOF
       done
       systemctl daemon-reload >/dev/null 2>&1 || true
     fi
 
-    # 2. OpenRC 环境内存自适应保护 (Alpine 等)
+    # 2. OpenRC 环境注入
     if [[ -f /etc/alpine-release ]] || command -v rc-service >/dev/null 2>&1; then
-      local sb_memlimit="35MiB"
-      local sb_gogc="100"
-      local svc_memlimit="30MiB"
-      local svc_gogc="50"
-      if [[ $mem_mb -gt 135 && $mem_mb -le 270 ]]; then
-        sb_memlimit="45MiB"
-        sb_gogc="100"
-        svc_memlimit="35MiB"
-        svc_gogc="50"
-      elif [[ $mem_mb -gt 270 ]]; then
-        sb_memlimit="45MiB"
-        sb_gogc="100"
-        svc_memlimit="35MiB"
-        svc_gogc="100"
-      fi
-
-      for svc in sing-box caddy cloudflared sout s-ui; do
-        local mlimit="$svc_memlimit"
-        local ggc="$svc_gogc"
-        [[ "$svc" == "sing-box" ]] && mlimit="$sb_memlimit" && ggc="$sb_gogc"
-        if [[ "$svc" == "cloudflared" ]]; then
-          ggc="100"
-          [[ $mem_mb -le 135 ]] && mlimit="30MiB"
+      for svc in sing-box cloudflared caddy sout s-ui; do
+        local cur_limit="$aux_memlimit"
+        local cur_gc="$aux_gogc"
+        if [[ "$svc" == "sing-box" ]]; then
+          cur_limit="$sb_memlimit"; cur_gc="$sb_gogc"
+        elif [[ "$svc" == "cloudflared" ]]; then
+          cur_limit="$cf_memlimit"; cur_gc="$cf_gogc"
+        elif [[ "$svc" == "caddy" ]]; then
+          cur_limit="$caddy_memlimit"; cur_gc="$caddy_gogc"
         fi
 
         mkdir -p /etc/conf.d 2>/dev/null || true
         cat > "/etc/conf.d/${svc}" <<EOF
-export GOMEMLIMIT="${mlimit}"
-export GOGC="${ggc}"
+export GOMEMLIMIT="${cur_limit}"
+export GOGC="${cur_gc}"
 EOF
-        if [[ -f "/etc/init.d/${svc}" ]] && ! grep -q "GOMEMLIMIT" "/etc/init.d/${svc}" 2>/dev/null; then
-          sed -i "2i export GOMEMLIMIT=\"${mlimit}\"\nexport GOGC=\"${ggc}\"" "/etc/init.d/${svc}" 2>/dev/null || true
-        fi
       done
     fi
-
-    # 3. 调低 swappiness（从默认 100 降为 30），防止过早向虚拟 Swap 剧烈换页
-    sysctl -w vm.swappiness=30 >/dev/null 2>&1 || true
-
-    # 4. 清理 /tmp 内存文件系统历史残留的 tar.gz 与二进制
-    rm -f /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/fanout /tmp/f.sh 2>/dev/null || true
   fi
 }
 
