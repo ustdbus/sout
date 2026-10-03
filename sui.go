@@ -2161,6 +2161,25 @@ func (s *SUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
 			}
 		}
 	}
+
+	// 同步更新持久化分流绑定
+	bindings := loadBranchBindings(s.workDir)
+	for i := range bindings {
+		matched := false
+		if oldHost != "" && (bindings[i].Host == oldHost || sanitizeTag(bindings[i].Host) == oldHostTag) {
+			matched = true
+		}
+		if !matched && target.Slot > 0 && bindings[i].Slot == target.Slot {
+			matched = true
+		}
+		if matched {
+			bindings[i].Host = target.Node.HostName
+			bindings[i].Slot = target.Slot
+			bindings[i].Remark = newRemark
+		}
+	}
+	saveAllBranchBindings(s.workDir, bindings)
+
 	s.syncSUIDatabaseLinks(hostPublicIP())
 	invalidateInbounds()
 	return nil
@@ -3501,8 +3520,13 @@ func (s *SUI) reconcileBranchBindings(tunnels []*Tunnel) {
 		var targetTunnel *Tunnel
 		for _, t := range tunnels {
 			if t.Status == "up" {
-				if b.Host != "" && (t.Node.HostName == b.Host || sanitizeTag(t.Node.HostName) == sanitizeTag(b.Host)) {
+				if (b.Host != "" && (t.Node.HostName == b.Host || sanitizeTag(t.Node.HostName) == sanitizeTag(b.Host))) ||
+					(b.Slot > 0 && t.Slot == b.Slot) {
 					targetTunnel = t
+					if b.Host != t.Node.HostName {
+						b.Host = t.Node.HostName
+						saveBranchBinding(s.workDir, b)
+					}
 					break
 				}
 			}

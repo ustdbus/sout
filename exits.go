@@ -183,6 +183,9 @@ func (m *Manager) ExitsOf() ExitsView {
 		addMap(t.Node.IP)
 		addMap(t.CustomHost)
 		addMap(t.ExitIP)
+		for _, hh := range t.HistoryHosts {
+			addMap(hh)
+		}
 		for _, part := range strings.Split(t.Node.HostName, "-") {
 			if net.ParseIP(part) != nil {
 				addMap(part)
@@ -404,11 +407,29 @@ func (m *Manager) ExitsOf() ExitsView {
 				}
 				boundLabel = fmt.Sprintf("%s (%s · SOCKS5:%d)", exitName, exitIP, t.Port)
 			} else {
-				if !ib.IsBase {
-					// 绑定的出口隧道已在隧道池中彻底删除，跳过该失效孤儿分支，避免前端残留
-					continue
+				// 尝试通过 slot 进行二次救回，防止换节点瞬态被误判为孤儿删除
+				var fallbackTunnel *Tunnel
+				if sb, ok := p.(*SingBox); ok {
+					for _, b := range sb.loadBranchBindings() {
+						if b.TemplateID == ib.ID && b.Slot > 0 {
+							for _, t := range tunnels {
+								if t.Slot == b.Slot {
+									fallbackTunnel = t
+									break
+								}
+							}
+						}
+					}
 				}
-				boundLabel = fmt.Sprintf("出口 (%s)", ib.BoundTo)
+				if fallbackTunnel != nil {
+					boundLabel = fmt.Sprintf("出口 (%s · 同步中 · SOCKS5:%d)", fallbackTunnel.Node.Country, fallbackTunnel.Port)
+				} else {
+					if !ib.IsBase {
+						// 绑定的出口隧道已在隧道池中彻底删除，跳过该失效孤儿分支，避免前端残留
+						continue
+					}
+					boundLabel = fmt.Sprintf("出口 (%s)", ib.BoundTo)
+				}
 			}
 		}
 

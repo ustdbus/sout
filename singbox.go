@@ -1659,10 +1659,18 @@ func (sb *SingBox) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) err
 	oldTag := "sout" + oldHostTag
 	newTag := "sout" + newHostTag
 
-	// 1. 同步更新持久化绑定记录 (仅精准更新匹配该 host 的分支，杜绝跨节点伪联动)
+	// 1. 同步更新持久化绑定记录 (同时精准匹配该 host 或对应的 slot 分支，杜绝换节点导致孤儿)
 	bindings := sb.loadBranchBindings()
+	var matchedBindings []branchBinding
 	for i := range bindings {
-		if bindings[i].Host == oldHost || sanitizeTag(bindings[i].Host) == oldHostTag {
+		matched := false
+		if oldHost != "" && (bindings[i].Host == oldHost || sanitizeTag(bindings[i].Host) == oldHostTag) {
+			matched = true
+		}
+		if !matched && target.Slot > 0 && bindings[i].Slot == target.Slot {
+			matched = true
+		}
+		if matched {
 			bindings[i].Host = target.Node.HostName
 			bindings[i].Slot = target.Slot
 			reg := target.TargetRegion
@@ -1679,47 +1687,117 @@ func (sb *SingBox) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) err
 			if pt != "" {
 				bindings[i].PoolType = pt
 			}
+			if target.Kind == "custom" && target.Node.Remark != "" && target.Node.Remark != target.Node.IP {
+				bindings[i].Remark = target.Node.Remark
+			} else if target.Node.Remark != "" && !strings.Contains(target.Node.Remark, "://") && !strings.Contains(target.Node.Remark, "@") && target.Node.Remark != target.Node.IP {
+				bindings[i].Remark = target.Node.Remark
+			} else {
+				bindings[i].Remark = formatExitRemark(bindings[i].Region, bindings[i].PoolType, target.Node.HostName)
+			}
+			matchedBindings = append(matchedBindings, bindings[i])
 		}
 	}
 	sb.saveAllBranchBindings(bindings)
 
-	// 2. 更新 inbounds 中的旧客户端用户名
+	// 2. 更新或自愈 inbounds 中的客户端及 route.rules
 	inboundsRaw, _ := cfg["inbounds"].([]any)
+	routeRaw, _ := cfg["route"].(map[string]any)
+	if routeRaw == nil {
+		routeRaw = map[string]any{"final": "direct", "rules": []any{}}
+		cfg["route"] = routeRaw
+	}
+	rulesRaw, _ := routeRaw["rules"].([]any)
+
+	// 首先做直接的字符串改名替换 (如果尚存旧客户端)
 	for _, ib := range inboundsRaw {
 		if ibMap, ok := ib.(map[string]any); ok {
 			usersRaw, _ := ibMap["users"].([]any)
 			for _, u := range usersRaw {
 				if uMap, ok := u.(map[string]any); ok {
 					name, _ := uMap["name"].(string)
-					if strings.Contains(name, oldHostTag) {
+					if oldHostTag != "" && strings.Contains(name, oldHostTag) {
 						uMap["name"] = strings.Replace(name, oldHostTag, newHostTag, 1)
 					}
 				}
 			}
 		}
 	}
-
-	// 3. 更新 route.rules
-	routeRaw, _ := cfg["route"].(map[string]any)
-	if routeRaw != nil {
-		rulesRaw, _ := routeRaw["rules"].([]any)
-		for _, r := range rulesRaw {
-			if rMap, ok := r.(map[string]any); ok {
-				if rMap["outbound"] == oldTag {
-					rMap["outbound"] = newTag
-				}
-				if authUsers, ok := rMap["auth_user"].([]any); ok {
-					for idx, au := range authUsers {
-						if auStr, ok := au.(string); ok && strings.Contains(auStr, oldHostTag) {
-							authUsers[idx] = strings.Replace(auStr, oldHostTag, newHostTag, 1)
-						}
+	for _, r := range rulesRaw {
+		if rMap, ok := r.(map[string]any); ok {
+			if oldTag != "" && rMap["outbound"] == oldTag {
+				rMap["outbound"] = newTag
+			}
+			if authUsers, ok := rMap["auth_user"].([]any); ok {
+				for idx, au := range authUsers {
+					if auStr, ok := au.(string); ok && oldHostTag != "" && strings.Contains(auStr, oldHostTag) {
+						authUsers[idx] = strings.Replace(auStr, oldHostTag, newHostTag, 1)
 					}
 				}
 			}
 		}
 	}
 
+	// 接着为所有匹配到的 binding 兜底保证：若客户端或规则丢失，原地补齐重建
+	for _, b := range matchedBindings {
+		tplIdx := (b.TemplateID / 1000) - 1
+		if tplIdx < 0 || tplIdx >= len(inboundsRaw) {
+			continue
+		}
+		ibMap, ok := inboundsRaw[tplIdx].(map[string]any)
+		if !ok {
+			continue
+		}
+		targetClientName := fmt.Sprintf("soutu%d%s", b.TemplateID, newHostTag)
+		usersRaw, _ := ibMap["users"].([]any)
+		userExists := false
+		for _, u := range usersRaw {
+			if uMap, ok := u.(map[string]any); ok && uMap["name"] == targetClientName {
+				userExists = true
+				break
+			}
+		}
+		if !userExists {
+			var sampleUser map[string]any
+			for _, u := range usersRaw {
+				if uMap, ok := u.(map[string]any); ok {
+					sampleUser = uMap
+					break
+				}
+			}
+			ibType, _ := ibMap["type"].(string)
+			newClient := makeSingboxUser(ibType, targetClientName, sampleUser)
+			usersRaw = append(usersRaw, newClient)
+			ibMap["users"] = usersRaw
+		}
+
+		ruleExists := false
+		for _, r := range rulesRaw {
+			if rMap, ok := r.(map[string]any); ok {
+				if authUsers, ok := rMap["auth_user"].([]any); ok {
+					for _, au := range authUsers {
+						if au == targetClientName {
+							rMap["outbound"] = newTag
+							ruleExists = true
+							break
+						}
+					}
+				}
+			}
+			if ruleExists {
+				break
+			}
+		}
+		if !ruleExists {
+			rulesRaw = append([]any{map[string]any{
+				"auth_user": []any{targetClientName},
+				"outbound":  newTag,
+			}}, rulesRaw...)
+		}
+	}
+	routeRaw["rules"] = rulesRaw
+
 	sb.syncOutboundsInternal(cfg, tunnels)
+	invalidateInbounds()
 	return sb.saveConfig(cfg)
 }
 
@@ -1790,10 +1868,19 @@ func (sb *SingBox) syncOutboundsInternal(cfg map[string]any, tunnels []*Tunnel) 
 		newOutbounds = append(newOutbounds, ob)
 	}
 
+	// 关键保护：持久化绑定中记录的所有 host 均视为有效出站，绝对不能在换节点过渡期间作为孤儿丢弃
+	bindings := sb.loadBranchBindings()
+	for _, b := range bindings {
+		if b.Host != "" {
+			validSoutTags["sout"+sanitizeTag(b.Host)] = true
+			validSoutTags["sout"+b.Host] = true
+		}
+	}
+
 	cfg["outbounds"] = newOutbounds
 
 	// 孤儿分流清理与自愈：
-	// 如果某条路由规则指向的 outbound 为 "sout" 开头，但不在任何有效隧道中，说明该出口已被彻底删除
+	// 如果某条路由规则指向的 outbound 为 "sout" 开头，但不在任何有效隧道及持久化绑定中，说明该出口已被彻底删除
 	orphanUsers := make(map[string]bool)
 	routeRaw, _ := cfg["route"].(map[string]any)
 	if routeRaw != nil {
@@ -2442,8 +2529,13 @@ func (sb *SingBox) OnTunnelsChanged(tunnels []*Tunnel) error {
 			var targetTunnel *Tunnel
 			for _, t := range tunnels {
 				if t.Status == "up" {
-					if b.Host != "" && (t.Node.HostName == b.Host || sanitizeTag(t.Node.HostName) == sanitizeTag(b.Host)) {
+					if (b.Host != "" && (t.Node.HostName == b.Host || sanitizeTag(t.Node.HostName) == sanitizeTag(b.Host))) ||
+						(b.Slot > 0 && t.Slot == b.Slot) {
 						targetTunnel = t
+						if b.Host != t.Node.HostName {
+							b.Host = t.Node.HostName
+							sb.saveBranchBinding(b)
+						}
 						break
 					}
 				}

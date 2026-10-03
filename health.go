@@ -103,12 +103,13 @@ func (m *Manager) reconnect(t *Tunnel, oldHost string) {
 		m.bringUpPersist(t, false, true)
 
 		// 无论新节点最终是否连通成功（up 还是 failed），
-		// 只要节点名发生了变更，都必须执行 rebind 把 s-ui 面板中绑定的 Client 备注和出站规则同步到新节点，
-		// 保证分流管理界面与出口池绝对同步，并在用户删除该出口时能够精准级联清理！
+		// 只要节点名发生了变更，都必须执行 rebind 把分流绑定的 Client 和出站规则同步到新节点，
+		// 保证分流管理界面与出口池绝对同步！
 		if t.Node.HostName != oldHost {
 			if err := m.rebind(oldHost, t); err != nil {
-				log.Printf("换节点后同步 s-ui 绑定失败: %v", err)
+				log.Printf("换节点后同步分流绑定失败: %v", err)
 			}
+			m.notifyPanel()
 			return
 		}
 
@@ -116,8 +117,9 @@ func (m *Manager) reconnect(t *Tunnel, oldHost string) {
 			// 节点名没变也要重写一次出站：出口 IP 可能变了，
 			// 而且上一轮换节点时留下的绑定需要重新指回来。
 			if err := m.resync(t); err != nil {
-				log.Printf("重连后重写 s-ui 出站失败: %v", err)
+				log.Printf("重连后重写出站失败: %v", err)
 			}
+			m.notifyPanel()
 		}
 	}()
 }
