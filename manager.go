@@ -330,13 +330,13 @@ func (m *Manager) tryCandidates(t *Tunnel, notify bool) bool {
 		}
 		t.Status = "starting"
 		if i > 0 {
-			t.Err = fmt.Sprintf("正在尝试第 %d/%d 个候选节点 (%s)...", i+1, len(candidates), node.IP)
+			t.Err = fmt.Sprintf("正在尝试第 %d/%d 个候选节点 (%s, %s)...", i+1, len(candidates), node.IP, node.Country)
 		}
 
 		var err error
 		maxRetries := 1
-		if i == 0 {
-			maxRetries = 3
+		if len(candidates) == 1 {
+			maxRetries = 2
 		}
 		for try := 0; try < maxRetries; try++ {
 			if !m.tunnelActive(t) {
@@ -366,7 +366,9 @@ func (m *Manager) tryCandidates(t *Tunnel, notify bool) bool {
 			}
 			return true
 		}
-		log.Printf("槽位 %d 尝试候选节点 %s (%s, %s) 失败: %v", t.Slot, node.HostName, node.IP, node.CountryCode, err)
+		// 记录失败节点到历史中，避免死循环选中
+		t.recordHost(node.HostName)
+		log.Printf("槽位 %d 尝试候选节点 %d/%d: %s (%s, %s) 失败: %v", t.Slot, i+1, len(candidates), node.HostName, node.IP, node.CountryCode, err)
 	}
 	return false
 }
@@ -407,6 +409,10 @@ func (m *Manager) candidatesFor(t *Tunnel) []Node {
 	for _, other := range m.tunnels {
 		used[other.Node.HostName] = true
 	}
+	// 将历史失败节点也计入 used，优先挑选未尝试过的健康节点
+	for _, h := range t.HistoryHosts {
+		used[h] = true
+	}
 
 	poolType := t.TargetPoolType
 	if poolType == "" {
@@ -418,18 +424,14 @@ func (m *Manager) candidatesFor(t *Tunnel) []Node {
 	allNodes := m.getAllCandidateNodesLocked(poolType)
 	out := []Node{first}
 
-	targetRegion := t.TargetRegion
-	if targetRegion == "" {
-		targetRegion = first.CountryCode
+	region := t.TargetRegion
+	if region == "" {
+		if t.TargetSourceID != "" {
+			region = "SRC:" + t.TargetSourceID
+		} else {
+			region = first.CountryCode
+		}
 	}
-	targetSourceID := t.TargetSourceID
-	if targetSourceID == "" {
-		targetSourceID = first.SourceID
-	}
-
-	isSpecificCountry := targetRegion != "" && !strings.EqualFold(targetRegion, "ALL") && !strings.EqualFold(targetRegion, "CUSTOM") && !strings.HasPrefix(targetRegion, "SRC:")
-	isBuiltinVPNGate := targetSourceID == "builtin-vpngate" || targetRegion == "SRC:builtin-vpngate" || (first.Kind == "vpngate" && targetSourceID == "")
-	isSpecificCustomSrc := targetSourceID != "" && targetSourceID != "builtin-vpngate"
 
 	expectedKind := t.Kind
 	if expectedKind == "" {
@@ -443,16 +445,7 @@ func (m *Manager) candidatesFor(t *Tunnel) []Node {
 		}
 	}
 
-	// 1. 同源 / 同国家地区 严格候选查找
-	for _, n := range allNodes {
-		if len(out) >= maxTries {
-			break
-		}
-		if used[n.HostName] {
-			continue
-		}
-
-		// 节点类型（vpngate vs custom）必须严格一致，绝对不可互相混淆
+	matchesFilter := func(n Node) bool {
 		candidateKind := n.Kind
 		if candidateKind == "" {
 			if strings.HasPrefix(n.HostName, "cs-") || n.Protocol != "" {
@@ -462,68 +455,87 @@ func (m *Manager) candidatesFor(t *Tunnel) []Node {
 			}
 		}
 		if candidateKind != expectedKind {
-			continue
+			return false
 		}
 
-		// A. 国家代码严格锁定：绝对不能跨国
-		if isSpecificCountry {
-			if !strings.EqualFold(n.CountryCode, targetRegion) {
-				continue
-			}
-		}
-
-		// B. 订阅源严格锁定：绝对不能跨源
-		if isBuiltinVPNGate {
-			if n.Kind == "custom" || (n.SourceID != "" && n.SourceID != "builtin-vpngate") {
-				continue
-			}
-		} else if isSpecificCustomSrc {
-			if n.SourceID != targetSourceID {
-				continue
-			}
-		}
-
-		// C. 家宽/机房严格锁定：如果指定了池类型，绝对不能跨池
 		if poolType != "all" && n.IPType != "" && n.IPType != poolType {
-			continue
+			return false
 		}
 
+		if strings.HasPrefix(region, "SRC:") {
+			parts := strings.Split(region, ":")
+			targetCat := parts[1]
+			subFilter := ""
+			if len(parts) >= 3 {
+				subFilter = parts[2]
+			}
+			nodeCat := classifyNodeCategory(n)
+			if !strings.EqualFold(targetCat, nodeCat) && n.SourceID != targetCat {
+				return false
+			}
+			if !matchNodeSubRegion(n, subFilter) {
+				return false
+			}
+			return true
+		}
+
+		if region != "" && !strings.EqualFold(region, "ALL") && !strings.EqualFold(region, "CUSTOM") {
+			return strings.EqualFold(n.CountryCode, region)
+		}
+
+		return true
+	}
+
+	// 1. 从未尝试过的同区域/同源节点中挑选优质候选
+	for _, n := range allNodes {
+		if len(out) >= maxTries {
+			break
+		}
+		if used[n.HostName] {
+			continue
+		}
+		if !matchesFilter(n) {
+			continue
+		}
 		out = append(out, n)
 	}
 
-	// 2. 仅当用户明确选择「不限地区 (ALL)」且未指定任何特定源时，才允许从全局可用节点中补充候选（但仍需遵守 poolType）
-	if !isSpecificCountry && !isBuiltinVPNGate && !isSpecificCustomSrc {
+	// 2. 如果候选不足（由于大量节点被 HistoryHosts 排除），放宽 HistoryHosts 限制重新补充候选
+	if len(out) < 10 {
 		for _, n := range allNodes {
 			if len(out) >= maxTries {
 				break
 			}
-			if used[n.HostName] {
+			if n.HostName == first.HostName {
 				continue
 			}
-			candidateKind := n.Kind
-			if candidateKind == "" {
-				if strings.HasPrefix(n.HostName, "cs-") || n.Protocol != "" {
-					candidateKind = "custom"
-				} else {
-					candidateKind = "vpngate"
-				}
-			}
-			if candidateKind != expectedKind {
-				continue
-			}
-			if poolType != "all" && n.IPType != "" && n.IPType != poolType {
-				continue
-			}
-			alreadyIn := false
-			for _, o := range out {
-				if o.HostName == n.HostName {
-					alreadyIn = true
+			// 其他活跃槽位占用的节点绝对不能跨槽位抢占
+			occupied := false
+			for _, other := range m.tunnels {
+				if other.Slot != t.Slot && other.Node.HostName == n.HostName {
+					occupied = true
 					break
 				}
 			}
-			if !alreadyIn {
-				out = append(out, n)
+			if occupied {
+				continue
 			}
+
+			already := false
+			for _, o := range out {
+				if o.HostName == n.HostName {
+					already = true
+					break
+				}
+			}
+			if already {
+				continue
+			}
+
+			if !matchesFilter(n) {
+				continue
+			}
+			out = append(out, n)
 		}
 	}
 
