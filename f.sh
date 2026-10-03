@@ -69,7 +69,7 @@ detect_adaptive_mem_tuning() {
     # 德邦模式 (有 Swap 气囊)：不施加 GOMEMLIMIT 软限制，GOGC 默认 100 释放极致吞吐
     AUTO_GOMEMLIMIT=""
     AUTO_GOGC=""
-  elif [[ "$mem_mb" -gt 0 && "$mem_mb" -le 190 ]]; then
+  elif [[ "$mem_mb" -gt 0 && "$mem_mb" -le 180 ]]; then
     # 阿尔法安全模式 (仅针对 128M 左右且无 Swap 的机器，预留 >=15% 物理内存防爆隔离区，收紧 GOGC 至 60 避免堆瞬时翻倍溢出)
     AUTO_GOMEMLIMIT="18MiB"
     AUTO_GOGC="60"
@@ -101,7 +101,7 @@ _openrc_init_from_unit() {
 
   detect_adaptive_mem_tuning
   local env_export=""
-  if [[ "$HAS_SWAP" -eq 1 || "$AUTO_MEM_MB" -gt 190 ]]; then
+  if [[ "$HAS_SWAP" -eq 1 || "$AUTO_MEM_MB" -gt 180 ]]; then
     env_export=""
   else
     local mlimit="18MiB"
@@ -526,9 +526,9 @@ EOF
     return 0
   fi
 
-  # 分支 B：若不存在有效 Swap (has_swap=0，阿尔法安全模式，仅针对 128M 左右即 <=190MB 机型，收紧 GOGC 至 60 确保留足 >=15% 物理内存防爆隔离区；>190MB 则保持原生默认不设限)
-  if [[ $mem_mb -le 190 ]]; then
-    echo "      检测到无 Swap 极小内存环境 (${mem_mb} MB <= 190 MB)，为确保留足 15% 系统安全防爆余量，启用精细分层内存防护 (阿尔法安全模式)"
+  # 分支 B：若不存在有效 Swap (has_swap=0，阿尔法安全模式，仅针对 128M 左右即 <=180MB 机型，收紧 GOGC 至 60 确保留足 >=15% 物理内存防爆隔离区；>180MB 则保持原生默认不设限)
+  if [[ $mem_mb -le 180 ]]; then
+    echo "      检测到无 Swap 极小内存环境 (${mem_mb} MB <= 180 MB)，为确保留足 15% 系统安全防爆余量，启用精细分层内存防护 (阿尔法安全模式)"
 
     local cf_memlimit="35MiB"
     local cf_gogc="60"

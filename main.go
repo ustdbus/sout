@@ -103,8 +103,8 @@ func initLowMemoryProtection() {
 		return
 	}
 
-	// 4. 自适应 CPU + 内存调优 (仅针对 128M 左右且无 Swap 的机器，确保留足 15% 系统安全防爆余量；>190MB 则保持默认原生调度)
-	if effectiveMB <= 190 {
+	// 4. 自适应 CPU + 内存调优 (仅针对 128M 左右且无 Swap 的机器，确保留足 15% 系统安全防爆余量；>180MB 则保持默认原生调度)
+	if effectiveMB <= 180 {
 		// 128M 左右极小内存环境 (如 122MB~128MB Alpine/Debian 极限环境)
 		if os.Getenv("GOMEMLIMIT") == "" {
 			debug.SetMemoryLimit(18 * 1024 * 1024)
@@ -112,7 +112,7 @@ func initLowMemoryProtection() {
 		if os.Getenv("GOGC") == "" {
 			debug.SetGCPercent(50)
 		}
-		log.Printf("检测到无 Swap 极小内存环境 (有效物理内存 %d MB <= 190MB)，为确保留足 15%% 系统安全防爆余量，启用精细分层内存防护 (阿尔法安全模式，sout-server 堆限制 18MB，GOGC=50)", effectiveMB)
+		log.Printf("检测到无 Swap 极小内存环境 (有效物理内存 %d MB <= 180MB)，为确保留足 15%% 系统安全防爆余量，启用精细分层内存防护 (阿尔法安全模式，sout-server 堆限制 18MB，GOGC=50)", effectiveMB)
 	}
 }
 
