@@ -162,6 +162,16 @@ option{background:#161b22;color:var(--text);padding:8px}
     <span class="badge" id="backendBadge">已连接</span>
   </h1>
   <span class="spacer"></span>
+  <button id="settingsBtn" style="gap:6px">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    设置
+  </button>
+  <button id="tunnelBtn" style="gap:6px">
+    <svg viewBox="0 0 24 24" style="color:#f6821f;fill:#f6821f" width="16" height="16">
+      <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/>
+    </svg>
+    隧道
+  </button>
   <button id="exportAll">
     <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
     导出订阅链接
@@ -169,9 +179,6 @@ option{background:#161b22;color:var(--text);padding:8px}
   <button id="viewLogsBtn" style="gap:6px">
     <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
     运行日志
-  </button>
-  <button class="icon" id="settingsBtn" title="设置">
-    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
   </button>
 </header>
 
@@ -534,6 +541,119 @@ option{background:#161b22;color:var(--text);padding:8px}
       <span class="spacer"></span>
       <button data-close="settingsModal">取消</button>
       <button class="primary" id="saveSettingsBtn">保存设置</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Cloudflare 隧道与轻量网关分流配置 -->
+<div class="modal" id="tunnelModal">
+  <div class="sheet" style="max-width:580px">
+    <div class="head">
+      <h2 style="display:flex;align-items:center;gap:8px">
+        <svg viewBox="0 0 24 24" style="color:#f6821f;fill:#f6821f" width="20" height="20">
+          <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/>
+        </svg>
+        Cloudflare 隧道与轻量网关分流配置
+      </h2>
+      <span class="spacer"></span>
+      <button class="icon" data-close="tunnelModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="body" style="padding-top:14px">
+      <!-- 1. 加载中 -->
+      <div id="tnLoading" style="text-align:center;padding:28px;color:var(--dim)">正在获取隧道与分流配置...</div>
+
+      <!-- 2. 未开启提示 -->
+      <div id="tnUnconfigured" style="display:none;background:#12151a;border:1px dashed var(--line);border-radius:8px;padding:24px;text-align:center">
+        <div style="font-size:32px;margin-bottom:8px">☁️</div>
+        <div style="font-weight:600;font-size:15px;color:var(--text);margin-bottom:6px">尚未配置 Cloudflare 隧道</div>
+        <div style="font-size:12px;color:var(--dim);line-height:1.6;max-width:440px;margin:0 auto 16px">
+          开启 Cloudflare 隧道连接与轻量网关分流后，可实现无需公网 IP、无视 NAT 与防火墙、全自动免申请 SSL 证书并彻底杜绝 525 握手错误。
+        </div>
+        <div style="background:#161b22;border:1px solid var(--line);border-radius:6px;padding:12px 14px;text-align:left;font-size:12px;color:var(--dim);line-height:1.6">
+          <span style="color:var(--accent);font-weight:600">💡 快速开启指南：</span><br>
+          在 VPS 终端输入 <code style="color:#58a6ff">sout</code>，选择菜单项 <code style="color:#3fb950">9) 隧道/轻量网关分流</code>，再选择 <code style="color:#3fb950">2) 重新配置隧道与域名</code> 即可完成全自动快速配置。
+        </div>
+      </div>
+
+      <!-- 3. 已配置详情 -->
+      <div id="tnConfigured" style="display:none">
+        <!-- 概览卡片 -->
+        <div style="background:#12151a;border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <div style="display:flex;align-items:center;gap:8px">
+              <svg viewBox="0 0 24 24" style="color:#f6821f;fill:#f6821f" width="18" height="18">
+                <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/>
+              </svg>
+              <span style="font-weight:600;font-size:14px;color:var(--text)">Cloudflare 命名隧道</span>
+            </div>
+            <div style="display:flex;gap:6px">
+              <span id="tnStatusBadge" class="pool-tag residential" style="font-size:11px">● 隧道运行中</span>
+              <span id="tnGatewayBadge" class="pool-tag residential" style="font-size:11px">● 网关就绪</span>
+            </div>
+          </div>
+          <div style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:6px">
+            <span>托管访问域名:</span>
+            <a id="tnDomainLink" href="#" target="_blank" style="color:var(--accent);font-weight:600;text-decoration:none;word-break:break-all">-</a>
+          </div>
+        </div>
+
+        <!-- 路由映射 -->
+        <div style="background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12px">
+          <div style="font-weight:600;margin-bottom:8px;color:var(--text);display:flex;align-items:center;justify-content:space-between">
+            <span>内置轻量反代网关路由映射</span>
+            <span id="tnBackPortHint" style="font-size:11px;color:var(--dim)">回源 127.0.0.1:8081</span>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid var(--line)">
+            <div>
+              <div style="font-weight:600;color:var(--text)">sout 管理面板</div>
+              <div id="tnSoutPath" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--accent);font-size:11px">/sout/</div>
+            </div>
+            <div style="text-align:right">
+              <span id="tnSoutPort" class="pool-tag residential" style="font-size:11px">127.0.0.1:8899</span>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid var(--line)">
+            <div>
+              <div style="font-weight:600;color:var(--text)">节点 WebSocket 流量透传</div>
+              <div id="tnWsPath" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--accent);font-size:11px">/wsargo*</div>
+            </div>
+            <div style="text-align:right">
+              <span id="tnNodePort" class="pool-tag residential" style="font-size:11px">127.0.0.1:26060</span>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid var(--line)">
+            <div>
+              <div style="font-weight:600;color:var(--text)">免密独立订阅分流入口</div>
+              <div id="tnSubPath" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--accent);font-size:11px">/sub*</div>
+            </div>
+            <div style="text-align:right">
+              <span class="pool-tag residential" style="font-size:11px">自动重写直达</span>
+            </div>
+          </div>
+          <div id="tnSuiRow" style="display:none;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid var(--line)">
+            <div>
+              <div style="font-weight:600;color:var(--text)">s-ui 节点管理面板</div>
+              <div id="tnSuiPath" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--accent);font-size:11px">/sui/</div>
+            </div>
+            <div style="text-align:right">
+              <span id="tnSuiPort" class="pool-tag datacenter" style="font-size:11px">127.0.0.1:2096</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 参数详情 -->
+        <div style="background:#161b22;border:1px solid var(--line);border-radius:6px;padding:10px 12px;font-size:11px;color:var(--dim);line-height:1.6">
+          <div>• <b>隧道 Token:</b> <code id="tnTokenMasked" style="color:var(--text)">已配置</code></div>
+          <div>• <b>本地回源端口:</b> <code id="tnTunnelPort" style="color:var(--text)">127.0.0.1:8081</code></div>
+          <div>• <b>终端管理:</b> 终端执行 <code style="color:#58a6ff">sout tunnel</code> 可重新配置隧道、更新域名或启停管理。</div>
+        </div>
+      </div>
+    </div>
+    <div class="foot">
+      <button id="copyTunnelPanelUrlBtn" class="primary" style="display:none">复制面板地址</button>
+      <button id="copyTunnelSubUrlBtn" style="display:none">复制订阅链接</button>
+      <span class="spacer"></span>
+      <button data-close="tunnelModal">关闭</button>
     </div>
   </div>
 </div>
@@ -1749,6 +1869,83 @@ $('#stopAllExitsBtn').onclick = async () => {
 
 $('#setSSLEnabled').onchange = () => {
   $('#sslConfigBox').style.display = $('#setSSLEnabled').checked ? 'block' : 'none';
+};
+
+let curTunnelPanelUrl = '';
+let curTunnelSubUrl = '';
+
+$('#tunnelBtn').onclick = async () => {
+  openModal('tunnelModal');
+  $('#tnLoading').style.display = 'block';
+  $('#tnLoading').textContent = '正在获取隧道与分流配置...';
+  $('#tnUnconfigured').style.display = 'none';
+  $('#tnConfigured').style.display = 'none';
+  $('#copyTunnelPanelUrlBtn').style.display = 'none';
+  $('#copyTunnelSubUrlBtn').style.display = 'none';
+
+  try {
+    const t = await api('/api/tunnel');
+    $('#tnLoading').style.display = 'none';
+    if (!t.enabled || !t.domain) {
+      $('#tnUnconfigured').style.display = 'block';
+      return;
+    }
+
+    $('#tnConfigured').style.display = 'block';
+    $('#copyTunnelPanelUrlBtn').style.display = 'inline-block';
+    $('#copyTunnelSubUrlBtn').style.display = 'inline-block';
+
+    const isRunning = !!t.cloudflared_running;
+    const isGateway = !!t.gateway_running;
+    $('#tnStatusBadge').textContent = isRunning ? '● 隧道运行中' : '○ 隧道未运行';
+    $('#tnStatusBadge').className = 'pool-tag ' + (isRunning ? 'residential' : 'datacenter');
+
+    $('#tnGatewayBadge').textContent = isGateway ? '● 网关就绪' : '○ 网关待命';
+    $('#tnGatewayBadge').className = 'pool-tag ' + (isGateway ? 'residential' : 'datacenter');
+
+    const domain = t.domain || '';
+    const soutPath = (t.sout_path || '').replace(/^\/+|\/+$/g, '');
+    const subPath = (t.sub_path || '').replace(/^\/+|\/+$/g, '');
+    const wsPath = (t.ws_path || '').replace(/^\/+|\/+$/g, '');
+    const suiPath = (t.sui_path || '').replace(/^\/+|\/+$/g, '');
+    const pw = t.password || '';
+
+    curTunnelPanelUrl = 'https://' + domain + '/' + soutPath + '/';
+    curTunnelSubUrl = 'https://' + domain + '/' + soutPath + '/sub=' + pw;
+
+    $('#tnDomainLink').href = curTunnelPanelUrl;
+    $('#tnDomainLink').textContent = domain;
+
+    $('#tnBackPortHint').textContent = '回源 127.0.0.1:' + (t.tunnel_port || 8081);
+    $('#tnSoutPath').textContent = '/' + soutPath + '/';
+    $('#tnSoutPort').textContent = '127.0.0.1:' + (t.sout_port || 8899);
+
+    $('#tnWsPath').textContent = '/' + (wsPath || 'wsargo*');
+    $('#tnNodePort').textContent = '127.0.0.1:' + (t.node_port || 26060);
+
+    $('#tnSubPath').textContent = '/' + (subPath || 'sub*');
+
+    if (suiPath && t.sui_port > 0) {
+      $('#tnSuiRow').style.display = 'flex';
+      $('#tnSuiPath').textContent = '/' + suiPath + '/';
+      $('#tnSuiPort').textContent = '127.0.0.1:' + t.sui_port;
+    } else {
+      $('#tnSuiRow').style.display = 'none';
+    }
+
+    $('#tnTokenMasked').textContent = t.token_masked || '已配置';
+    $('#tnTunnelPort').textContent = '127.0.0.1:' + (t.tunnel_port || 8081);
+  } catch(e) {
+    $('#tnLoading').style.display = 'block';
+    $('#tnLoading').textContent = '获取隧道配置失败: ' + e.message;
+  }
+};
+
+$('#copyTunnelPanelUrlBtn').onclick = () => {
+  if (curTunnelPanelUrl) { copy(curTunnelPanelUrl); toast('面板访问地址已复制'); }
+};
+$('#copyTunnelSubUrlBtn').onclick = () => {
+  if (curTunnelSubUrl) { copy(curTunnelSubUrl); toast('订阅链接已复制'); }
 };
 
 let initialBasePath = '';

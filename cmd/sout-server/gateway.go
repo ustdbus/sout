@@ -10,6 +10,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -263,3 +264,93 @@ func buildGatewayHandler(meta *CaddyMeta, workDir string) http.Handler {
 		_, _ = w.Write([]byte("Service Ready"))
 	})
 }
+
+// GetGatewayStatus 获取当前轻量网关与隧道的完整配置及运行状态
+func GetGatewayStatus(workDir string) map[string]any {
+	globalGateway.mu.Lock()
+	defer globalGateway.mu.Unlock()
+
+	if workDir == "" {
+		workDir = globalGateway.workDir
+	}
+	if workDir == "" {
+		workDir = "/var/lib/sout"
+	}
+
+	st := map[string]any{
+		"gateway_running":     globalGateway.server != nil,
+		"gateway_port":        globalGateway.port,
+		"enabled":             false,
+		"domain":              "",
+		"tunnel_port":         8081,
+		"sout_path":           "",
+		"sub_path":            "",
+		"sui_path":            "",
+		"sui_user":            "",
+		"ws_path":             "",
+		"node_port":           0,
+		"mode":                "",
+		"token_masked":        "",
+		"cloudflared_running": false,
+		"password":            "",
+		"panel_mode":          "sing-box",
+	}
+
+	metaPath := filepath.Join(workDir, "gateway_meta.json")
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		metaPath = filepath.Join(workDir, "caddy_meta.json")
+		data, err = os.ReadFile(metaPath)
+	}
+
+	if err == nil {
+		var meta GatewayMeta
+		if json.Unmarshal(data, &meta) == nil {
+			st["enabled"] = meta.Enabled
+			st["domain"] = meta.Domain
+			st["mode"] = meta.Mode
+			st["tunnel_port"] = meta.TunnelPort
+			st["sout_port"] = meta.SoutPort
+			st["sout_path"] = meta.SoutPath
+			st["sui_port"] = meta.SuiPort
+			st["sui_path"] = meta.SuiPath
+			st["sui_user"] = meta.SuiUser
+			st["sub_port"] = meta.SubPort
+			st["sub_path"] = meta.SubPath
+			st["ws_path"] = meta.WsPath
+			st["node_port"] = meta.NodePort
+			if len(meta.TunnelToken) > 16 {
+				st["token_masked"] = meta.TunnelToken[:6] + "..." + meta.TunnelToken[len(meta.TunnelToken)-6:]
+			} else if meta.TunnelToken != "" {
+				st["token_masked"] = "******"
+			}
+		}
+	}
+
+	// 检查 cloudflared 进程运行状态
+	cfRunning := false
+	if exec.Command("pgrep", "-f", "cloudflared").Run() == nil {
+		cfRunning = true
+	} else if data, err := os.ReadFile("/run/cloudflared.pid"); err == nil {
+		pidStr := strings.TrimSpace(string(data))
+		if pidStr != "" && exec.Command("kill", "-0", pidStr).Run() == nil {
+			cfRunning = true
+		}
+	}
+	st["cloudflared_running"] = cfRunning
+
+	// 读取当前面板口令
+	pwPath := filepath.Join(workDir, "password")
+	if pw, err := os.ReadFile(pwPath); err == nil {
+		st["password"] = strings.TrimSpace(string(pw))
+	}
+
+	// 读取当前面板运行模式
+	pmPath := filepath.Join(workDir, "panel_mode")
+	if pm, err := os.ReadFile(pmPath); err == nil {
+		st["panel_mode"] = strings.TrimSpace(string(pm))
+	}
+
+	return st
+}
+

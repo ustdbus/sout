@@ -21,7 +21,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v3.9.2"
+var version = "v3.9.3"
 
 func initLowMemoryProtection() {
 	var memTotalKB int64
@@ -242,6 +242,9 @@ func main() {
 	mux.HandleFunc("/api/custom/source/import", apiCustomSourceImport(mgr))
 	mux.HandleFunc("/api/custom/warp/generate", apiCustomWARPGenerate(mgr))
 	mux.HandleFunc("/api/logs", apiLogsHandler)
+	mux.HandleFunc("/api/tunnel", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, GetGatewayStatus(currentBasePathDir()))
+	})
 
 	mux.HandleFunc("/sub", handleSub(mgr))
 	mux.HandleFunc("/sub/", handleSub(mgr))
@@ -585,6 +588,7 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 			"has_password": true,
 			"password": auth.currentPassword(),
 			"version":      version,
+			"tunnel":       GetGatewayStatus(currentBasePathDir()),
 		})
 	}
 }
