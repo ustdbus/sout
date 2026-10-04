@@ -819,7 +819,7 @@ func (sb *SingBox) InboundBranchLinks(baseID int, clientID int, clientTag string
 			// 家宽分流分支：精准匹配 clientID 或用户名
 			if clientID > 0 && curClientID == clientID {
 				match = true
-			} else if clientTag != "" && (uName == clientTag || strings.Contains(clientTag, uName)) {
+			} else if clientTag != "" && uName != "" && (uName == clientTag || strings.Contains(clientTag, uName)) {
 				match = true
 			}
 		}
