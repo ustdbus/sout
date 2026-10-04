@@ -1114,9 +1114,11 @@ case "$ARCH" in
   *) echo "      暂不支持该架构: $ARCH" >&2; exit 1 ;;
 esac
 
-if [[ -f main.go ]] && command -v go >/dev/null; then
+if ([[ -f main.go ]] || [[ -f cmd/sout-server/main.go ]]) && command -v go >/dev/null; then
   echo "      检测到源码环境，正在本地编译 (内嵌 sing-box 1.14 + gVisor)..."
-  CGO_ENABLED=0 go build -trimpath -tags "with_gvisor with_quic netgo osusergo" -ldflags "-s -w" -o "$BIN" .
+  BUILD_TARGET="."
+  [[ -d cmd/sout-server ]] && BUILD_TARGET="./cmd/sout-server"
+  CGO_ENABLED=0 go build -trimpath -tags "with_gvisor with_quic netgo osusergo" -ldflags "-s -w" -o "$BIN" "$BUILD_TARGET"
 else
   echo "      正在拉取预编译包 (${GOARCH})..."
   TMP=$(mktemp -d -p /var/tmp)
