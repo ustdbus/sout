@@ -2832,8 +2832,10 @@ METAEOF
   chmod 600 "$CADDY_META"
 
   # 必须重启 sout 服务以应用新的内部端口 (127.0.0.1:${sout_port}) 和访问路径 (/${sout_path}/)
-  systemctl restart sout 2>/dev/null || rc-service sout restart 2>/dev/null || service sout restart 2>/dev/null || true
-  sleep 1
+  if [[ "${SOUT_CALLED_FROM_WEB:-0}" != "1" ]]; then
+    systemctl restart sout 2>/dev/null || rc-service sout restart 2>/dev/null || service sout restart 2>/dev/null || true
+    sleep 1
+  fi
 
   # 7. 统一调用终端菜单中的轻量反代网关探测并分流，确保分流规则与隧道回源完全一致
   reload_caddy_proxy >/dev/null 2>&1 || true
@@ -2899,9 +2901,12 @@ METAEOF
 }
 
 disable_caddy_proxy() {
-  echo
-  read -rp "  确定关闭 Cloudflare 隧道反代并恢复默认独立端口模式吗？[y/N]: " yes
-  [[ ${yes,,} == y ]] || { echo "  已取消"; return; }
+  local force="${1:-}"
+  if [[ "$force" != "force" && "$force" != "-y" ]]; then
+    echo
+    read -rp "  确定关闭 Cloudflare 隧道反代并恢复默认独立端口模式吗？[y/N]: " yes
+    [[ ${yes,,} == y ]] || { echo "  已取消"; return; }
+  fi
 
   echo "  [+] 正在停止隧道与轻量网关分流..."
   systemctl stop caddy 2>/dev/null || rc-service caddy stop 2>/dev/null || true
@@ -3054,7 +3059,9 @@ if not orig_spath.endswith('/'): orig_spath += '/'
     systemctl restart s-ui 2>/dev/null || true
   fi
 
-  systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || true
+  if [[ "${SOUT_CALLED_FROM_WEB:-0}" != "1" ]]; then
+    systemctl restart sout 2>/dev/null || rc-service sout restart 2>/dev/null || systemctl restart fanout 2>/dev/null || true
+  fi
   echo -e "  ${G}[✓] 已成功关闭隧道反代，所有服务已恢复公网 0.0.0.0 直连模式 (已还原证书与配置)：${N}"
   echo -e "      • sout 管理面板: ${B}http://${public_ip}:8899/$(cat "${WORK_DIR}/basepath" 2>/dev/null || echo "")/${N}"
   echo -e "      • s-ui 管理面板: ${B}${final_proto}://${show_web_host}${final_wpath}${N}"
@@ -4939,6 +4946,16 @@ case "${1:-}" in
   ssl)       change_ssl ;;
   caddy|cf|tunnel) caddy_menu ;;
   reload_caddy) reload_caddy_proxy ;;
+  restart_tunnel)
+    shift
+    systemctl restart cloudflared 2>/dev/null || rc-service cloudflared restart 2>/dev/null || true
+    reload_caddy_proxy >/dev/null 2>&1 || true
+    echo "OK"
+    ;;
+  disable_tunnel|delete_tunnel|stop_tunnel)
+    shift
+    disable_caddy_proxy force
+    ;;
   cert|ssl_cf|acme|cf_ssl) cf_ssl_menu ;;
   view_cert) view_cf_ssl_certs ;;
   apply_cert) apply_cf_ssl_cert ;;

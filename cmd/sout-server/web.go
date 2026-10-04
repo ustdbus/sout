@@ -553,7 +553,7 @@ option{background:#161b22;color:var(--text);padding:8px}
         <svg viewBox="0 0 24 24" style="color:#f6821f;fill:#f6821f" width="20" height="20">
           <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/>
         </svg>
-        Cloudflare 隧道与轻量网关分流配置
+        Cloudflare 隧道与分流配置
       </h2>
       <span class="spacer"></span>
       <button class="icon" data-close="tunnelModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
@@ -562,21 +562,8 @@ option{background:#161b22;color:var(--text);padding:8px}
       <!-- 1. 加载中 -->
       <div id="tnLoading" style="text-align:center;padding:28px;color:var(--dim)">正在获取隧道与分流配置...</div>
 
-      <!-- 2. 未开启提示 -->
-      <div id="tnUnconfigured" style="display:none;background:#12151a;border:1px dashed var(--line);border-radius:8px;padding:24px;text-align:center">
-        <div style="font-size:32px;margin-bottom:8px">☁️</div>
-        <div style="font-weight:600;font-size:15px;color:var(--text);margin-bottom:6px">尚未配置 Cloudflare 隧道</div>
-        <div style="font-size:12px;color:var(--dim);line-height:1.6;max-width:440px;margin:0 auto 16px">
-          开启 Cloudflare 隧道连接与轻量网关分流后，可实现无需公网 IP、无视 NAT 与防火墙、全自动免申请 SSL 证书并彻底杜绝 525 握手错误。
-        </div>
-        <div style="background:#161b22;border:1px solid var(--line);border-radius:6px;padding:12px 14px;text-align:left;font-size:12px;color:var(--dim);line-height:1.6">
-          <span style="color:var(--accent);font-weight:600">💡 快速开启指南：</span><br>
-          在 VPS 终端输入 <code style="color:#58a6ff">sout</code>，选择菜单项 <code style="color:#3fb950">9) 隧道/轻量网关分流</code>，再选择 <code style="color:#3fb950">2) 重新配置隧道与域名</code> 即可完成全自动快速配置。
-        </div>
-      </div>
-
-      <!-- 3. 已配置详情 -->
-      <div id="tnConfigured" style="display:none">
+      <!-- 2. 当前已配置状态卡片 -->
+      <div id="tnStatusCard" style="display:none">
         <!-- 概览卡片 -->
         <div style="background:#12151a;border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
@@ -584,7 +571,7 @@ option{background:#161b22;color:var(--text);padding:8px}
               <svg viewBox="0 0 24 24" style="color:#f6821f;fill:#f6821f" width="18" height="18">
                 <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/>
               </svg>
-              <span style="font-weight:600;font-size:14px;color:var(--text)">Cloudflare 命名隧道</span>
+              <span id="tnModeTitle" style="font-weight:600;font-size:14px;color:var(--text)">Cloudflare 隧道</span>
             </div>
             <div style="display:flex;gap:6px">
               <span id="tnStatusBadge" class="pool-tag residential" style="font-size:11px">● 隧道运行中</span>
@@ -642,16 +629,52 @@ option{background:#161b22;color:var(--text);padding:8px}
         </div>
 
         <!-- 参数详情 -->
-        <div style="background:#161b22;border:1px solid var(--line);border-radius:6px;padding:10px 12px;font-size:11px;color:var(--dim);line-height:1.6">
+        <div style="background:#161b22;border:1px solid var(--line);border-radius:6px;padding:10px 12px;font-size:11px;color:var(--dim);line-height:1.6;margin-bottom:14px">
           <div>• <b>隧道 Token:</b> <code id="tnTokenMasked" style="color:var(--text)">已配置</code></div>
           <div>• <b>本地回源端口:</b> <code id="tnTunnelPort" style="color:var(--text)">127.0.0.1:8081</code></div>
-          <div>• <b>终端管理:</b> 终端执行 <code style="color:#58a6ff">sout tunnel</code> 可重新配置隧道、更新域名或启停管理。</div>
+        </div>
+
+        <!-- 操作按钮工具栏 -->
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button id="tnRestartBtn" style="display:inline-flex;align-items:center;gap:4px">🔄 重启隧道</button>
+          <button id="tnSwitchToConfigBtn" class="primary" style="display:inline-flex;align-items:center;gap:4px">⚙ 更换/配置隧道</button>
+          <button id="tnDeleteBtn" style="color:#f85149;display:inline-flex;align-items:center;gap:4px">🗑 关闭隧道</button>
+        </div>
+      </div>
+
+      <!-- 3. 配置 / 更换隧道表单卡片 -->
+      <div id="tnConfigCard" style="display:none">
+        <div style="background:#161b22;border:1px solid var(--line);border-radius:6px;padding:12px 14px;margin-bottom:14px;font-size:12px;color:var(--dim);line-height:1.6">
+          <span style="color:var(--accent);font-weight:600">💡 提示与说明：</span><br>
+          • 若填写<b>隧道域名</b>与 <b>Token</b>，将启用 Cloudflare 官方命名隧道；<br>
+          • <b>若留空不填直接保存</b>，将跟首次安装一样，自动启用 Cloudflare <b>免费临时隧道 (Quick Tunnel，免域名/免Token 快速打通)</b>。<br>
+          • 配置生效后，网关将自动完成回源分流与端口重映射。
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:16px">
+          <div>
+            <label style="display:block;font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text)">隧道域名 (Domain)</label>
+            <input id="tnInputDomain" type="text" placeholder="例如 node.example.com (留空则使用免费临时隧道)" style="width:100%;box-sizing:border-box">
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text)">隧道 Token (Tunnel Token)</label>
+            <input id="tnInputToken" type="password" placeholder="Cloudflare 隧道 Token (留空则使用免费临时隧道)" style="width:100%;box-sizing:border-box">
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text)">本地回源端口 (Port)</label>
+            <input id="tnInputPort" type="number" value="8081" placeholder="默认 8081" style="width:100%;box-sizing:border-box">
+          </div>
+        </div>
+
+        <div id="tnActionMsg" style="display:none;padding:8px 12px;margin-bottom:12px;border-radius:6px;font-size:12px"></div>
+
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button id="tnCancelConfigBtn" style="display:none">返回状态</button>
+          <button id="tnSaveConfigBtn" class="primary" style="display:inline-flex;align-items:center;gap:4px">💾 保存并应用隧道</button>
         </div>
       </div>
     </div>
     <div class="foot">
-      <button id="copyTunnelPanelUrlBtn" class="primary" style="display:none">复制面板地址</button>
-      <button id="copyTunnelSubUrlBtn" style="display:none">复制订阅链接</button>
       <span class="spacer"></span>
       <button data-close="tunnelModal">关闭</button>
     </div>
@@ -1871,29 +1894,31 @@ $('#setSSLEnabled').onchange = () => {
   $('#sslConfigBox').style.display = $('#setSSLEnabled').checked ? 'block' : 'none';
 };
 
-let curTunnelPanelUrl = '';
-let curTunnelSubUrl = '';
+let curTunnelData = null;
 
-$('#tunnelBtn').onclick = async () => {
-  openModal('tunnelModal');
+async function refreshTunnelView() {
   $('#tnLoading').style.display = 'block';
   $('#tnLoading').textContent = '正在获取隧道与分流配置...';
-  $('#tnUnconfigured').style.display = 'none';
-  $('#tnConfigured').style.display = 'none';
-  $('#copyTunnelPanelUrlBtn').style.display = 'none';
-  $('#copyTunnelSubUrlBtn').style.display = 'none';
+  $('#tnStatusCard').style.display = 'none';
+  $('#tnConfigCard').style.display = 'none';
 
   try {
     const t = await api('/api/tunnel');
+    curTunnelData = t;
     $('#tnLoading').style.display = 'none';
+
     if (!t.enabled || !t.domain) {
-      $('#tnUnconfigured').style.display = 'block';
+      $('#tnStatusCard').style.display = 'none';
+      $('#tnConfigCard').style.display = 'block';
+      $('#tnCancelConfigBtn').style.display = 'none';
+      $('#tnInputDomain').value = '';
+      $('#tnInputToken').value = '';
+      $('#tnInputPort').value = '8081';
       return;
     }
 
-    $('#tnConfigured').style.display = 'block';
-    $('#copyTunnelPanelUrlBtn').style.display = 'inline-block';
-    $('#copyTunnelSubUrlBtn').style.display = 'inline-block';
+    $('#tnStatusCard').style.display = 'block';
+    $('#tnConfigCard').style.display = 'none';
 
     const isRunning = !!t.cloudflared_running;
     const isGateway = !!t.gateway_running;
@@ -1903,17 +1928,17 @@ $('#tunnelBtn').onclick = async () => {
     $('#tnGatewayBadge').textContent = isGateway ? '● 网关就绪' : '○ 网关待命';
     $('#tnGatewayBadge').className = 'pool-tag ' + (isGateway ? 'residential' : 'datacenter');
 
+    const isQuick = (t.mode === 'quick_tunnel') || (t.domain && t.domain.indexOf('.trycloudflare.com') !== -1);
+    $('#tnModeTitle').textContent = isQuick ? 'Cloudflare 免费临时隧道' : 'Cloudflare 命名隧道';
+
     const domain = t.domain || '';
     const soutPath = (t.sout_path || '').replace(/^\/+|\/+$/g, '');
     const subPath = (t.sub_path || '').replace(/^\/+|\/+$/g, '');
     const wsPath = (t.ws_path || '').replace(/^\/+|\/+$/g, '');
     const suiPath = (t.sui_path || '').replace(/^\/+|\/+$/g, '');
-    const pw = t.password || '';
 
-    curTunnelPanelUrl = 'https://' + domain + '/' + soutPath + '/';
-    curTunnelSubUrl = 'https://' + domain + '/' + soutPath + '/sub=' + pw;
-
-    $('#tnDomainLink').href = curTunnelPanelUrl;
+    const tunnelPanelUrl = 'https://' + domain + '/' + soutPath + '/';
+    $('#tnDomainLink').href = tunnelPanelUrl;
     $('#tnDomainLink').textContent = domain;
 
     $('#tnBackPortHint').textContent = '回源 127.0.0.1:' + (t.tunnel_port || 8081);
@@ -1933,19 +1958,129 @@ $('#tunnelBtn').onclick = async () => {
       $('#tnSuiRow').style.display = 'none';
     }
 
-    $('#tnTokenMasked').textContent = t.token_masked || '已配置';
+    $('#tnTokenMasked').textContent = t.token_masked || (isQuick ? '免 Token (免费临时隧道)' : '已配置');
     $('#tnTunnelPort').textContent = '127.0.0.1:' + (t.tunnel_port || 8081);
   } catch(e) {
     $('#tnLoading').style.display = 'block';
     $('#tnLoading').textContent = '获取隧道配置失败: ' + e.message;
   }
+}
+
+$('#tunnelBtn').onclick = () => {
+  openModal('tunnelModal');
+  refreshTunnelView();
 };
 
-$('#copyTunnelPanelUrlBtn').onclick = () => {
-  if (curTunnelPanelUrl) { copy(curTunnelPanelUrl); toast('面板访问地址已复制'); }
+$('#tnSwitchToConfigBtn').onclick = () => {
+  $('#tnStatusCard').style.display = 'none';
+  $('#tnConfigCard').style.display = 'block';
+  $('#tnCancelConfigBtn').style.display = 'inline-block';
+  if (curTunnelData) {
+    const isQuick = (curTunnelData.mode === 'quick_tunnel') || (curTunnelData.domain && curTunnelData.domain.indexOf('.trycloudflare.com') !== -1);
+    $('#tnInputDomain').value = isQuick ? '' : (curTunnelData.domain || '');
+    $('#tnInputToken').value = '';
+    $('#tnInputPort').value = curTunnelData.tunnel_port || '8081';
+  }
 };
-$('#copyTunnelSubUrlBtn').onclick = () => {
-  if (curTunnelSubUrl) { copy(curTunnelSubUrl); toast('订阅链接已复制'); }
+
+$('#tnCancelConfigBtn').onclick = () => {
+  if (curTunnelData && curTunnelData.enabled) {
+    $('#tnConfigCard').style.display = 'none';
+    $('#tnStatusCard').style.display = 'block';
+  }
+};
+
+$('#tnRestartBtn').onclick = async () => {
+  const btn = $('#tnRestartBtn');
+  const origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '正在重启…';
+
+  try {
+    const res = await api('/api/tunnel', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ action: 'restart' })
+    });
+    toast(res.message || '隧道已成功重启');
+    await refreshTunnelView();
+  } catch(e) {
+    toast('重启隧道失败: ' + e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origText;
+  }
+};
+
+$('#tnDeleteBtn').onclick = async () => {
+  if (!confirm('确定关闭 Cloudflare 隧道并恢复默认独立端口公网直连模式吗？\n关闭后服务将恢复公网 0.0.0.0 直连，需通过原 IP/端口访问。')) {
+    return;
+  }
+
+  const btn = $('#tnDeleteBtn');
+  const origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '正在关闭…';
+
+  try {
+    const res = await api('/api/tunnel', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ action: 'delete' })
+    });
+    toast(res.message || '隧道已关闭，正在恢复直连模式...');
+    setTimeout(() => {
+      closeModal('tunnelModal');
+      location.reload();
+    }, 2000);
+  } catch(e) {
+    toast('关闭隧道失败: ' + e.message, true);
+    btn.disabled = false;
+    btn.textContent = origText;
+  }
+};
+
+$('#tnSaveConfigBtn').onclick = async () => {
+  const domain = $('#tnInputDomain').value.trim();
+  const token = $('#tnInputToken').value.trim();
+  const port = parseInt($('#tnInputPort').value.trim(), 10) || 8081;
+
+  if (!domain && !token) {
+    if (!confirm('检测到隧道域名与 Token 均为空。\n系统将与首次安装时一致，自动创建并启用 Cloudflare 免费临时隧道 (免域名 / 免 Token 快速打通)。\n\n确定继续应用吗？')) {
+      return;
+    }
+  }
+
+  const btn = $('#tnSaveConfigBtn');
+  const origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '正在配置隧道并启动服务 (约10-20秒)…';
+
+  try {
+    const res = await api('/api/tunnel', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        action: 'save',
+        domain: domain,
+        token: token,
+        port: port
+      })
+    });
+    toast(res.message || '隧道配置成功，服务正在生效...');
+    setTimeout(() => {
+      if (res.status && res.status.domain && res.status.sout_path) {
+        const newUrl = 'https://' + res.status.domain + '/' + res.status.sout_path.replace(/^\/+|\/+$/g, '') + '/';
+        location.href = newUrl;
+      } else {
+        refreshTunnelView();
+      }
+    }, 3000);
+  } catch(e) {
+    toast('配置隧道失败: ' + e.message, true);
+    btn.disabled = false;
+    btn.textContent = origText;
+  }
 };
 
 let initialBasePath = '';

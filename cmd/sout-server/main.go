@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
@@ -242,9 +243,7 @@ func main() {
 	mux.HandleFunc("/api/custom/source/import", apiCustomSourceImport(mgr))
 	mux.HandleFunc("/api/custom/warp/generate", apiCustomWARPGenerate(mgr))
 	mux.HandleFunc("/api/logs", apiLogsHandler)
-	mux.HandleFunc("/api/tunnel", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, GetGatewayStatus(currentBasePathDir()))
-	})
+	mux.HandleFunc("/api/tunnel", apiTunnelHandler)
 
 	mux.HandleFunc("/sub", handleSub(mgr))
 	mux.HandleFunc("/sub/", handleSub(mgr))
@@ -617,6 +616,143 @@ func syncGatewayBasePath(dir, oldBP, newBP string) {
 	// 2. 动态热重载 sout-server 内置轻量反代网关
 	ReloadGateway(dir)
 }
+
+func findSoutScript() string {
+	candidates := []string{
+		"/usr/local/bin/sout",
+		"/usr/local/bin/f",
+		"/etc/sout/f.sh",
+		"./f.sh",
+		"f.sh",
+	}
+	for _, c := range candidates {
+		if fi, err := os.Stat(c); err == nil && !fi.IsDir() {
+			return c
+		}
+	}
+	return ""
+}
+
+func apiTunnelHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, GetGatewayStatus(currentBasePathDir()))
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "请使用 GET 或 POST"})
+		return
+	}
+
+	var req struct {
+		Action string `json:"action"` // "save", "restart", "delete"
+		Domain string `json:"domain"`
+		Token  string `json:"token"`
+		Port   int    `json:"port"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求参数解析错误: " + err.Error()})
+		return
+	}
+
+	scriptPath := findSoutScript()
+	if scriptPath == "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "未找到 sout 管理脚本 (/usr/local/bin/sout 或 f.sh)"})
+		return
+	}
+
+	switch req.Action {
+	case "restart":
+		var cmd *exec.Cmd
+		if hasCmd("bash") {
+			cmd = exec.Command("bash", scriptPath, "restart_tunnel")
+		} else {
+			cmd = exec.Command("sh", scriptPath, "restart_tunnel")
+		}
+		cmd.Env = append(os.Environ(), "SOUT_CALLED_FROM_WEB=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{
+				"error": fmt.Sprintf("重启隧道失败: %v, 输出: %s", err, string(out)),
+			})
+			return
+		}
+		ReloadGateway(currentBasePathDir())
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":      true,
+			"message": "隧道已成功重启",
+			"status":  GetGatewayStatus(currentBasePathDir()),
+		})
+
+	case "delete":
+		var cmd *exec.Cmd
+		if hasCmd("bash") {
+			cmd = exec.Command("bash", scriptPath, "disable_tunnel", "force")
+		} else {
+			cmd = exec.Command("sh", scriptPath, "disable_tunnel", "force")
+		}
+		cmd.Env = append(os.Environ(), "SOUT_CALLED_FROM_WEB=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{
+				"error": fmt.Sprintf("关闭隧道失败: %v, 输出: %s", err, string(out)),
+			})
+			return
+		}
+		ShutdownGateway()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":         true,
+			"restarting": true,
+			"message":    "隧道已关闭，正在恢复直连模式...",
+		})
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			restartSelf()
+		}()
+
+	case "save":
+		port := req.Port
+		if port <= 0 || port > 65535 {
+			port = 8081
+		}
+		domain := strings.TrimSpace(req.Domain)
+		token := strings.TrimSpace(req.Token)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+
+		var cmd *exec.Cmd
+		if hasCmd("bash") {
+			cmd = exec.CommandContext(ctx, "bash", scriptPath, "setup_tunnel", domain, token, strconv.Itoa(port))
+		} else {
+			cmd = exec.CommandContext(ctx, "sh", scriptPath, "setup_tunnel", domain, token, strconv.Itoa(port))
+		}
+		cmd.Env = append(os.Environ(), "SOUT_CALLED_FROM_WEB=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{
+				"error": fmt.Sprintf("配置隧道失败: %v, 输出: %s", err, string(out)),
+			})
+			return
+		}
+
+		ReloadGateway(currentBasePathDir())
+		latestStatus := GetGatewayStatus(currentBasePathDir())
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":         true,
+			"restarting": true,
+			"message":    "隧道配置已应用，服务正在重启生效...",
+			"status":     latestStatus,
+		})
+		go func() {
+			time.Sleep(800 * time.Millisecond)
+			restartSelf()
+		}()
+
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "未知 action: " + req.Action})
+	}
+}
+
 
 
 func apiUpdateCheck(w http.ResponseWriter, r *http.Request) {
