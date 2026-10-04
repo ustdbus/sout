@@ -17,6 +17,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -142,16 +143,110 @@ func parseSemver(v string) ([3]int, bool) {
 	return out, true
 }
 
-// applyUpdate 下载最新版对应架构的包、校验、替换当前二进制，然后重启服务。
-// 成功后本进程会被 init 系统拉起成新版本，所以正常情况下这里返回后进程即被替换。
+// UpdateProgress 实时汇报更新进度与状态
+type UpdateProgress struct {
+	Running       bool   `json:"running"`
+	Status        string `json:"status"` // idle, starting, checking, downloading, verifying, extracting, installing, restarting, done, error
+	Progress      int    `json:"progress"` // 0-100
+	Speed         string `json:"speed"`
+	Message       string `json:"message"`
+	Error         string `json:"error,omitempty"`
+	TargetVersion string `json:"target_version,omitempty"`
+}
+
+var (
+	updateMu      sync.Mutex
+	currentUpdate = UpdateProgress{Status: "idle", Message: "就绪"}
+)
+
+// GetUpdateProgress 获取当前更新状态快照
+func GetUpdateProgress() UpdateProgress {
+	updateMu.Lock()
+	defer updateMu.Unlock()
+	return currentUpdate
+}
+
+func setUpdateProgress(fn func(*UpdateProgress)) {
+	updateMu.Lock()
+	defer updateMu.Unlock()
+	fn(&currentUpdate)
+}
+
+// StartAsyncUpdate 启动异步后台更新任务，立即返回避免前端请求挂起超时
+func StartAsyncUpdate() (started bool, msg string) {
+	updateMu.Lock()
+	if currentUpdate.Running {
+		updateMu.Unlock()
+		return false, "更新任务已在进行中，请勿重复点击"
+	}
+	currentUpdate = UpdateProgress{
+		Running:  true,
+		Status:   "starting",
+		Progress: 0,
+		Message:  "正在连接 GitHub 获取最新版本信息...",
+	}
+	updateMu.Unlock()
+
+	go runAsyncUpdate()
+	return true, "更新任务已启动"
+}
+
+func runAsyncUpdate() {
+	defer func() {
+		if r := recover(); r != nil {
+			setUpdateProgress(func(p *UpdateProgress) {
+				p.Running = false
+				p.Status = "error"
+				p.Error = fmt.Sprintf("panic: %v", r)
+				p.Message = "更新异常中断"
+			})
+		}
+	}()
+
+	err := doApplyUpdate()
+	if err != nil {
+		setUpdateProgress(func(p *UpdateProgress) {
+			p.Running = false
+			p.Status = "error"
+			p.Error = err.Error()
+			p.Message = "更新失败: " + err.Error()
+		})
+		return
+	}
+
+	setUpdateProgress(func(p *UpdateProgress) {
+		p.Running = false
+		p.Status = "restarting"
+		p.Progress = 100
+		p.Message = "更新完成，服务正在平滑重启..."
+	})
+
+	time.Sleep(1200 * time.Millisecond)
+	restartSelf()
+}
+
+// applyUpdate 同步调用更新（兼容原有入口）
 func applyUpdate() error {
+	return doApplyUpdate()
+}
+
+func doApplyUpdate() error {
 	runtime.GC()
 	debug.FreeOSMemory()
+
+	setUpdateProgress(func(p *UpdateProgress) {
+		p.Status = "checking"
+		p.Message = "正在检查最新 Release 元数据..."
+	})
 
 	rel, err := fetchLatestRelease()
 	if err != nil {
 		return err
 	}
+
+	setUpdateProgress(func(p *UpdateProgress) {
+		p.TargetVersion = rel.TagName
+	})
 
 	arch := assetArch()
 	assetName := fmt.Sprintf("sout-linux-%s.tar.gz", arch)
@@ -175,16 +270,29 @@ func applyUpdate() error {
 	defer os.RemoveAll(tmp)
 
 	tarPath := filepath.Join(tmp, assetName)
-	if err := downloadFile(assetURL, tarPath); err != nil {
+	setUpdateProgress(func(p *UpdateProgress) {
+		p.Status = "downloading"
+		p.Message = "正在下载新版本安装包..."
+	})
+
+	if err := downloadFileWithProgress(assetURL, tarPath); err != nil {
 		return fmt.Errorf("下载失败: %w", err)
 	}
 
-	// 有校验和就核对，防止下到损坏或被篡改的包
 	if sumsURL != "" {
+		setUpdateProgress(func(p *UpdateProgress) {
+			p.Status = "verifying"
+			p.Message = "正在校验安装包完整性..."
+		})
 		if err := verifyChecksum(tarPath, assetName, sumsURL); err != nil {
 			return err
 		}
 	}
+
+	setUpdateProgress(func(p *UpdateProgress) {
+		p.Status = "extracting"
+		p.Message = "正在解包新版本..."
+	})
 
 	newBin := filepath.Join(tmp, "sout-server")
 	if err := extractBinary(tarPath, "sout-server", newBin); err != nil {
@@ -196,13 +304,17 @@ func applyUpdate() error {
 	}
 	_ = os.Remove(tarPath)
 
+	setUpdateProgress(func(p *UpdateProgress) {
+		p.Status = "installing"
+		p.Message = "正在原子替换二进制程序..."
+	})
+
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("定位当前程序失败: %w", err)
 	}
 	self, _ = filepath.EvalSymlinks(self)
 
-	// 原子替换：先写到同目录临时文件再 rename，避免替一半崩了留下坏二进制
 	staged := self + ".new"
 	if err := copyFileMode(newBin, staged, 0755); err != nil {
 		return fmt.Errorf("写入新版本失败: %w", err)
@@ -212,61 +324,118 @@ func applyUpdate() error {
 		return fmt.Errorf("替换二进制失败: %w", err)
 	}
 
-	// 让 init 系统重启我们，拉起新版本。异步触发并延迟一下，
-	// 好让这次请求的响应先发回界面。
-	go func() {
-		time.Sleep(800 * time.Millisecond)
-		restartSelf()
-	}()
 	return nil
 }
 
 func downloadFile(url, dst string) error {
+	return downloadFileWithProgress(url, dst)
+}
+
+func downloadFileWithProgress(rawURL, dst string) error {
+	candidateURLs := []string{rawURL}
+	if strings.Contains(rawURL, "github.com") {
+		candidateURLs = append(candidateURLs,
+			"https://ghproxy.net/"+rawURL,
+			"https://mirror.ghproxy.com/"+rawURL,
+		)
+	}
+
 	var lastErr error
-	for attempt := 1; attempt <= 3; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			cancel()
-			return err
+	for _, targetURL := range candidateURLs {
+		err := tryDownloadWithProgress(targetURL, dst)
+		if err == nil {
+			return nil
 		}
-		req.Header.Set("User-Agent", "fanout-updater")
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			cancel()
-			lastErr = err
-			time.Sleep(time.Duration(attempt) * time.Second)
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			cancel()
-			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
-			if resp.StatusCode >= 500 {
-				time.Sleep(time.Duration(attempt) * time.Second)
-				continue
-			}
-			return lastErr
-		}
-		f, err := os.Create(dst)
-		if err != nil {
-			resp.Body.Close()
-			cancel()
-			return err
-		}
-		_, err = io.Copy(f, resp.Body)
-		f.Close()
-		resp.Body.Close()
-		cancel()
-		if err != nil {
-			lastErr = err
-			time.Sleep(time.Duration(attempt) * time.Second)
-			continue
-		}
-		return nil
+		lastErr = err
 	}
 	return lastErr
 }
+
+func tryDownloadWithProgress(url, dst string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "fanout-updater")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	totalSize := resp.ContentLength
+
+	f, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	buf := make([]byte, 32*1024)
+	var downloaded int64
+	lastReport := time.Now()
+	var lastBytes int64
+
+	for {
+		n, rErr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, wErr := f.Write(buf[:n]); wErr != nil {
+				return wErr
+			}
+			downloaded += int64(n)
+
+			now := time.Now()
+			if now.Sub(lastReport) >= 300*time.Millisecond || rErr == io.EOF {
+				elapsedSec := now.Sub(lastReport).Seconds()
+				var speedStr string
+				if elapsedSec > 0 {
+					speedBps := float64(downloaded-lastBytes) / elapsedSec
+					if speedBps > 1024*1024 {
+						speedStr = fmt.Sprintf("%.1f MB/s", speedBps/(1024*1024))
+					} else {
+						speedStr = fmt.Sprintf("%.0f KB/s", speedBps/1024)
+					}
+				}
+				lastReport = now
+				lastBytes = downloaded
+
+				progress := 0
+				if totalSize > 0 {
+					progress = int(downloaded * 100 / totalSize)
+					if progress > 99 && rErr != io.EOF {
+						progress = 99
+					}
+				}
+
+				setUpdateProgress(func(p *UpdateProgress) {
+					p.Progress = progress
+					p.Speed = speedStr
+					if totalSize > 0 {
+						p.Message = fmt.Sprintf("正在下载: %.1f MB / %.1f MB (%d%%)", float64(downloaded)/(1024*1024), float64(totalSize)/(1024*1024), progress)
+					} else {
+						p.Message = fmt.Sprintf("正在下载: %.1f MB", float64(downloaded)/(1024*1024))
+					}
+				})
+			}
+		}
+		if rErr == io.EOF {
+			break
+		}
+		if rErr != nil {
+			return rErr
+		}
+	}
+	return nil
+}
+
 
 func verifyChecksum(path, name, sumsURL string) error {
 	sums := filepath.Join(filepath.Dir(path), "checksums.txt")

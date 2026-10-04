@@ -2190,13 +2190,38 @@ $('#checkUpdateBtn').onclick = async e => {
         + '<button class="primary" id="applyUpdateBtn" style="font-size:12px;padding:4px 10px">立即一键更新</button>';
       $('#applyUpdateBtn').onclick = async btn => {
         btn.target.disabled = true;
-        btn.target.textContent = '正在下载与更新...';
+        btn.target.textContent = '正在启动更新...';
         try{
           await api('/api/update/apply', {method:'POST'});
-          toast('更新成功，服务正在重启...');
-          setTimeout(() => location.reload(), 3000);
+          const pollTimer = setInterval(async () => {
+            try {
+              const u = await api('/api/update/status');
+              if(!u.running && u.status === 'idle') return;
+              if(u.status === 'downloading') {
+                btn.target.textContent = `下载中: ${u.progress}% (${u.speed || '计算中...'})`;
+              } else if(u.status === 'verifying') {
+                btn.target.textContent = '正在校验包...';
+              } else if(u.status === 'extracting' || u.status === 'installing') {
+                btn.target.textContent = '正在安装部署...';
+              } else if(u.status === 'restarting') {
+                clearInterval(pollTimer);
+                btn.target.textContent = '正在重启服务...';
+                toast('更新完成，服务正在重启...');
+                setTimeout(() => location.reload(), 3000);
+              } else if(u.status === 'error') {
+                clearInterval(pollTimer);
+                toast('更新失败: ' + (u.error || u.message || '未知错误'), true);
+                btn.target.disabled = false;
+                btn.target.textContent = '重试一键更新';
+              }
+            } catch(e) {
+              clearInterval(pollTimer);
+              toast('服务已平滑重启，正在重新连接...');
+              setTimeout(() => location.reload(), 3000);
+            }
+          }, 1000);
         }catch(err){
-          toast('更新失败: ' + err.message, true);
+          toast('启动更新失败: ' + err.message, true);
           btn.target.disabled = false;
           btn.target.textContent = '立即一键更新';
         }

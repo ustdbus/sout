@@ -22,7 +22,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v3.9.6"
+var version = "v3.9.7"
 
 func initLowMemoryProtection() {
 	var memTotalKB int64
@@ -278,6 +278,7 @@ func main() {
 	srv := newWebServer(StripBasePath(auth.Wrap(mux)))
 	mux.HandleFunc("/api/settings", apiSettings(auth, srv))
 	mux.HandleFunc("/api/update/check", apiUpdateCheck)
+	mux.HandleFunc("/api/update/status", apiUpdateStatus)
 	mux.HandleFunc("/api/update/apply", apiUpdateApply)
 
 	log.Printf("管理界面: %s://<本机IP>%s%s/", webCfg.schemeString(), webCfg.listenAddrString(), currentBasePath())
@@ -791,25 +792,21 @@ func apiUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
+func apiUpdateStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, GetUpdateProgress())
+}
+
 func apiUpdateApply(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "用 POST"})
 		return
 	}
-	st, err := checkUpdate()
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "检查更新失败: " + err.Error()})
-		return
-	}
-	if !st.HasUpdate {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "restarting": false, "message": "已经是最新版"})
-		return
-	}
-	if err := applyUpdate(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "restarting": true, "latest": st.Latest})
+	started, msg := StartAsyncUpdate()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      started,
+		"message": msg,
+		"status":  GetUpdateProgress(),
+	})
 }
 
 func apiExits(m *Manager) http.HandlerFunc {
