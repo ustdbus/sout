@@ -2081,6 +2081,19 @@ setup_caddy_proxy() {
   local protocol="${TUNNEL_PROTOCOL:-quic}"
   [[ "$protocol" != "http2" ]] && protocol="quic"
 
+  local meta_f="${WORK_DIR}/caddy_meta.json"
+  if [[ -f "$meta_f" ]]; then
+    if [[ -z "$tunnel_token" || "$tunnel_token" == *"..."* || "$tunnel_token" == *"***"* ]]; then
+      local exist_token exist_dom
+      exist_token=$(python3 -c 'import json, sys; d=json.load(open(sys.argv[1])); print(d.get("tunnel_token", ""))' "$meta_f" 2>/dev/null || true)
+      exist_dom=$(python3 -c 'import json, sys; d=json.load(open(sys.argv[1])); print(d.get("domain", ""))' "$meta_f" 2>/dev/null || true)
+      if [[ -n "$exist_token" ]]; then
+        tunnel_token="$exist_token"
+        [[ -z "$domain" ]] && domain="$exist_dom"
+      fi
+    fi
+  fi
+
   local is_quick="false"
   if [[ -z "$domain" && -z "$tunnel_token" ]]; then
     is_quick="true"
@@ -2146,18 +2159,51 @@ except Exception:
   local sout_port sui_port sub_port node_port reality_port
   local sout_path sui_path sub_path ws_path
 
-  sout_port=$(rand_local_port)
-  sub_port=$(rand_local_port)
-  node_port=$(rand_local_port)
-  reality_port=$(rand_local_port)
+  local old_sout_port="" old_sui_port="" old_sub_port="" old_node_port="" old_reality_port=""
+  local old_sout_path="" old_sui_path="" old_sub_path="" old_ws_path=""
+  local meta_f="${WORK_DIR}/caddy_meta.json"
+  if [[ -f "$meta_f" ]]; then
+    eval $(python3 -c '
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        d = json.load(f)
+    if isinstance(d, dict):
+        sp = d.get("sout_port", 0)
+        sup = d.get("sui_port", 0)
+        subp = d.get("sub_port", 0)
+        np = d.get("node_port", 0)
+        rp = d.get("reality_port", 0)
+        spa = d.get("sout_path", "")
+        suia = d.get("sui_path", "")
+        suba = d.get("sub_path", "")
+        wsa = d.get("ws_path", "")
+        if sp: print(f"old_sout_port={sp}")
+        if sup: print(f"old_sui_port={sup}")
+        if subp: print(f"old_sub_port={subp}")
+        if np: print(f"old_node_port={np}")
+        if rp: print(f"old_reality_port={rp}")
+        if spa: print(f"old_sout_path={spa}")
+        if suia: print(f"old_sui_path={suia}")
+        if suba: print(f"old_sub_path={suba}")
+        if wsa: print(f"old_ws_path={wsa}")
+except Exception:
+    pass
+' "$meta_f" 2>/dev/null || true)
+  fi
 
-  sout_path=$(rand_safe_path "sout")
-  sub_path=$(rand_safe_path "sub")
-  ws_path=$(rand_safe_path "vlws")
+  sout_port="${old_sout_port:-$(rand_local_port)}"
+  sub_port="${old_sub_port:-$(rand_local_port)}"
+  node_port="${old_node_port:-$(rand_local_port)}"
+  reality_port="${old_reality_port:-$(rand_local_port)}"
+
+  sout_path="${old_sout_path:-$(rand_safe_path "sout")}"
+  sub_path="${old_sub_path:-$(rand_safe_path "sub")}"
+  ws_path="${old_ws_path:-$(rand_safe_path "vlws")}"
 
   if [[ "$has_sui" == "true" ]]; then
-    sui_port=$(rand_local_port)
-    sui_path=$(rand_safe_path "sui")
+    sui_port="${old_sui_port:-$(rand_local_port)}"
+    sui_path="${old_sui_path:-$(rand_safe_path "sui")}"
   else
     sui_port=0
     sui_path=""

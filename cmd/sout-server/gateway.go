@@ -42,7 +42,7 @@ type CaddyMeta = GatewayMeta
 type GatewayManager struct {
 	mu      sync.Mutex
 	workDir string
-	server  *http.Server
+	servers []*http.Server
 	port    int
 	meta    *GatewayMeta
 }
@@ -62,14 +62,8 @@ func InitGateway(workDir string) {
 func ShutdownGateway() {
 	globalGateway.mu.Lock()
 	defer globalGateway.mu.Unlock()
-	if globalGateway.server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = globalGateway.server.Shutdown(ctx)
-		globalGateway.server = nil
-		globalGateway.port = 0
-		log.Println("[Gateway] 内置轻量反代网关已关闭")
-	}
+	stopGatewayLocked()
+	log.Println("[Gateway] 内置轻量反代网关已关闭")
 }
 
 // ReloadGateway 根据 gateway_meta.json / caddy_meta.json 动态重载或重启网关
@@ -109,43 +103,56 @@ func ReloadGateway(workDir string) {
 
 	// 如果已经在运行且端口一致，只需更新路由处理器；若端口变化则重启监听
 	handler := buildGatewayHandler(&meta, workDir)
-	if globalGateway.server != nil && globalGateway.port == meta.TunnelPort {
-		globalGateway.server.Handler = handler
-		log.Printf("[Gateway] 内置轻量反代网关路由已热更新 (127.0.0.1:%d)", meta.TunnelPort)
+	if len(globalGateway.servers) > 0 && globalGateway.port == meta.TunnelPort {
+		for _, s := range globalGateway.servers {
+			s.Handler = handler
+		}
+		log.Printf("[Gateway] 内置轻量反代网关路由已热更新 (Port: %d)", meta.TunnelPort)
 		return
 	}
 
 	stopGatewayLocked()
 
-	listenAddr := fmt.Sprintf("127.0.0.1:%d", meta.TunnelPort)
-	srv := &http.Server{
-		Addr:    listenAddr,
-		Handler: handler,
+	// 同时监听 IPv4 (127.0.0.1) 与 IPv6 ([::1])，防止 cloudflared 解析 localhost 时命中 ::1 报 502
+	var listeners []net.Listener
+	if ln4, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", meta.TunnelPort)); err == nil {
+		listeners = append(listeners, ln4)
+	} else {
+		log.Printf("[Gateway] 监听 IPv4 回源端口失败 (127.0.0.1:%d): %v", meta.TunnelPort, err)
 	}
 
-	ln, err := net.Listen("tcp", listenAddr)
-	if err != nil {
-		log.Printf("[Gateway] 监听回源端口失败 (%s): %v", listenAddr, err)
+	if ln6, err := net.Listen("tcp6", fmt.Sprintf("[::1]:%d", meta.TunnelPort)); err == nil {
+		listeners = append(listeners, ln6)
+	}
+
+	if len(listeners) == 0 {
+		log.Printf("[Gateway] 无法监听任何本地回源端口 (%d)", meta.TunnelPort)
 		return
 	}
 
-	globalGateway.server = srv
 	globalGateway.port = meta.TunnelPort
-
-	go func() {
-		log.Printf("[Gateway] 内置轻量反代网关已成功接管 127.0.0.1:%d", meta.TunnelPort)
-		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-			log.Printf("[Gateway] 服务运行异常: %v", err)
+	for _, ln := range listeners {
+		srv := &http.Server{
+			Handler: handler,
 		}
-	}()
+		globalGateway.servers = append(globalGateway.servers, srv)
+		go func(l net.Listener, s *http.Server) {
+			log.Printf("[Gateway] 内置轻量反代网关已成功接管 %s", l.Addr().String())
+			if err := s.Serve(l); err != nil && err != http.ErrServerClosed {
+				log.Printf("[Gateway] 服务运行异常 (%s): %v", l.Addr().String(), err)
+			}
+		}(ln, srv)
+	}
 }
 
 func stopGatewayLocked() {
-	if globalGateway.server != nil {
+	if len(globalGateway.servers) > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		_ = globalGateway.server.Shutdown(ctx)
-		globalGateway.server = nil
+		for _, s := range globalGateway.servers {
+			_ = s.Shutdown(ctx)
+		}
+		globalGateway.servers = nil
 		globalGateway.port = 0
 	}
 }
@@ -279,7 +286,7 @@ func GetGatewayStatus(workDir string) map[string]any {
 	}
 
 	st := map[string]any{
-		"gateway_running":     globalGateway.server != nil,
+		"gateway_running":     len(globalGateway.servers) > 0,
 		"gateway_port":        globalGateway.port,
 		"enabled":             false,
 		"domain":              "",

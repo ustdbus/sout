@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +21,7 @@ type Auth struct {
 	mu       sync.RWMutex
 	dir      string
 	password string
+	secret   []byte
 	sessions map[string]time.Time
 	fails    map[string]*loginFails
 }
@@ -29,7 +32,7 @@ type loginFails struct {
 	blocked time.Time
 }
 
-const sessionTTL = 12 * time.Hour
+const sessionTTL = 30 * 24 * time.Hour
 
 const (
 	loginMaxFails  = 8
@@ -56,9 +59,20 @@ func NewAuth(dir string) (*Auth, bool, error) {
 		return nil, false, err
 	}
 
+	secretPath := filepath.Join(dir, "auth_secret")
+	secret, err := os.ReadFile(secretPath)
+	if os.IsNotExist(err) || len(secret) < 16 {
+		sec := make([]byte, 32)
+		if _, rerr := rand.Read(sec); rerr == nil {
+			secret = sec
+			_ = os.WriteFile(secretPath, secret, 0600)
+		}
+	}
+
 	return &Auth{
 		dir:      dir,
 		password: strings.TrimSpace(string(blob)),
+		secret:   secret,
 		sessions: map[string]time.Time{},
 		fails:    map[string]*loginFails{},
 	}, created, nil
@@ -105,19 +119,40 @@ func (a *Auth) SetPassword(pw string) error {
 	}
 	a.mu.Lock()
 	a.password = pw
+	a.sessions = map[string]time.Time{} // 修改密码后清空旧内存会话
 	a.mu.Unlock()
 	return nil
 }
 
+func (a *Auth) signPayload(payload string) string {
+	a.mu.RLock()
+	pw := a.password
+	sec := a.secret
+	a.mu.RUnlock()
+
+	h := hmac.New(sha256.New, sec)
+	h.Write([]byte(payload))
+	h.Write([]byte("|"))
+	pwHash := sha256.Sum256([]byte(pw))
+	h.Write(pwHash[:])
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 func (a *Auth) issue() (string, error) {
-	tok, err := randomToken(16)
+	exp := time.Now().Add(sessionTTL)
+	expHex := strconv.FormatInt(exp.Unix(), 16)
+	nonce, err := randomToken(8)
 	if err != nil {
 		return "", err
 	}
+	payload := expHex + "." + nonce
+	sig := a.signPayload(payload)
+	tok := payload + "." + sig
+
 	a.mu.Lock()
-	a.sessions[tok] = time.Now().Add(sessionTTL)
-	for k, exp := range a.sessions {
-		if time.Now().After(exp) {
+	a.sessions[tok] = exp
+	for k, e := range a.sessions {
+		if time.Now().After(e) {
 			delete(a.sessions, k)
 		}
 	}
@@ -126,10 +161,44 @@ func (a *Auth) issue() (string, error) {
 }
 
 func (a *Auth) valid(tok string) bool {
+	tok = strings.TrimSpace(tok)
+	if tok == "" {
+		return false
+	}
+
+	// 1. 先查活跃内存缓存
 	a.mu.RLock()
 	exp, ok := a.sessions[tok]
 	a.mu.RUnlock()
-	return ok && time.Now().Before(exp)
+	if ok && time.Now().Before(exp) {
+		return true
+	}
+
+	// 2. 内存未命中（如升级、重启），进行 HMAC-SHA256 签名与有效期无感自验证
+	parts := strings.Split(tok, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	expUnix, err := strconv.ParseInt(parts[0], 16, 64)
+	if err != nil {
+		return false
+	}
+	expTime := time.Unix(expUnix, 0)
+	if time.Now().After(expTime) {
+		return false
+	}
+
+	payload := parts[0] + "." + parts[1]
+	expectedSig := a.signPayload(payload)
+	if subtle.ConstantTimeCompare([]byte(expectedSig), []byte(parts[2])) != 1 {
+		return false
+	}
+
+	// 验证签名成功，密码未变且在 30 天有效期内，自动无感恢复入内存
+	a.mu.Lock()
+	a.sessions[tok] = expTime
+	a.mu.Unlock()
+	return true
 }
 
 const sessionCookie = "sout_session"

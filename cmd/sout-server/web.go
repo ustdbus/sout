@@ -2081,14 +2081,25 @@ $('#tnSaveConfigBtn').onclick = async () => {
       })
     });
     toast(res.message || '隧道配置成功，服务正在生效...');
-    setTimeout(() => {
-      if (res.status && res.status.domain && res.status.sout_path) {
-        const newUrl = 'https://' + res.status.domain + '/' + res.status.sout_path.replace(/^\/+|\/+$/g, '') + '/';
-        location.href = newUrl;
+    let countdown = 15;
+    btn.textContent = '隧道已启动，正在等待 Cloudflare 边缘就绪 (' + countdown + 's)…';
+    const timer = setInterval(async () => {
+      countdown--;
+      if (countdown > 0) {
+        btn.textContent = '隧道已启动，正在等待 Cloudflare 边缘就绪 (' + countdown + 's)…';
       } else {
-        refreshTunnelView();
+        clearInterval(timer);
+        btn.textContent = '正在平滑载入…';
+        if (res.status && res.status.domain && res.status.sout_path) {
+          const targetUrl = 'https://' + res.status.domain + '/' + res.status.sout_path.replace(/^\/+|\/+$/g, '') + '/';
+          location.href = targetUrl;
+        } else {
+          refreshTunnelView();
+          btn.disabled = false;
+          btn.textContent = origText;
+        }
       }
-    }, 3000);
+    }, 1000);
   } catch(e) {
     toast('配置隧道失败: ' + e.message, true);
     btn.disabled = false;
