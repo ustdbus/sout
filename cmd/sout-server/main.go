@@ -21,7 +21,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v3.9.0"
+var version = "v3.9.1"
 
 func initLowMemoryProtection() {
 	var memTotalKB int64

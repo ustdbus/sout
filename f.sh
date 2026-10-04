@@ -738,6 +738,20 @@ pause() {
 
 CADDY_META="${WORK_DIR}/caddy_meta.json"
 
+is_sui_backend() {
+  local m
+  m=$(cat "${WORK_DIR}/panel_mode" 2>/dev/null || echo "")
+  if [[ "$m" == "sing-box" ]]; then
+    return 1
+  elif [[ "$m" == "s-ui" ]]; then
+    return 0
+  fi
+  if [[ -f /usr/local/s-ui/db/s-ui.db ]] || [[ -f /usr/local/s-ui/s-ui ]] || command -v sui >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
 get_sui_user() {
   local sui_db="/usr/local/s-ui/db/s-ui.db"
   local u="admin"
@@ -880,15 +894,15 @@ show_info() {
       local real_d
       real_d=$(journalctl -u cloudflared -n 50 --no-pager 2>/dev/null | grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' | tail -1 | sed 's|https://||' | tr -d ' \r\n')
       [[ -n "$real_d" ]] && c_dom="$real_d"
-      echo -e "  反代模式:    ${G}Cloudflare 官方免费临时隧道连接和Caddy流量代理 (已开启)${N}"
+      echo -e "  反代模式:    ${G}Cloudflare 官方免费临时隧道连接与轻量流量分流 (已开启)${N}"
     else
-      echo -e "  反代模式:    ${G}Cloudflare隧道连接和Caddy流量代理 (已开启)${N}"
+      echo -e "  反代模式:    ${G}Cloudflare 隧道连接与轻量流量分流 (已开启)${N}"
     fi
 
     echo -e "  隧道服务:    ${cf_st} (本地回源: 127.0.0.1:${c_tun_p})"
     echo -e "  管理面板:    ${B}https://${c_dom}/${c_sout_p}/${N}"
     echo -e "  访问口令:    ${Y}${pw}${N}"
-    if [[ "$cur_backend" != "sing-box" && -f /usr/local/s-ui/db/s-ui.db ]]; then
+    if is_sui_backend && [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
       local sui_u
       sui_u=$(get_sui_user)
       echo -e "  s-ui 面板:   ${B}https://${c_dom}/${c_sui_p}/${N}"
@@ -944,13 +958,15 @@ show_info() {
     fi
     echo -e "  访问口令:    ${Y}${pw}${N}"
 
-    if [[ "$cur_backend" == "sing-box" ]]; then
+    if ! is_sui_backend; then
       echo -e "  核心配置:    ${B}/etc/sing-box/config.json${N}"
     else
       local sui_db="/usr/local/s-ui/db/s-ui.db"
       if [[ -f "$sui_db" || -x /usr/local/s-ui/sui ]]; then
         local sui_port="8443"
         local sui_path="/app/"
+        local sui_u
+        sui_u=$(get_sui_user)
         if [[ -f "$sui_db" ]]; then
           if command -v sqlite3 >/dev/null 2>&1; then
             local p_val path_val
@@ -968,7 +984,7 @@ show_info() {
       fi
     fi
   fi
-  [[ "$cur_backend" != "sing-box" && -f /usr/local/s-ui/db/s-ui.db ]] && echo -e "  s-ui 唤起命令: ${C}s-ui${N}"
+  is_sui_backend && [[ -f /usr/local/s-ui/db/s-ui.db ]] && echo -e "  s-ui 唤起命令: ${C}s-ui${N}"
   echo -e "  sout 唤起命令: ${C}sout${N}"
   echo
 }
@@ -1833,23 +1849,19 @@ sys.exit(0 if latest > cur else 1)
   # 5. 升级完成后调用 svc_start 拉起 sout
   svc_start
 
-  # 6. 重启 s-ui 面板服务
-  systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || service s-ui restart 2>/dev/null || true
+  # 6. 根据后端模式重启对应的核心服务
+  if is_sui_backend; then
+    systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || service s-ui restart 2>/dev/null || true
+  else
+    systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || service sing-box restart 2>/dev/null || true
+  fi
 
-  # 7. 若开启了 Cloudflare 隧道和 Caddy 代理，联动重启隧道并执行 Caddy 重新探测分流
+  # 7. 若开启了 Cloudflare 隧道，联动重启隧道并执行内置轻量反代网关重新探测分流
   if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$CADDY_META" 2>/dev/null; then
     echo -e "  ${B}[+] 检测到已开启 Cloudflare 隧道反代，正在自动重启隧道服务...${N}"
     systemctl restart cloudflared 2>/dev/null || rc-service cloudflared restart 2>/dev/null || service cloudflared restart 2>/dev/null || true
-    echo -e "  ${B}[+] 正在自动执行 Caddy 重新探测并分流...${N}"
+    echo -e "  ${B}[+] 正在自动执行内置轻量反代网关重新探测并分流...${N}"
     reload_caddy_proxy
-  fi
-
-  # 8. 检查 Caddy 运行状态（若未运行则自动拉起）
-  if command -v caddy >/dev/null 2>&1; then
-    if ! systemctl is-active --quiet caddy 2>/dev/null; then
-      echo -e "  ${B}[+] 检测到 Caddy 未运行，正在自动拉起 Caddy 服务...${N}"
-      systemctl restart caddy 2>/dev/null || systemctl start caddy 2>/dev/null || rc-service caddy restart 2>/dev/null || rc-service caddy start 2>/dev/null || true
-    fi
   fi
 
   echo
@@ -2222,47 +2234,20 @@ setup_caddy_proxy() {
   fi
   install_cloudflared_bin || { echo -e "  ${R}安装 cloudflared 失败${N}"; return 1; }
 
-  # 2. 分配本地端口与安全路径
-  local sout_port sui_port sub_port node_port reality_port
-  local sout_path sui_path sub_path ws_path
-
-  sout_port=$(rand_local_port)
-  sui_port=$(rand_local_port)
-  sub_port=$(rand_local_port)
-  node_port=$(rand_local_port)
-  reality_port=$(rand_local_port)
-
-  sout_path=$(rand_safe_path "sout")
-  sui_path=$(rand_safe_path "sui")
-  sub_path=$(rand_safe_path "sub")
-  ws_path=$(rand_safe_path "vlws")
-
-  local public_ip cur_cc
-  public_ip=$(curl -s4m 5 https://checkip.amazonaws.com 2>/dev/null || curl -s4m 5 https://api.ipify.org 2>/dev/null || curl -s4m 5 https://ifconfig.me 2>/dev/null || echo "$domain")
-  cur_cc=$(get_tcp_congestion)
-
-  echo -e "  [+] 正在启动 Cloudflare 隧道服务..."
-  setup_cloudflared_service "$tunnel_token" "$tunnel_port"
-
-  if [[ "$is_quick" == "true" ]]; then
-    echo -e "  [+] 正在等待 Cloudflare 分配免费临时域名..."
-    domain=$(get_quick_tunnel_domain)
-    if [[ -z "$domain" ]]; then
-      echo -e "  ${Y}[!] 暂未即时获取到临时域名，稍后可通过 sout 查看。${N}"
-      domain="临时隧道连接中.trycloudflare.com"
-    else
-      echo -e "  ${G}[✓] 成功获取免费临时域名: https://${domain}${N}"
-    fi
-  fi
-
-  # 4. 自动化配置 s-ui (配置前先做持久化备份)
+  # 2. 检查后端类型并分配本地端口与安全路径
+  local has_sui=false
+  local sui_token=""
+  local sui_admin_user=""
   local sui_db="/usr/local/s-ui/db/s-ui.db"
-  local sui_admin_user
-  sui_admin_user=$(get_sui_user)
   local sui_backup="${WORK_DIR}/sui_backup.json"
 
-  if [[ -f "$sui_db" && ! -f "$sui_backup" ]]; then
-    python3 -c "
+  if is_sui_backend && [[ -f "$sui_db" ]]; then
+    has_sui=true
+    sui_admin_user=$(get_sui_user)
+    sui_token=$(get_or_create_sui_token "$sui_db")
+
+    if [[ ! -f "$sui_backup" ]]; then
+      python3 -c "
 import sqlite3, json
 try:
     con = sqlite3.connect('$sui_db')
@@ -2284,13 +2269,45 @@ try:
 except Exception:
     pass
 " 2>/dev/null || true
+    fi
   fi
 
-  local has_sui=false
-  local sui_token=""
-  if [[ -f "$sui_db" ]]; then
-    has_sui=true
-    sui_token=$(get_or_create_sui_token "$sui_db")
+  local sout_port sui_port sub_port node_port reality_port
+  local sout_path sui_path sub_path ws_path
+
+  sout_port=$(rand_local_port)
+  sub_port=$(rand_local_port)
+  node_port=$(rand_local_port)
+  reality_port=$(rand_local_port)
+
+  sout_path=$(rand_safe_path "sout")
+  sub_path=$(rand_safe_path "sub")
+  ws_path=$(rand_safe_path "vlws")
+
+  if [[ "$has_sui" == "true" ]]; then
+    sui_port=$(rand_local_port)
+    sui_path=$(rand_safe_path "sui")
+  else
+    sui_port=0
+    sui_path=""
+  fi
+
+  local public_ip cur_cc
+  public_ip=$(curl -s4m 5 https://checkip.amazonaws.com 2>/dev/null || curl -s4m 5 https://api.ipify.org 2>/dev/null || curl -s4m 5 https://ifconfig.me 2>/dev/null || echo "$domain")
+  cur_cc=$(get_tcp_congestion)
+
+  echo -e "  [+] 正在启动 Cloudflare 隧道服务..."
+  setup_cloudflared_service "$tunnel_token" "$tunnel_port"
+
+  if [[ "$is_quick" == "true" ]]; then
+    echo -e "  [+] 正在等待 Cloudflare 分配免费临时域名..."
+    domain=$(get_quick_tunnel_domain)
+    if [[ -z "$domain" ]]; then
+      echo -e "  ${Y}[!] 暂未即时获取到临时域名，稍后可通过 sout 查看。${N}"
+      domain="临时隧道连接中.trycloudflare.com"
+    else
+      echo -e "  ${G}[✓] 成功获取免费临时域名: https://${domain}${N}"
+    fi
   fi
 
   echo -e "  [+] 正在自动配置基础节点 (vless-argo 路径分流与 vless-reality)..."
@@ -3301,18 +3318,20 @@ except Exception:
     systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || rc-service sout restart 2>/dev/null || true
   fi
 
-  # 2. 动态探测并自动纠偏 s-ui 面板配置 (确保监听 127.0.0.1 并更新 webURI/subURI)
-  sui_port="2096"
-  sui_p=$(grep -oE '"sui_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
-  [[ -z "$sui_p" ]] && sui_p="sui"
+  # 2. 检查后端类型；若为 s-ui 则动态探测并自动纠偏 s-ui 面板配置
+  sui_port=0
+  sui_p=""
   sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
   [[ -z "$sub_p" ]] && sub_p="sub"
   sub_port=$(grep -oE '"sub_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
   [[ -z "$sub_port" ]] && sub_port="2097"
 
   local sui_needs_restart=0
-  if [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
+  if is_sui_backend && [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
     has_sui="true"
+    sui_port="2096"
+    sui_p=$(grep -oE '"sui_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+    [[ -z "$sui_p" ]] && sui_p="sui"
     local sui_info
     sui_info=$(python3 -c "
 import sqlite3
@@ -3406,7 +3425,7 @@ print(f'{port}|{path}|{changed}|{sp_val}')
   node_port=$(grep -oE '"node_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
   [[ -z "$node_port" ]] && node_port="2082"
 
-  if [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
+  if is_sui_backend && [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
     local node_result
     node_result=$(python3 -c "
 import sqlite3, json
@@ -3608,86 +3627,8 @@ PYEOF
     fi
   fi
 
-  # 4. 重新生成纯净 Caddyfile (精确绑定当前检测到的隧道回源端口，并追加 SSL 域名自动续期块)
-  local sui_caddy_rules=""
-  local sub_caddy_rules=""
-  if [[ "$has_sui" == "true" ]]; then
-    sui_caddy_rules="    redir /${sui_p} /${sui_p}/ 308
+  # 4. 更新分流元数据 caddy_meta.json
 
-    # 2. s-ui 节点管理面板
-    handle /${sui_p}* {
-        reverse_proxy 127.0.0.1:${sui_port}
-    }"
-  fi
-
-  local sout_pw=""
-  [[ -f "${WORK_DIR}/password" ]] && sout_pw=$(cat "${WORK_DIR}/password" 2>/dev/null | tr -d ' \r\n')
-  [[ -z "$sout_pw" && -f "/etc/sout/password" ]] && sout_pw=$(cat "/etc/sout/password" 2>/dev/null | tr -d ' \r\n')
-  if [[ -n "$sout_pw" ]]; then
-    sub_caddy_rules="    # 3. sout 节点订阅接口 (重写并转发至 sout 自身的 /sub 订阅端点)
-    handle /${sub_p}* {
-        rewrite * /${sout_p}/sub=${sout_pw}
-        reverse_proxy 127.0.0.1:${sout_port}
-    }"
-  else
-    sub_caddy_rules="    # 3. sout 节点订阅接口 (重写并转发至 sout 自身的 /sub 订阅端点)
-    handle /${sub_p}* {
-        rewrite * /${sout_p}/sub
-        reverse_proxy 127.0.0.1:${sout_port}
-    }"
-  fi
-
-  mkdir -p /etc/caddy
-  cat > /etc/caddy/Caddyfile <<EOF
-{
-    admin off
-    auto_https disable_redirects
-}
-
-http://127.0.0.1:${tunnel_port}, http://:${tunnel_port} {
-    redir /${sout_p} /${sout_p}/ 308
-${sui_caddy_rules}
-${sub_caddy_rules}
-
-    # 1. sout 动态家宽管理面板
-    handle /${sout_p}* {
-        reverse_proxy 127.0.0.1:${sout_port}
-    }
-
-    # 4. VLESS + WebSocket 节点 (实时零缓冲透传)
-    handle /${ws_p}* {
-        reverse_proxy 127.0.0.1:${node_port} {
-            flush_interval -1
-        }
-    }
-
-    # 5. 伪装根路径
-    handle {
-        respond "Service Ready" 200
-    }
-}
-EOF
-
-  # 附加所有已申请的 Cloudflare SSL 域名 (由 Caddy 在独立 8443 端口自动续期，绝不抢占 80/443 与隧道反代产生冲突)
-  if [[ -f "${WORK_DIR}/cf_ssl_domains.json" ]]; then
-    python3 -c '
-import json, os
-p = "/var/lib/sout/cf_ssl_domains.json"
-try:
-    with open(p) as f:
-        d = json.load(f)
-    with open("/etc/caddy/Caddyfile", "a") as cf:
-        for dom, info in d.items():
-            tok = info.get("token", "")
-            if dom and tok:
-                block = f"\n{dom}:8443 {{\n    tls {{\n        dns cloudflare \"{tok}\"\n    }}\n    respond \"SSL Ready\" 200\n}}\n"
-                cf.write(block)
-except Exception:
-    pass
-' 2>/dev/null || true
-  fi
-
-  # 5. 更新 caddy_meta.json
   python3 -c "
 import json
 p = '${CADDY_META}'
@@ -3699,12 +3640,12 @@ except:
 d['domain'] = '${domain}'
 d['tunnel_port'] = int('${tunnel_port}')
 d['sout_port'] = int('${sout_port}')
-d['sout_path'] = '${sout_p}'
-d['sui_port'] = int('${sui_port}')
-d['sui_path'] = '${sui_p}'
+d['sout_path'] = '${sout_path}'
+d['sui_port'] = int('${sui_port}') if '${has_sui}' == 'true' else 0
+d['sui_path'] = '${sui_path}' if '${has_sui}' == 'true' else ''
 d['sub_port'] = int('${sub_port}')
-d['sub_path'] = '${sub_p}'
-d['ws_path'] = '${ws_p}'
+d['sub_path'] = '${sub_path}'
+d['ws_path'] = '${ws_path}'
 d['node_port'] = int('${node_port}')
 with open(p, 'w') as f:
     json.dump(d, f, indent=2)
@@ -3730,16 +3671,20 @@ with open(p, 'w') as f:
   echo -e "${B}========================================${N}"
   echo -e "  网关正在监听:    ${Y}127.0.0.1:${tunnel_port}${N}"
   echo
-  echo -e "  ${G}• 将 /${sout_p}/ 路径流量转发至:   127.0.0.1:${sout_port} (sout 管理面板)${N}"
-  echo -e "    外网访问: https://${domain}/${sout_p}/"
+  echo -e "  ${G}• 将 /${sout_path}/ 路径流量转发至:   127.0.0.1:${sout_port} (sout 管理面板)${N}"
+  echo -e "    外网访问: https://${domain}/${sout_path}/"
   echo
-  if [[ "$has_sui" == "true" || "$sui_port" -gt 0 ]]; then
-    echo -e "  ${G}• 将 /${sui_p}/ 路径流量转发至:    127.0.0.1:${sui_port} (s-ui 面板)${N}"
-    echo -e "    外网访问: https://${domain}/${sui_p}/"
+  if [[ "$has_sui" == "true" && -n "$sui_path" && "$sui_port" -gt 0 ]]; then
+    echo -e "  ${G}• 将 /${sui_path}/ 路径流量转发至:    127.0.0.1:${sui_port} (s-ui 面板)${N}"
+    echo -e "    外网访问: https://${domain}/${sui_path}/"
+    echo
+  else
+    echo -e "  ${G}• 核心后端:                       127.0.0.1:${node_port} (sing-box 原生内核)${N}"
+    echo -e "    核心配置: /etc/sing-box/config.json"
     echo
   fi
-  echo -e "  ${G}• 将 /${sout_p}/sub 路径流量转发至: 127.0.0.1:${sout_port} (订阅接口)${N}"
-  echo -e "    订阅链接: https://${domain}/${sout_p}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")"
+  echo -e "  ${G}• 将 /${sout_path}/sub 路径流量转发至: 127.0.0.1:${sout_port} (订阅接口)${N}"
+  echo -e "    订阅链接: https://${domain}/${sout_path}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")"
   if [[ -n "$ws_p" ]]; then
     echo
     echo -e "  ${G}• 将 /${ws_p}/ 路径流量转发至:     127.0.0.1:${node_port} (节点流量)${N}"
@@ -4961,7 +4906,7 @@ caddy_menu() {
             sui_port=$(grep -oE '"sui_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
             node_port=$(grep -oE '"node_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
             [[ -z "$sout_port" ]] && sout_port="8899"
-            [[ -z "$sui_port" ]] && sui_port="2096"
+            [[ -z "$sui_port" ]] && sui_port="0"
             [[ -z "$node_port" ]] && node_port="2082"
 
             echo
@@ -4973,9 +4918,13 @@ caddy_menu() {
             echo -e "  ${G}• 将 /${sout_p}/ 路径流量转发至:   127.0.0.1:${sout_port} (sout 管理面板)${N}"
             echo -e "    外网访问: https://${dom}/${sout_p}/"
             echo
-            if [[ -n "$sui_p" && "$sui_port" -gt 0 ]]; then
+            if is_sui_backend && [[ -n "$sui_p" && "$sui_port" -gt 0 ]]; then
               echo -e "  ${G}• 将 /${sui_p}/ 路径流量转发至:    127.0.0.1:${sui_port} (s-ui 面板)${N}"
               echo -e "    外网访问: https://${dom}/${sui_p}/"
+              echo
+            else
+              echo -e "  ${G}• 核心后端:                       127.0.0.1:${node_port} (sing-box 原生内核)${N}"
+              echo -e "    核心配置: /etc/sing-box/config.json"
               echo
             fi
             echo -e "  ${G}• 将 /${sout_p}/sub 路径流量转发至: 127.0.0.1:${sout_port} (订阅接口)${N}"

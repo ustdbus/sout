@@ -850,14 +850,21 @@ ask_tunnel_setup
 SUI_INSTALLED_BY_US=0
 
 ensure_backend() {
+  local cur_m
+  cur_m=$(cat "${WORK_DIR}/panel_mode" 2>/dev/null || echo "")
+  if [[ "$cur_m" == "sing-box" ]]; then
+    if check_singbox; then return 0; fi
+  elif [[ "$cur_m" == "s-ui" ]]; then
+    if check_sui; then return 0; fi
+  fi
   if check_sui; then
     mkdir -p "$WORK_DIR"
-    [[ ! -f "${WORK_DIR}/panel_mode" ]] && echo "s-ui" > "${WORK_DIR}/panel_mode"
+    echo "s-ui" > "${WORK_DIR}/panel_mode"
     return 0
   fi
   if check_singbox; then
     mkdir -p "$WORK_DIR"
-    [[ ! -f "${WORK_DIR}/panel_mode" ]] && echo "sing-box" > "${WORK_DIR}/panel_mode"
+    echo "sing-box" > "${WORK_DIR}/panel_mode"
     return 0
   fi
 
@@ -1348,11 +1355,11 @@ if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$
   echo "  sout 唤起命令: sout"
   echo
 
-  if [[ "$backend_mode" == "sing-box" ]] || (! check_sui && check_singbox); then
+  if [[ "$backend_mode" == "sing-box" ]] || (! check_sui && check_singbox) || (! check_sui && [[ "$backend_mode" != "s-ui" ]]); then
     echo "  [sing-box 原生内核]"
     echo "  运行后端:      sing-box 原生内核"
     echo "  核心配置:      /etc/sing-box/config.json"
-  elif check_sui; then
+  elif [[ "$backend_mode" == "s-ui" ]] || check_sui; then
     echo "  [s-ui (Sing-Box) 节点面板]"
     echo "  s-ui 面板:     https://${c_dom}/${c_sui_p}/"
     echo "  s-ui 用户名:   ${SUI_ADMIN_USER:-${c_sui_u:-admin}}"
@@ -1404,11 +1411,11 @@ else
   echo "  sout 唤起命令: sout"
   echo
 
-  if [[ "$backend_mode" == "sing-box" ]] || (! check_sui && check_singbox); then
+  if [[ "$backend_mode" == "sing-box" ]] || (! check_sui && check_singbox) || (! check_sui && [[ "$backend_mode" != "s-ui" ]]); then
     echo "  [sing-box 原生内核]"
     echo "  运行后端:      sing-box 原生内核"
     echo "  核心配置:      /etc/sing-box/config.json"
-  elif check_sui; then
+  elif [[ "$backend_mode" == "s-ui" ]] || check_sui; then
     echo "  [s-ui (Sing-Box) 节点面板]"
     echo "  s-ui 面板:     http://${IP}:${sui_port}${sui_path}"
     echo "  s-ui 用户名:   ${SUI_ADMIN_USER:-${sui_u}}"
