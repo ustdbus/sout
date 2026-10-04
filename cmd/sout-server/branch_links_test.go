@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"net/url"
 	"strings"
 	"testing"
