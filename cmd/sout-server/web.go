@@ -2198,7 +2198,7 @@ $('#checkUpdateBtn').onclick = async e => {
               const u = await api('/api/update/status');
               if(!u.running && u.status === 'idle') return;
               if(u.status === 'downloading') {
-                btn.target.textContent = `下载中: ${u.progress}% (${u.speed || '计算中...'})`;
+                btn.target.textContent = '下载中: ' + u.progress + '% (' + (u.speed || '计算中...') + ')';
               } else if(u.status === 'verifying') {
                 btn.target.textContent = '正在校验包...';
               } else if(u.status === 'extracting' || u.status === 'installing') {
