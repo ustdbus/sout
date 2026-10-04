@@ -3308,6 +3308,9 @@ except Exception:
     fi
   fi
   sout_p=$(grep -oE '"sout_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+  local bp_val
+  bp_val=$(web_basepath)
+  [[ -n "$bp_val" ]] && sout_p="$bp_val"
   [[ -z "$sout_p" ]] && sout_p="sout"
   local sout_port_listening=0
   if (ss -tulpn 2>/dev/null || netstat -tulpn 2>/dev/null) | grep -q ":${sout_port} "; then
@@ -3628,6 +3631,25 @@ PYEOF
   fi
 
   # 4. 更新分流元数据 caddy_meta.json
+  local save_sout_path="${sout_p:-$sout_path}"
+  [[ -z "$save_sout_path" ]] && save_sout_path=$(web_basepath)
+  local save_sui_path="${sui_path:-$sui_p}"
+  local save_sub_path="${sub_path:-$sub_p}"
+  local save_ws_path="${ws_path:-$ws_p}"
+
+  # 防空兜底自愈：若关键路径为空，自动生成随机安全路径
+  [[ -z "$save_sout_path" ]] && save_sout_path=$(rand_safe_path "sout")
+  [[ -z "$save_sub_path" ]] && save_sub_path=$(rand_safe_path "sub")
+  [[ -z "$save_ws_path" ]] && save_ws_path=$(rand_safe_path "vlws")
+  if [[ "$has_sui" == "true" && -z "$save_sui_path" ]]; then
+    save_sui_path=$(rand_safe_path "sui")
+  fi
+
+  # 规范化去除所有首尾斜杠，杜绝 //path// 格式
+  save_sout_path=$(echo "$save_sout_path" | sed -e 's|^/*||' -e 's|/*$||')
+  save_sub_path=$(echo "$save_sub_path" | sed -e 's|^/*||' -e 's|/*$||')
+  save_ws_path=$(echo "$save_ws_path" | sed -e 's|^/*||' -e 's|/*$||')
+  save_sui_path=$(echo "$save_sui_path" | sed -e 's|^/*||' -e 's|/*$||')
 
   python3 -c "
 import json
@@ -3640,12 +3662,12 @@ except:
 d['domain'] = '${domain}'
 d['tunnel_port'] = int('${tunnel_port}')
 d['sout_port'] = int('${sout_port}')
-d['sout_path'] = '${sout_path}'
+d['sout_path'] = '${save_sout_path}'
 d['sui_port'] = int('${sui_port}') if '${has_sui}' == 'true' else 0
-d['sui_path'] = '${sui_path}' if '${has_sui}' == 'true' else ''
+d['sui_path'] = '${save_sui_path}' if '${has_sui}' == 'true' else ''
 d['sub_port'] = int('${sub_port}')
-d['sub_path'] = '${sub_path}'
-d['ws_path'] = '${ws_path}'
+d['sub_path'] = '${save_sub_path}'
+d['ws_path'] = '${save_ws_path}'
 d['node_port'] = int('${node_port}')
 with open(p, 'w') as f:
     json.dump(d, f, indent=2)
@@ -3671,23 +3693,23 @@ with open(p, 'w') as f:
   echo -e "${B}========================================${N}"
   echo -e "  网关正在监听:    ${Y}127.0.0.1:${tunnel_port}${N}"
   echo
-  echo -e "  ${G}• 将 /${sout_path}/ 路径流量转发至:   127.0.0.1:${sout_port} (sout 管理面板)${N}"
-  echo -e "    外网访问: https://${domain}/${sout_path}/"
+  echo -e "  ${G}• 将 /${save_sout_path}/ 路径流量转发至:   127.0.0.1:${sout_port} (sout 管理面板)${N}"
+  echo -e "    外网访问: https://${domain}/${save_sout_path}/"
   echo
-  if [[ "$has_sui" == "true" && -n "$sui_path" && "$sui_port" -gt 0 ]]; then
-    echo -e "  ${G}• 将 /${sui_path}/ 路径流量转发至:    127.0.0.1:${sui_port} (s-ui 面板)${N}"
-    echo -e "    外网访问: https://${domain}/${sui_path}/"
+  if [[ "$has_sui" == "true" && -n "$save_sui_path" && "$sui_port" -gt 0 ]]; then
+    echo -e "  ${G}• 将 /${save_sui_path}/ 路径流量转发至:    127.0.0.1:${sui_port} (s-ui 面板)${N}"
+    echo -e "    外网访问: https://${domain}/${save_sui_path}/"
     echo
   else
     echo -e "  ${G}• 核心后端:                       127.0.0.1:${node_port} (sing-box 原生内核)${N}"
     echo -e "    核心配置: /etc/sing-box/config.json"
     echo
   fi
-  echo -e "  ${G}• 将 /${sout_path}/sub 路径流量转发至: 127.0.0.1:${sout_port} (订阅接口)${N}"
-  echo -e "    订阅链接: https://${domain}/${sout_path}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")"
-  if [[ -n "$ws_p" ]]; then
+  echo -e "  ${G}• 将 /${save_sout_path}/sub 路径流量转发至: 127.0.0.1:${sout_port} (订阅接口)${N}"
+  echo -e "    订阅链接: https://${domain}/${save_sout_path}/sub=$(cat "${WORK_DIR}/password" 2>/dev/null || echo "")"
+  if [[ -n "$save_ws_path" ]]; then
     echo
-    echo -e "  ${G}• 将 /${ws_p}/ 路径流量转发至:     127.0.0.1:${node_port} (节点流量)${N}"
+    echo -e "  ${G}• 将 /${save_ws_path}/ 路径流量转发至:     127.0.0.1:${node_port} (节点流量)${N}"
   fi
   echo
   echo -e "  ${G}• 将 / 根路径流量响应:            200 OK (伪装服务就绪)${N}"
