@@ -2192,6 +2192,30 @@ except Exception:
 ' "$meta_f" 2>/dev/null || true)
   fi
 
+  # 原生 sing-box 模式：强制以 /etc/sing-box/config.json 中真实运行的入站端口与路径为最高优先级
+  if [[ -f /etc/sing-box/config.json ]]; then
+    eval $(python3 -c '
+import json
+try:
+    with open("/etc/sing-box/config.json") as f:
+        c = json.load(f)
+    for ib in c.get("inbounds", []):
+        t = ib.get("tag", "")
+        tp = ib.get("type", "")
+        lp = ib.get("listen_port", 0)
+        if ("argo" in t or (tp in ("vless", "vmess") and isinstance(ib.get("transport"), dict) and ib["transport"].get("type") == "ws")) and lp:
+            print(f"old_node_port={lp}")
+            tr_p = ib.get("transport", {}).get("path", "")
+            if tr_p:
+                tr_p = tr_p.strip("/")
+                print(f"old_ws_path={tr_p}")
+        elif ("reality" in t or (isinstance(ib.get("tls"), dict) and "reality" in ib["tls"])) and lp:
+            print(f"old_reality_port={lp}")
+except Exception:
+    pass
+' 2>/dev/null || true)
+  fi
+
   sout_port="${old_sout_port:-$(rand_local_port)}"
   sub_port="${old_sub_port:-$(rand_local_port)}"
   node_port="${old_node_port:-$(rand_local_port)}"
@@ -2825,9 +2849,20 @@ api('POST', 'save', {
 
 if not has_sui:
     compat.flush()
+
+try:
+    with open('/var/lib/sout/.caddy_meta_vars', 'w') as mf:
+        mf.write(f"node_port={node_port}\nws_path={ws_path.strip('/')}\nreality_port={reality_port}\n")
+except Exception:
+    pass
 PYEOF
   then
     echo -e "  ${Y}[!] 节点 API 自动配置未完成，请稍后手动检查。${N}"
+  fi
+
+  if [[ -f "${WORK_DIR}/.caddy_meta_vars" ]]; then
+    source "${WORK_DIR}/.caddy_meta_vars"
+    rm -f "${WORK_DIR}/.caddy_meta_vars"
   fi
 
   if [[ "$has_sui" == "true" ]]; then
@@ -2906,9 +2941,19 @@ METAEOF
       echo -e "  ${Y}[!] 证书申请未成功或 API Key 无效，基础服务不受影响，您可稍后在终端菜单重新申请并补齐节点。${N}"
     fi
   elif [[ -n "$domain" && -s "$cert_file" && -s "$key_file" ]]; then
-    echo
-    echo -e "  ${G}[✓] 本地已存在域名 [${domain}] 的完整证书，正在自动挂载 TUIC 与 Hysteria2 节点...${N}"
-    create_tuic_hy2_nodes "$domain" "$cert_file" "$key_file" "false"
+    local has_tuic_hy2=false
+    if [[ -f /etc/sing-box/config.json ]] && grep -q '"tuic"' /etc/sing-box/config.json 2>/dev/null; then
+      has_tuic_hy2=true
+    elif [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
+      has_tuic_hy2=true
+    fi
+    if [[ "$has_tuic_hy2" == "false" ]]; then
+      echo
+      echo -e "  ${G}[✓] 本地已存在域名 [${domain}] 的完整证书，正在自动挂载 TUIC 与 Hysteria2 节点...${N}"
+      create_tuic_hy2_nodes "$domain" "$cert_file" "$key_file" "false"
+    else
+      echo -e "  ${G}[✓] 本地已存在域名 [${domain}] 证书且已有高速节点，保持原配置运行。${N}"
+    fi
   fi
 
   echo
@@ -4028,16 +4073,28 @@ inbounds = conf.setdefault('inbounds', [])
 tuic_p = int(os.environ['TUIC_PORT'])
 hy2_p = int(os.environ['HY2_PORT'])
 
+tuic_uuid = os.environ['TUIC_UUID']
+tuic_pass = os.environ['TUIC_PASS']
+hy2_pass = os.environ['HY2_PASS']
+
 tuic_tag = None
 hy2_tag = None
 for ib in inbounds:
     if not isinstance(ib, dict): continue
     t = ib.get('type')
     tg = ib.get('tag', '')
+    users = ib.get('users', [])
     if t == 'tuic' and not tuic_tag:
         tuic_tag = tg
+        if ib.get('listen_port'): tuic_p = int(ib['listen_port'])
+        if users and isinstance(users[0], dict):
+            if users[0].get('uuid'): tuic_uuid = users[0]['uuid']
+            if users[0].get('password'): tuic_pass = users[0]['password']
     elif t == 'hysteria2' and not hy2_tag:
         hy2_tag = tg
+        if ib.get('listen_port'): hy2_p = int(ib['listen_port'])
+        if users and isinstance(users[0], dict):
+            if users[0].get('password'): hy2_pass = users[0]['password']
 
 if not tuic_tag or tuic_tag == 'tuic-in':
     tuic_tag = f"tuic-{gen_suffix()}"
@@ -4062,8 +4119,8 @@ cleaned.append({
     "users": [
         {
             "name": "admin",
-            "uuid": os.environ['TUIC_UUID'],
-            "password": os.environ['TUIC_PASS']
+            "uuid": tuic_uuid,
+            "password": tuic_pass
         }
     ],
     "congestion_control": "bbr",
@@ -4085,7 +4142,7 @@ cleaned.append({
     "users": [
         {
             "name": "admin",
-            "password": os.environ['HY2_PASS']
+            "password": hy2_pass
         }
     ],
     "tls": {
@@ -4135,7 +4192,18 @@ try:
         json.dump(addrs_data, af, indent=2)
 except Exception:
     pass
+
+try:
+    with open('/var/lib/sout/.tuic_hy2_vars', 'w') as tf:
+        tf.write(f"tuic_uuid='{tuic_uuid}'\ntuic_pass='{tuic_pass}'\nhy2_pass='{hy2_pass}'\ntuic_port={tuic_p}\nhy2_port={hy2_p}\n")
+except Exception:
+    pass
 PYEOF
+
+  if [[ -f "${WORK_DIR}/.tuic_hy2_vars" ]]; then
+    source "${WORK_DIR}/.tuic_hy2_vars"
+    rm -f "${WORK_DIR}/.tuic_hy2_vars"
+  fi
 
   if command -v sing-box >/dev/null 2>&1 || [[ -x /usr/local/bin/sing-box ]]; then
     local sb_bin
