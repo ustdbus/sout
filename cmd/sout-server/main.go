@@ -644,10 +644,11 @@ func apiTunnelHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Action string `json:"action"` // "save", "restart", "delete"
-		Domain string `json:"domain"`
-		Token  string `json:"token"`
-		Port   int    `json:"port"`
+		Action   string `json:"action"` // "save", "restart", "delete"
+		Domain   string `json:"domain"`
+		Token    string `json:"token"`
+		Port     int    `json:"port"`
+		Protocol string `json:"protocol"` // "quic" 或 "http2"
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求参数解析错误: " + err.Error()})
@@ -716,6 +717,32 @@ func apiTunnelHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		domain := strings.TrimSpace(req.Domain)
 		token := strings.TrimSpace(req.Token)
+		protocol := strings.ToLower(strings.TrimSpace(req.Protocol))
+		if protocol != "http2" {
+			protocol = "quic"
+		}
+
+		// 读取当前保存的网关元数据，以便在仅修改端口或协议时沿用已有配置
+		var oldMeta GatewayMeta
+		metaPath := filepath.Join(currentBasePathDir(), "gateway_meta.json")
+		if data, err := os.ReadFile(metaPath); err != nil {
+			metaPath = filepath.Join(currentBasePathDir(), "caddy_meta.json")
+			if data2, err2 := os.ReadFile(metaPath); err2 == nil {
+				_ = json.Unmarshal(data2, &oldMeta)
+			}
+		} else {
+			_ = json.Unmarshal(data, &oldMeta)
+		}
+
+		// 若原本已有隧道，且用户提交的 token 为空、或保持为掩码(包含...或***)、或与原 token 一致，则沿用原有的真实完整 Token
+		if oldMeta.Enabled && oldMeta.TunnelToken != "" {
+			if token == "" || strings.Contains(token, "...") || strings.Contains(token, "***") || token == oldMeta.TunnelToken {
+				token = oldMeta.TunnelToken
+				if domain == "" {
+					domain = oldMeta.Domain
+				}
+			}
+		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
@@ -726,7 +753,7 @@ func apiTunnelHandler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			cmd = exec.CommandContext(ctx, "sh", scriptPath, "setup_tunnel", domain, token, strconv.Itoa(port))
 		}
-		cmd.Env = append(os.Environ(), "SOUT_CALLED_FROM_WEB=1")
+		cmd.Env = append(os.Environ(), "SOUT_CALLED_FROM_WEB=1", "TUNNEL_PROTOCOL="+protocol)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{

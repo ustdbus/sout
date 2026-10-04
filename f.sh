@@ -1912,6 +1912,8 @@ install_cloudflared_bin() {
 setup_cloudflared_service() {
   local token="$1"
   local tun_p="${2:-8081}"
+  local protocol="${3:-${TUNNEL_PROTOCOL:-quic}}"
+  [[ "$protocol" != "http2" ]] && protocol="quic"
 
   if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
     mkdir -p /etc/systemd/system
@@ -1924,7 +1926,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/cloudflared tunnel --protocol quic --no-autoupdate run --token ${token}
+ExecStart=/usr/local/bin/cloudflared tunnel --protocol ${protocol} --no-autoupdate run --token ${token}
 Restart=always
 RestartSec=5s
 LimitNOFILE=65536
@@ -1941,7 +1943,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/cloudflared tunnel --url http://127.0.0.1:${tun_p} --no-autoupdate
+ExecStart=/usr/local/bin/cloudflared tunnel --protocol ${protocol} --url http://127.0.0.1:${tun_p} --no-autoupdate
 Restart=always
 RestartSec=5s
 LimitNOFILE=65536
@@ -1958,9 +1960,9 @@ EOF
     mkdir -p /etc/init.d
     local cf_args
     if [[ -n "$token" ]]; then
-      cf_args="tunnel --protocol quic --no-autoupdate run --token ${token}"
+      cf_args="tunnel --protocol ${protocol} --no-autoupdate run --token ${token}"
     else
-      cf_args="tunnel --url http://127.0.0.1:${tun_p} --no-autoupdate"
+      cf_args="tunnel --protocol ${protocol} --url http://127.0.0.1:${tun_p} --no-autoupdate"
     fi
     cat > /etc/init.d/cloudflared <<EOF
 #!/sbin/openrc-run
@@ -2076,6 +2078,8 @@ setup_caddy_proxy() {
   local cf_dns_key="${5:-}"
   local in_sui_pass="${6:-}"
   local in_sui_is_random="${7:-0}"
+  local protocol="${TUNNEL_PROTOCOL:-quic}"
+  [[ "$protocol" != "http2" ]] && protocol="quic"
 
   local is_quick="false"
   if [[ -z "$domain" && -z "$tunnel_token" ]]; then
@@ -2163,8 +2167,8 @@ except Exception:
   public_ip=$(curl -s4m 5 https://checkip.amazonaws.com 2>/dev/null || curl -s4m 5 https://api.ipify.org 2>/dev/null || curl -s4m 5 https://ifconfig.me 2>/dev/null || echo "$domain")
   cur_cc=$(get_tcp_congestion)
 
-  echo -e "  [+] 正在启动 Cloudflare 隧道服务..."
-  setup_cloudflared_service "$tunnel_token" "$tunnel_port"
+  echo -e "  [+] 正在启动 Cloudflare 隧道服务 (${protocol})..."
+  setup_cloudflared_service "$tunnel_token" "$tunnel_port" "$protocol"
 
   if [[ "$is_quick" == "true" ]]; then
     echo -e "  [+] 正在等待 Cloudflare 分配免费临时域名..."
@@ -2815,6 +2819,7 @@ with open(path, 'w') as f:
 {
   "enabled": true,
   "mode": "${meta_mode}",
+  "protocol": "${protocol}",
   "domain": "${domain}",
   "tunnel_token": "${tunnel_token}",
   "tunnel_port": ${tunnel_port},

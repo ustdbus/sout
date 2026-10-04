@@ -632,6 +632,7 @@ option{background:#161b22;color:var(--text);padding:8px}
         <div style="background:#161b22;border:1px solid var(--line);border-radius:6px;padding:10px 12px;font-size:11px;color:var(--dim);line-height:1.6;margin-bottom:14px">
           <div>• <b>隧道 Token:</b> <code id="tnTokenMasked" style="color:var(--text)">已配置</code></div>
           <div>• <b>本地回源端口:</b> <code id="tnTunnelPort" style="color:var(--text)">127.0.0.1:8081</code></div>
+          <div>• <b>传输协议:</b> <code id="tnProtocolBadge" style="color:var(--text)">QUIC</code></div>
         </div>
 
         <!-- 操作按钮工具栏 -->
@@ -644,11 +645,8 @@ option{background:#161b22;color:var(--text);padding:8px}
 
       <!-- 3. 配置 / 更换隧道表单卡片 -->
       <div id="tnConfigCard" style="display:none">
-        <div style="background:#161b22;border:1px solid var(--line);border-radius:6px;padding:12px 14px;margin-bottom:14px;font-size:12px;color:var(--dim);line-height:1.6">
-          <span style="color:var(--accent);font-weight:600">💡 提示与说明：</span><br>
-          • 若填写<b>隧道域名</b>与 <b>Token</b>，将启用 Cloudflare 官方命名隧道；<br>
-          • <b>若留空不填直接保存</b>，将跟首次安装一样，自动启用 Cloudflare <b>免费临时隧道 (Quick Tunnel，免域名/免Token 快速打通)</b>。<br>
-          • 配置生效后，网关将自动完成回源分流与端口重映射。
+        <div style="background:#161b22;border:1px solid var(--line);border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:11.5px;color:var(--dim);line-height:1.5">
+          💡 <span style="color:var(--text)">填写域名与 Token 绑定命名隧道，留空直接保存将启用免费临时隧道；可随时修改端口或切换连接协议。</span>
         </div>
 
         <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:16px">
@@ -658,11 +656,18 @@ option{background:#161b22;color:var(--text);padding:8px}
           </div>
           <div>
             <label style="display:block;font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text)">隧道 Token (Tunnel Token)</label>
-            <input id="tnInputToken" type="password" placeholder="Cloudflare 隧道 Token (留空则使用免费临时隧道)" style="width:100%;box-sizing:border-box">
+            <input id="tnInputToken" type="text" placeholder="留空使用免费临时隧道；已有隧道保持掩码即沿用" style="width:100%;box-sizing:border-box">
           </div>
           <div>
             <label style="display:block;font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text)">本地回源端口 (Port)</label>
             <input id="tnInputPort" type="number" value="8081" placeholder="默认 8081" style="width:100%;box-sizing:border-box">
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text)">隧道连接协议 (Protocol)</label>
+            <select id="tnInputProtocol" style="width:100%;box-sizing:border-box;background:#0d1117;color:var(--text);border:1px solid var(--line);padding:8px 10px;border-radius:6px;font-size:12px">
+              <option value="quic">QUIC (默认推荐，基于 UDP 传输，延迟更低、速度更快)</option>
+              <option value="http2">HTTP/2 (兼容模式，基于 TCP 传输，适合阻断 UDP/QUIC 的网络)</option>
+            </select>
           </div>
         </div>
 
@@ -1961,6 +1966,7 @@ async function refreshTunnelView() {
 
     $('#tnTokenMasked').textContent = t.token_masked || (isQuick ? '免 Token (免费临时隧道)' : '已配置');
     $('#tnTunnelPort').textContent = '127.0.0.1:' + (t.tunnel_port || 8081);
+    $('#tnProtocolBadge').textContent = (t.protocol ? t.protocol.toUpperCase() : 'QUIC');
   } catch(e) {
     $('#tnLoading').style.display = 'block';
     $('#tnLoading').textContent = '获取隧道配置失败: ' + e.message;
@@ -1979,8 +1985,9 @@ $('#tnSwitchToConfigBtn').onclick = () => {
   if (curTunnelData) {
     const isQuick = (curTunnelData.mode === 'quick_tunnel') || (curTunnelData.domain && curTunnelData.domain.indexOf('.trycloudflare.com') !== -1);
     $('#tnInputDomain').value = isQuick ? '' : (curTunnelData.domain || '');
-    $('#tnInputToken').value = '';
+    $('#tnInputToken').value = isQuick ? '' : (curTunnelData.token_masked || '');
     $('#tnInputPort').value = curTunnelData.tunnel_port || '8081';
+    $('#tnInputProtocol').value = curTunnelData.protocol || 'quic';
   }
 };
 
@@ -2045,8 +2052,12 @@ $('#tnSaveConfigBtn').onclick = async () => {
   const domain = $('#tnInputDomain').value.trim();
   const token = $('#tnInputToken').value.trim();
   const port = parseInt($('#tnInputPort').value.trim(), 10) || 8081;
+  const protocol = $('#tnInputProtocol').value || 'quic';
 
-  if (!domain && !token) {
+  const hasOldTunnel = curTunnelData && curTunnelData.enabled && curTunnelData.domain;
+  const isTokenUnchanged = !token || token.indexOf('...') !== -1 || token.indexOf('***') !== -1;
+
+  if (!hasOldTunnel && !domain && isTokenUnchanged) {
     if (!confirm('检测到隧道域名与 Token 均为空。\n系统将与首次安装时一致，自动创建并启用 Cloudflare 免费临时隧道 (免域名 / 免 Token 快速打通)。\n\n确定继续应用吗？')) {
       return;
     }
@@ -2055,7 +2066,7 @@ $('#tnSaveConfigBtn').onclick = async () => {
   const btn = $('#tnSaveConfigBtn');
   const origText = btn.textContent;
   btn.disabled = true;
-  btn.textContent = '正在配置隧道并启动服务 (约10-20秒)…';
+  btn.textContent = '正在应用隧道配置并启动服务 (约10-20秒)…';
 
   try {
     const res = await api('/api/tunnel', {
@@ -2065,7 +2076,8 @@ $('#tnSaveConfigBtn').onclick = async () => {
         action: 'save',
         domain: domain,
         token: token,
-        port: port
+        port: port,
+        protocol: protocol
       })
     });
     toast(res.message || '隧道配置成功，服务正在生效...');

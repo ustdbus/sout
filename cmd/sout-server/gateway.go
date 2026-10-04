@@ -33,6 +33,7 @@ type GatewayMeta struct {
 	SubPath     string `json:"sub_path"`
 	NodePort    int    `json:"node_port"`
 	WsPath      string `json:"ws_path"`
+	Protocol    string `json:"protocol"`
 }
 
 // CaddyMeta 保持向下兼容
@@ -291,6 +292,7 @@ func GetGatewayStatus(workDir string) map[string]any {
 		"node_port":           0,
 		"mode":                "",
 		"token_masked":        "",
+		"protocol":            "quic",
 		"cloudflared_running": false,
 		"password":            "",
 		"panel_mode":          "sing-box",
@@ -319,6 +321,9 @@ func GetGatewayStatus(workDir string) map[string]any {
 			st["sub_path"] = meta.SubPath
 			st["ws_path"] = meta.WsPath
 			st["node_port"] = meta.NodePort
+			if meta.Protocol != "" {
+				st["protocol"] = meta.Protocol
+			}
 			if len(meta.TunnelToken) > 16 {
 				st["token_masked"] = meta.TunnelToken[:6] + "..." + meta.TunnelToken[len(meta.TunnelToken)-6:]
 			} else if meta.TunnelToken != "" {
