@@ -642,8 +642,6 @@ EOF
     local cf_gogc="60"
     local sb_memlimit="35MiB"
     local sb_gogc="60"
-    local caddy_memlimit="25MiB"
-    local caddy_gogc="60"
     local aux_memlimit="18MiB"
     local aux_gogc="50"
 
@@ -663,12 +661,7 @@ Environment="GOMEMLIMIT=${cf_memlimit}"
 Environment="GOGC=${cf_gogc}"
 EOF
 
-      mkdir -p /etc/systemd/system/caddy.service.d 2>/dev/null || true
-      cat > /etc/systemd/system/caddy.service.d/override.conf <<EOF
-[Service]
-Environment="GOMEMLIMIT=${caddy_memlimit}"
-Environment="GOGC=${caddy_gogc}"
-EOF
+      rm -rf /etc/systemd/system/caddy.service.d 2>/dev/null || true
 
       for svc in sout s-ui; do
         mkdir -p "/etc/systemd/system/${svc}.service.d" 2>/dev/null || true
@@ -683,15 +676,14 @@ EOF
 
     # 2. OpenRC 环境注入
     if [[ -f /etc/alpine-release ]] || command -v rc-service >/dev/null 2>&1; then
-      for svc in sing-box cloudflared caddy sout s-ui; do
+      rm -f /etc/conf.d/caddy 2>/dev/null || true
+      for svc in sing-box cloudflared sout s-ui; do
         local cur_limit="$aux_memlimit"
         local cur_gc="$aux_gogc"
         if [[ "$svc" == "sing-box" ]]; then
           cur_limit="$sb_memlimit"; cur_gc="$sb_gogc"
         elif [[ "$svc" == "cloudflared" ]]; then
           cur_limit="$cf_memlimit"; cur_gc="$cf_gogc"
-        elif [[ "$svc" == "caddy" ]]; then
-          cur_limit="$caddy_memlimit"; cur_gc="$caddy_gogc"
         fi
 
         mkdir -p /etc/conf.d 2>/dev/null || true
@@ -769,7 +761,7 @@ cleanup_sout() {
 }
 
 # ==============================================================================
-# [第一步] 一开始首先询问 Cloudflare隧道连接和Caddy流量代理配置
+# [第一步] 一开始首先询问 Cloudflare隧道连接与轻量流量分流配置
 # ==============================================================================
 WANT_TUNNEL="n"
 TUNNEL_DOMAIN=""
@@ -791,10 +783,10 @@ ask_tunnel_setup() {
   echo "================================================================"
   local prompt_choice=""
   if [[ -t 0 ]]; then
-    read -rp "  是否配置 Cloudflare隧道连接和Caddy流量代理？[y/N]: " prompt_choice
+    read -rp "  是否配置 Cloudflare隧道连接与轻量流量分流？[y/N]: " prompt_choice
   else
     if [[ -c /dev/tty ]]; then
-      read -rp "  是否配置 Cloudflare隧道连接和Caddy流量代理？[y/N]: " prompt_choice < /dev/tty || prompt_choice="n"
+      read -rp "  是否配置 Cloudflare隧道连接与轻量流量分流？[y/N]: " prompt_choice < /dev/tty || prompt_choice="n"
     fi
   fi
 
@@ -827,7 +819,7 @@ ask_tunnel_setup() {
     else
       echo "  [✓] 隧道参数已保存！"
       echo
-      echo "  [Cloudflare SSL 证书 (Caddy DNS-01)]"
+      echo "  [Cloudflare SSL 证书 (acme.sh DNS-01)]"
       echo "  • 令牌需含「区域.DNS / 编辑」权限，用于自动签发证书并开启 TUIC / Hysteria2 节点"
       echo "  • 直接按回车将跳过申请，自动配置常规节点 (vless-argo / vless-reality)"
       if [[ -t 0 ]]; then
@@ -1311,7 +1303,7 @@ if [[ "$WANT_TUNNEL" == "y" ]]; then
   if [[ -z "$TUNNEL_DOMAIN" && -z "$TUNNEL_TOKEN" ]]; then
     echo "  [+] 检测到未输入域名与 Token，正在自动开启 Cloudflare 官方免费临时隧道..."
   else
-    echo "  [+] 正在根据第一步输入的参数配置 Cloudflare隧道连接和Caddy流量代理..."
+    echo "  [+] 正在根据第一步输入的参数配置 Cloudflare隧道连接与轻量流量分流..."
   fi
   if [[ -x /usr/local/bin/sout ]]; then
     /usr/local/bin/sout setup_tunnel "$TUNNEL_DOMAIN" "$TUNNEL_TOKEN" "$TUNNEL_PORT" "${APPLY_CERT:-n}" "${CF_DNS_KEY:-}" "$SUI_ADMIN_PASS" "$SUI_PASS_IS_RANDOM"
@@ -1346,7 +1338,7 @@ if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$
   fi
   echo
   echo "================================================================"
-  echo "  🎉 sout 插件安装部署完成！(Cloudflare隧道连接和Caddy流量代理)"
+  echo "  🎉 sout 插件安装部署完成！(Cloudflare隧道连接与轻量流量分流)"
   echo "================================================================"
   echo "  [sout 动态家宽出口插件]"
   echo "  管理面板:      https://${c_dom}/${c_sout_p}/"

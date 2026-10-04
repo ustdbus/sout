@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
@@ -22,7 +21,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v3.8.9"
+var version = "v3.9.0"
 
 func initLowMemoryProtection() {
 	var memTotalKB int64
@@ -167,6 +166,9 @@ func main() {
 		log.Printf("节点链接后端: %s", p.Describe())
 	}
 
+	// 立即拉起内置反代网关，接管隧道回源端口
+	InitGateway(*workDir)
+
 	mgr := NewManager(*maxSlots, *workDir)
 	log.Printf("正在拉取节点列表...")
 	if n, err := mgr.RefreshNodes(); err != nil {
@@ -188,6 +190,7 @@ func main() {
 	go func() {
 		<-stop
 		log.Println("正在清理所有隧道...")
+		ShutdownGateway()
 		mgr.Shutdown()
 		closePanel()
 		os.Exit(0)
@@ -607,7 +610,10 @@ func syncCaddyBasePath(dir, oldBP, newBP string) {
 		}
 	}
 
-	// 2. 检查并同步替换 Caddyfile 中的旧路径并重载
+	// 2. 动态热重载 sout-server 内置轻量反代网关
+	ReloadGateway(dir)
+
+	// 3. 若系统存在遗留的 Caddyfile，静默同步替换文本内容
 	caddyCandidates := []string{"/etc/caddy/Caddyfile", "/usr/local/caddy/Caddyfile"}
 	for _, cPath := range caddyCandidates {
 		content, err := os.ReadFile(cPath)
@@ -619,10 +625,7 @@ func syncCaddyBasePath(dir, oldBP, newBP string) {
 		newSub := "/" + newBP
 		if strings.Contains(s, oldSub) {
 			s = strings.ReplaceAll(s, oldSub, newSub)
-			if err := os.WriteFile(cPath, []byte(s), 0644); err == nil {
-				log.Printf("已同步更新 Caddy 反代路径配置: %s -> %s (%s)", oldBP, newBP, cPath)
-				_ = exec.Command("caddy", "reload", "--config", cPath).Run()
-			}
+			_ = os.WriteFile(cPath, []byte(s), 0644)
 		}
 	}
 }
