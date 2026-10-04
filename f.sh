@@ -4948,7 +4948,15 @@ case "${1:-}" in
   reload_caddy) reload_caddy_proxy ;;
   restart_tunnel)
     shift
-    systemctl restart cloudflared 2>/dev/null || rc-service cloudflared restart 2>/dev/null || true
+    if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+      systemctl restart cloudflared 2>/dev/null || true
+    elif command -v rc-service >/dev/null 2>&1; then
+      rc-service cloudflared stop >/dev/null 2>&1 || true
+      rc-service cloudflared zap >/dev/null 2>&1 || true
+      pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
+      sleep 0.5
+      rc-service cloudflared start >/dev/null 2>&1 || true
+    fi
     reload_caddy_proxy >/dev/null 2>&1 || true
     echo "OK"
     ;;

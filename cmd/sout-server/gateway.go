@@ -339,6 +339,17 @@ func GetGatewayStatus(workDir string) map[string]any {
 	}
 	st["cloudflared_running"] = cfRunning
 
+	// 若配置已启用隧道但进程意外掉线，自动触发后台拉起自愈，防止出现 1033 错误
+	if enabled, _ := st["enabled"].(bool); enabled && !cfRunning {
+		go func() {
+			if _, err := exec.LookPath("systemctl"); err == nil {
+				_ = exec.Command("systemctl", "start", "cloudflared").Run()
+			} else if _, err := exec.LookPath("rc-service"); err == nil {
+				_ = exec.Command("rc-service", "cloudflared", "start").Run()
+			}
+		}()
+	}
+
 	// 读取当前面板口令
 	pwPath := filepath.Join(workDir, "password")
 	if pw, err := os.ReadFile(pwPath); err == nil {
