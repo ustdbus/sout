@@ -16,8 +16,8 @@ import (
 	"time"
 )
 
-// CaddyMeta 代表 /var/lib/sout/caddy_meta.json 的元数据结构
-type CaddyMeta struct {
+// GatewayMeta 代表轻量网关分流元数据结构
+type GatewayMeta struct {
 	Enabled     bool   `json:"enabled"`
 	Mode        string `json:"mode"`
 	Domain      string `json:"domain"`
@@ -34,12 +34,15 @@ type CaddyMeta struct {
 	WsPath      string `json:"ws_path"`
 }
 
+// CaddyMeta 保持向下兼容
+type CaddyMeta = GatewayMeta
+
 type GatewayManager struct {
 	mu      sync.Mutex
 	workDir string
 	server  *http.Server
 	port    int
-	meta    *CaddyMeta
+	meta    *GatewayMeta
 }
 
 var globalGateway = &GatewayManager{}
@@ -67,7 +70,7 @@ func ShutdownGateway() {
 	}
 }
 
-// ReloadGateway 根据 /var/lib/sout/caddy_meta.json 动态重载或重启网关
+// ReloadGateway 根据 gateway_meta.json / caddy_meta.json 动态重载或重启网关
 func ReloadGateway(workDir string) {
 	globalGateway.mu.Lock()
 	defer globalGateway.mu.Unlock()
@@ -77,14 +80,18 @@ func ReloadGateway(workDir string) {
 	}
 	globalGateway.workDir = workDir
 
-	metaPath := filepath.Join(workDir, "caddy_meta.json")
+	metaPath := filepath.Join(workDir, "gateway_meta.json")
 	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		metaPath = filepath.Join(workDir, "caddy_meta.json")
+		data, err = os.ReadFile(metaPath)
+	}
 	if err != nil {
 		stopGatewayLocked()
 		return
 	}
 
-	var meta CaddyMeta
+	var meta GatewayMeta
 	if err := json.Unmarshal(data, &meta); err != nil || !meta.Enabled || meta.TunnelPort <= 0 {
 		stopGatewayLocked()
 		return

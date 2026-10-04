@@ -77,14 +77,14 @@ detect_adaptive_mem_tuning() {
 }
 
 # 在 OpenRC/Alpine 上自动把 systemctl 调用翻译为 rc-service / rc-update。
-# 优先从 systemd unit 生成 OpenRC init 脚本，保证 caddy/cloudflared 可被管理。
+# 优先从 systemd unit 生成 OpenRC init 脚本，保证 cloudflared/sing-box 可被管理。
 _openrc_init_from_unit() {
   local name="$1"
   local unit="/etc/systemd/system/${name}.service"
   local init="/etc/init.d/${name}"
   local exec_start command command_args
-  # 非 caddy/cloudflared/sing-box 已有 OpenRC 脚本时不要覆盖（如 sout/s-ui）
-  if [[ -x "$init" && "$name" != "caddy" && "$name" != "cloudflared" && "$name" != "sing-box" ]]; then
+  # 非 cloudflared/sing-box 已有 OpenRC 脚本时不要覆盖（如 sout/s-ui）
+  if [[ -x "$init" && "$name" != "cloudflared" && "$name" != "sing-box" ]]; then
     return 0
   fi
   if [[ "$name" == "sing-box" && ! -f "$unit" ]]; then
@@ -111,9 +111,6 @@ _openrc_init_from_unit() {
       ggc="60"
     elif [[ "$name" == "cloudflared" ]]; then
       mlimit="35MiB"
-      ggc="60"
-    elif [[ "$name" == "caddy" ]]; then
-      mlimit="25MiB"
       ggc="60"
     fi
     if [[ -n "$mlimit" ]]; then
@@ -534,8 +531,6 @@ EOF
     local cf_gogc="60"
     local sb_memlimit="35MiB"
     local sb_gogc="60"
-    local caddy_memlimit="25MiB"
-    local caddy_gogc="60"
     local aux_memlimit="18MiB"
     local aux_gogc="50"
 
@@ -555,12 +550,7 @@ Environment="GOMEMLIMIT=${cf_memlimit}"
 Environment="GOGC=${cf_gogc}"
 EOF
 
-      mkdir -p /etc/systemd/system/caddy.service.d 2>/dev/null || true
-      cat > /etc/systemd/system/caddy.service.d/override.conf <<EOF
-[Service]
-Environment="GOMEMLIMIT=${caddy_memlimit}"
-Environment="GOGC=${caddy_gogc}"
-EOF
+      rm -rf /etc/systemd/system/caddy.service.d 2>/dev/null || true
 
       for svc in sout s-ui; do
         mkdir -p "/etc/systemd/system/${svc}.service.d" 2>/dev/null || true
@@ -575,15 +565,14 @@ EOF
 
     # 2. OpenRC 环境注入
     if [[ -f /etc/alpine-release ]] || command -v rc-service >/dev/null 2>&1; then
-      for svc in sing-box cloudflared caddy sout s-ui; do
+      rm -f /etc/conf.d/caddy 2>/dev/null || true
+      for svc in sing-box cloudflared sout s-ui; do
         local cur_limit="$aux_memlimit"
         local cur_gc="$aux_gogc"
         if [[ "$svc" == "sing-box" ]]; then
           cur_limit="$sb_memlimit"; cur_gc="$sb_gogc"
         elif [[ "$svc" == "cloudflared" ]]; then
           cur_limit="$cf_memlimit"; cur_gc="$cf_gogc"
-        elif [[ "$svc" == "caddy" ]]; then
-          cur_limit="$caddy_memlimit"; cur_gc="$caddy_gogc"
         fi
 
         mkdir -p /etc/conf.d 2>/dev/null || true
@@ -1493,7 +1482,7 @@ if not orig_spath.endswith('/'): orig_spath += '/'
 
   echo
   echo -e "${G}================================================================${N}"
-  echo -e "${G}  🎉 sout 插件、Caddy 及 Cloudflare 隧道已彻底清理干净！${N}"
+  echo -e "${G}  🎉 sout 插件、轻量网关及 Cloudflare 隧道已彻底清理干净！${N}"
   echo -e "${G}  🎉 s-ui 面板已完全恢复公网 0.0.0.0 直连模式 (已还原证书与配置)${N}"
   echo -e "${G}================================================================${N}"
   echo -e "  [1] s-ui 管理面板:  ${B}${final_proto}://${show_web_host}${final_wpath}${N}"
@@ -1589,7 +1578,7 @@ uninstall_all() {
   rm -rf /root/.local/share/caddy /root/.config/caddy /root/.cache/caddy /root/.cloudflared 2>/dev/null || true
 
   svc_reload
-  echo -e "  ${G}[✓] 所有组件 (sout, s-ui, Caddy, cloudflared) 已彻底卸载干净，系统已完全恢复初始状态！${N}"
+  echo -e "  ${G}[✓] 所有组件 (sout, sing-box/s-ui, cloudflared) 已彻底卸载干净，系统已完全恢复初始状态！${N}"
   exit 0
 }
 
@@ -1870,7 +1859,7 @@ sys.exit(0 if latest > cur else 1)
 
 #!/usr/bin/env bash
 # ==============================================================================
-# sout - Cloudflare隧道连接和Caddy流量代理独立管理脚本
+# sout - Cloudflare 隧道连接与轻量网关分流独立管理脚本
 # ==============================================================================
 
 set -e
@@ -1891,7 +1880,7 @@ pause() {
   read -rp "  按回车键继续..." _
 }
 
-get_caddy_arch() {
+get_sys_arch() {
   local a
   a=$(uname -m)
   case "$a" in
@@ -1902,134 +1891,12 @@ get_caddy_arch() {
   esac
 }
 
-setup_caddy_service_unit() {
-  mkdir -p /etc/caddy /var/log/caddy /var/lib/caddy /home/acme
-  chmod 755 /etc/caddy /var/log/caddy
-  chmod 700 /home/acme 2>/dev/null || true
-
-  if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
-    mkdir -p /etc/systemd/system
-    cat > /etc/systemd/system/caddy.service <<'EOF'
-[Unit]
-Description=Caddy Web Server
-Documentation=https://caddyserver.com/docs/
-After=network.target network-online.target
-Requires=network-online.target
-
-[Service]
-Type=notify
-User=root
-Group=root
-ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
-ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force
-Restart=always
-RestartSec=2s
-StartLimitIntervalSec=0
-TimeoutStopSec=5s
-LimitNOFILE=1048576
-PrivateTmp=true
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    systemctl daemon-reload 2>/dev/null || true
-    systemctl enable caddy >/dev/null 2>&1 || true
-  else
-    # 兼容 OpenRC (Alpine Linux)
-    mkdir -p /etc/init.d
-    local caddy_bin
-    caddy_bin=$(command -v caddy 2>/dev/null || echo "/usr/local/bin/caddy")
-    cat > /etc/init.d/caddy <<EOF
-#!/sbin/openrc-run
-name="caddy"
-description="Caddy Web Server"
-command="${caddy_bin}"
-command_args="run --config /etc/caddy/Caddyfile"
-command_background="yes"
-pidfile="/run/caddy.pid"
-output_log="/var/log/caddy/caddy.log"
-error_log="/var/log/caddy/caddy.log"
-respawn_delay=2
-
-extra_started_commands="reload"
-
-depend() {
-  need net
-  after firewall
-}
-
-start_pre() {
-  if [ -n "\$command" ]; then
-    local bin_name
-    bin_name="\$(basename "\$command")"
-    pkill -9 -x "\$bin_name" 2>/dev/null || true
-  fi
-  if [ -f "\$pidfile" ]; then
-    local p
-    p=\$(cat "\$pidfile" 2>/dev/null)
-    if [ -n "\$p" ] && ! kill -0 "\$p" 2>/dev/null; then
-      rm -f "\$pidfile"
-    fi
-  fi
-}
-
-stop_post() {
-  rm -f "\$pidfile"
-  if [ -n "\$command" ]; then
-    pkill -9 -x "\$(basename "\$command")" 2>/dev/null || true
-  fi
-}
-
-reload() {
-  ebegin "Reloading Caddy"
-  ${caddy_bin} reload --config /etc/caddy/Caddyfile --force >/dev/null 2>&1
-  eend \$?
-}
-EOF
-    chmod +x /etc/init.d/caddy
-    rc-update add caddy default >/dev/null 2>&1 || true
-    rc-service caddy stop >/dev/null 2>&1 || true
-    rc-service caddy zap >/dev/null 2>&1 || true
-    pkill -9 -f "${caddy_bin}" 2>/dev/null || true
-    sleep 0.3
-    rc-service caddy start >/dev/null 2>&1 || true
-  fi
-}
-
-install_caddy_bin() {
-  local arch
-  arch=$(get_caddy_arch)
-  if ! command -v caddy >/dev/null 2>&1; then
-    echo -e "  ${B}[+] 正在获取标准 Caddy 反代服务 (${arch})...${N}"
-    local tmp
-    tmp=$(mktemp -d)
-    local url="https://caddyserver.com/api/download?os=linux&arch=${arch}"
-
-    if ! curl -fsSL "$url" -o "$tmp/caddy"; then
-      echo -e "  ${Y}[!] 官方 API 下载稍慢，正在重试...${N}"
-      if ! curl -fsSL "$url" -o "$tmp/caddy"; then
-        echo -e "  ${R}[✗] Caddy 二进制下载失败，请检查网络连接${N}" >&2
-        rm -rf "$tmp"
-        return 1
-      fi
-    fi
-
-    install -m 755 "$tmp/caddy" /usr/local/bin/caddy
-    rm -rf "$tmp"
-  fi
-
-  setup_caddy_service_unit
-  echo -e "  ${G}[✓] Caddy 服务已就绪${N}"
-  return 0
-}
-
 install_cloudflared_bin() {
   if command -v cloudflared >/dev/null 2>&1; then
     return 0
   fi
   local arch
-  arch=$(get_caddy_arch)
+  arch=$(get_sys_arch)
   echo -e "  ${B}[+] 正在获取 Cloudflare 官方隧道客户端 cloudflared (${arch})...${N}"
   local url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch}"
   
@@ -2187,11 +2054,7 @@ rand_safe_path() {
   echo "${prefix}${r}"
 }
 
-caddy_status() {
-  systemctl is-active caddy 2>/dev/null || echo "inactive"
-}
-
-is_caddy_enabled() {
+is_tunnel_gateway_enabled() {
   if [[ -f "$CADDY_META" ]]; then
     if grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$CADDY_META"; then
       echo "true"
@@ -2199,6 +2062,10 @@ is_caddy_enabled() {
     fi
   fi
   echo "false"
+}
+
+is_caddy_enabled() {
+  is_tunnel_gateway_enabled
 }
 
 setup_caddy_proxy() {
@@ -2968,7 +2835,7 @@ METAEOF
   systemctl restart sout 2>/dev/null || rc-service sout restart 2>/dev/null || service sout restart 2>/dev/null || true
   sleep 1
 
-  # 7. 统一调用终端菜单中的 Caddy 探测并分流，确保 Caddyfile 规则与隧道回源完全一致
+  # 7. 统一调用终端菜单中的轻量反代网关探测并分流，确保分流规则与隧道回源完全一致
   reload_caddy_proxy >/dev/null 2>&1 || true
 
   # 8. 基础服务与节点已全部就绪后，若用户要求申请证书或本地已有证书，发起申请并增设 TUIC 与 Hysteria2
@@ -2996,7 +2863,7 @@ METAEOF
   if [[ "$is_quick" == "true" ]]; then
     echo -e "${G}  🎉 sout 插件安装部署完成！(Cloudflare 官方免费临时隧道)${N}"
   else
-    echo -e "${G}  🎉 sout 插件安装部署完成！(Cloudflare隧道连接和Caddy流量代理)${N}"
+    echo -e "${G}  🎉 sout 插件安装部署完成！(Cloudflare 隧道连接与轻量网关分流)${N}"
   fi
   echo -e "${G}================================================================${N}"
   echo -e "  访问域名:      ${B}https://${domain}${N}"
@@ -3036,7 +2903,7 @@ disable_caddy_proxy() {
   read -rp "  确定关闭 Cloudflare 隧道反代并恢复默认独立端口模式吗？[y/N]: " yes
   [[ ${yes,,} == y ]] || { echo "  已取消"; return; }
 
-  echo "  [+] 正在停止 Caddy 与 cloudflared 服务..."
+  echo "  [+] 正在停止隧道与轻量网关分流..."
   systemctl stop caddy 2>/dev/null || rc-service caddy stop 2>/dev/null || true
   systemctl disable caddy 2>/dev/null || rc-update del caddy default 2>/dev/null || true
   systemctl stop cloudflared 2>/dev/null || rc-service cloudflared stop 2>/dev/null || true
@@ -3197,7 +3064,7 @@ if not orig_spath.endswith('/'): orig_spath += '/'
 caddy_interactive_setup() {
   echo
   echo -e "${B}================================================================${N}"
-  echo -e "${B}  🚀 Cloudflare隧道连接和Caddy流量代理一键配置 (免开端口/杜绝525)${N}"
+  echo -e "${B}  🚀 Cloudflare 隧道连接与轻量网关分流一键配置 (免开端口/杜绝525)${N}"
   echo -e "${B}================================================================${N}"
   echo -e "  特点：无需公网端口、无视NAT网络、免申请SSL证书、杜绝525握手错误"
   echo -e "${D}----------------------------------------------------------------${N}"
@@ -3220,7 +3087,7 @@ caddy_interactive_setup() {
   [[ -z "$tunnel_token" ]] && { echo -e "  ${R}隧道 Token 不能为空！${N}"; return 1; }
 
   echo
-  echo -e "  ${D}💡 本地回源端口用于 cloudflared 将流量转发至本地 Caddy，默认 8081 即可${N}"
+  echo -e "  ${D}💡 本地回源端口用于 cloudflared 将流量转发至内置轻量反代网关，默认 8081 即可${N}"
   read -rp "  3. 请输入本地回源端口 [默认 8081]: " tunnel_port
   tunnel_port=$(echo "$tunnel_port" | tr -d ' \r\n')
   tunnel_port="${tunnel_port:-8081}"

@@ -21,7 +21,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v3.9.1"
+var version = "v3.9.2"
 
 func initLowMemoryProtection() {
 	var memTotalKB int64
@@ -527,7 +527,7 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 				}
 				cleanNewBP := strings.Trim(newBP, "/")
 				if oldBP != "" && cleanNewBP != "" && oldBP != cleanNewBP {
-					syncCaddyBasePath(currentBasePathDir(), oldBP, cleanNewBP)
+					syncGatewayBasePath(currentBasePathDir(), oldBP, cleanNewBP)
 				}
 			}
 			if in.PanelURL != nil {
@@ -589,7 +589,7 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 	}
 }
 
-func syncCaddyBasePath(dir, oldBP, newBP string) {
+func syncGatewayBasePath(dir, oldBP, newBP string) {
 	if oldBP == "" || newBP == "" || oldBP == newBP {
 		return
 	}
@@ -612,22 +612,6 @@ func syncCaddyBasePath(dir, oldBP, newBP string) {
 
 	// 2. 动态热重载 sout-server 内置轻量反代网关
 	ReloadGateway(dir)
-
-	// 3. 若系统存在遗留的 Caddyfile，静默同步替换文本内容
-	caddyCandidates := []string{"/etc/caddy/Caddyfile", "/usr/local/caddy/Caddyfile"}
-	for _, cPath := range caddyCandidates {
-		content, err := os.ReadFile(cPath)
-		if err != nil {
-			continue
-		}
-		s := string(content)
-		oldSub := "/" + oldBP
-		newSub := "/" + newBP
-		if strings.Contains(s, oldSub) {
-			s = strings.ReplaceAll(s, oldSub, newSub)
-			_ = os.WriteFile(cPath, []byte(s), 0644)
-		}
-	}
 }
 
 

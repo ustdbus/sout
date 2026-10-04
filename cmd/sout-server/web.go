@@ -492,7 +492,7 @@ option{background:#161b22;color:var(--text);padding:8px}
         <input id="setPw" type="password" placeholder="留空则不修改" autocomplete="new-password"></label>
       <label class="f"><span>访问路径 (URL 前缀)</span>
         <input id="setPath" type="text" placeholder="如 soute1e47086 (留空则无前缀)" autocomplete="off">
-        <span style="font-size:11px;color:var(--dim);margin-top:2px">⚠️ 提示：若使用反向代理（域名/Caddy）访问，请勿随意修改此项，否则将导致反代失效出现 404</span></label>
+        <span style="font-size:11px;color:var(--dim);margin-top:2px">⚠️ 提示：若使用反向代理（域名/隧道）访问，请勿随意修改此项，否则将导致反代失效出现 404</span></label>
       <label class="f"><span>管理端口</span>
         <input id="setPort" type="text" inputmode="numeric"></label>
       <label class="f"><span>监听地址</span>
@@ -1778,7 +1778,7 @@ $('#saveSettingsBtn').onclick = async e => {
 
   if(pw) body.password = pw;
   if(currentInputPath !== initialBasePath) {
-    if(!confirm('⚠️ 警告：检测到您修改了【访问路径】！\n\n修改路径会导致当前面板 URL 立即变更！\n若您正在使用域名或 Caddy/Nginx 反向代理，请确保反向代理规则已同步修改，否则会导致 404 无法访问！\n\n确定要保存新的访问路径吗？')){
+    if(!confirm('⚠️ 警告：检测到您修改了【访问路径】！\n\n修改路径会导致当前面板 URL 立即变更！\n若您正在使用域名或反向代理网关/隧道，请确保反向代理规则已同步修改，否则会导致 404 无法访问！\n\n确定要保存新的访问路径吗？')){
       return;
     }
     body.base_path = currentInputPath;

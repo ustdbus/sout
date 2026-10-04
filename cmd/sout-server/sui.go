@@ -377,7 +377,7 @@ func (s *SUI) MigrateLegacyVmessArgo() error {
 		ib["tag"] = newTag
 		ib["type"] = "vless"
 
-		// 规范 transport (VLESS + WebSocket + early data + Caddy 反代对齐)
+		// 规范 transport (VLESS + WebSocket + early data + 内置网关分流对齐)
 		if trMap == nil {
 			trMap = make(map[string]any)
 		}
