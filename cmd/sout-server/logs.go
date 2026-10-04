@@ -66,7 +66,45 @@ func initLogCapture() {
 	log.SetOutput(mw)
 }
 
-// fetchLogs 获取最近日志，优先从 systemd journal 获取，回退到内存日志缓冲区
+func readLastLinesFromFile(filePath string, lines int) string {
+	if fi, err := os.Stat(filePath); err != nil || fi.Size() == 0 {
+		return ""
+	}
+	if hasCmd("tail") {
+		out, err := exec.Command("tail", "-n", strconv.Itoa(lines), filePath).CombinedOutput()
+		if err == nil && len(bytes.TrimSpace(out)) > 0 {
+			return string(out)
+		}
+	}
+	f, err := os.Open(filePath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+	size := fi.Size()
+	readSize := int64(256 * 1024)
+	offset := int64(0)
+	if size > readSize {
+		offset = size - readSize
+	}
+	buf := make([]byte, size-offset)
+	_, err = f.ReadAt(buf, offset)
+	if err != nil && err != io.EOF {
+		return ""
+	}
+	allLines := strings.Split(string(buf), "\n")
+	if len(allLines) > lines {
+		allLines = allLines[len(allLines)-lines:]
+	}
+	return strings.Join(allLines, "\n")
+}
+
+// fetchLogs 获取最近日志，优先从 systemd journal 获取，回退到常见日志文件或内存日志缓冲区
 func fetchLogs(source string, lines int) string {
 	if lines <= 0 {
 		lines = 200
@@ -75,39 +113,75 @@ func fetchLogs(source string, lines int) string {
 		lines = 1000
 	}
 
-	if source == "sing-box" {
-		// 尝试从 journalctl 读取 sing-box 服务日志
+	switch source {
+	case "tunnel", "cloudflared":
+		if hasCmd("journalctl") {
+			cmd := exec.Command("journalctl", "-u", "cloudflared", "-n", strconv.Itoa(lines), "--no-pager")
+			out, err := cmd.CombinedOutput()
+			if err == nil && len(bytes.TrimSpace(out)) > 0 {
+				return string(out)
+			}
+		}
+		candidates := []string{
+			"/var/log/cloudflared.err",
+			"/var/log/cloudflared.log",
+			"/var/log/cloudflared/cloudflared.log",
+			"/var/log/cloudflared/cloudflared.err",
+		}
+		for _, f := range candidates {
+			if s := readLastLinesFromFile(f, lines); s != "" {
+				return s
+			}
+		}
+		return "暂无 Cloudflare 隧道日志（若未启用隧道或刚启动，请稍候查看）"
+
+	case "sing-box", "sui", "core":
 		if hasCmd("journalctl") {
 			cmd := exec.Command("journalctl", "-u", "sing-box", "-n", strconv.Itoa(lines), "--no-pager")
 			out, err := cmd.CombinedOutput()
 			if err == nil && len(bytes.TrimSpace(out)) > 0 {
 				return string(out)
 			}
-		}
-		// 尝试从常见日志文件读取
-		candidates := []string{"/var/log/sing-box.log", "/var/log/sing-box/sing-box.log"}
-		for _, f := range candidates {
-			if data, err := os.ReadFile(f); err == nil && len(data) > 0 {
-				allLines := strings.Split(string(data), "\n")
-				if len(allLines) > lines {
-					allLines = allLines[len(allLines)-lines:]
-				}
-				return strings.Join(allLines, "\n")
+			cmdSui := exec.Command("journalctl", "-u", "s-ui", "-n", strconv.Itoa(lines), "--no-pager")
+			outSui, errSui := cmdSui.CombinedOutput()
+			if errSui == nil && len(bytes.TrimSpace(outSui)) > 0 {
+				return string(outSui)
 			}
 		}
-		return "未找到 sing-box 的 systemd 服务日志或独立日志文件"
-	}
-
-	// 默认获取 sout 自身日志
-	if hasCmd("journalctl") {
-		cmd := exec.Command("journalctl", "-u", "sout", "-n", strconv.Itoa(lines), "--no-pager")
-		out, err := cmd.CombinedOutput()
-		if err == nil && len(bytes.TrimSpace(out)) > 0 {
-			return string(out)
+		candidates := []string{
+			"/var/log/sing-box.err",
+			"/var/log/sing-box.log",
+			"/var/log/sing-box/sing-box.log",
+			"/var/log/sing-box/sing-box.err",
+			"/var/log/s-ui.err",
+			"/var/log/s-ui.log",
 		}
-	}
+		for _, f := range candidates {
+			if s := readLastLinesFromFile(f, lines); s != "" {
+				return s
+			}
+		}
+		return "未找到 sing-box / s-ui 的服务日志或独立日志文件"
 
-	return globalLogBuffer.Get(lines)
+	default: // "sout"
+		if hasCmd("journalctl") {
+			cmd := exec.Command("journalctl", "-u", "sout", "-n", strconv.Itoa(lines), "--no-pager")
+			out, err := cmd.CombinedOutput()
+			if err == nil && len(bytes.TrimSpace(out)) > 0 {
+				return string(out)
+			}
+		}
+		candidates := []string{
+			"/var/log/sout.err",
+			"/var/log/sout.log",
+		}
+		for _, f := range candidates {
+			if s := readLastLinesFromFile(f, lines); s != "" {
+				return s
+			}
+		}
+		return globalLogBuffer.Get(lines)
+	}
 }
 
 func apiLogsHandler(w http.ResponseWriter, r *http.Request) {

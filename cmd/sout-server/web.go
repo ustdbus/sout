@@ -784,7 +784,8 @@ option{background:#161b22;color:var(--text);padding:8px}
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
         <div style="display:flex;gap:6px" id="logSourceTabs">
           <button type="button" class="tab-pill active" data-src="sout">sout 服务日志</button>
-          <button type="button" class="tab-pill" data-src="sing-box">sing-box 内核日志</button>
+          <button type="button" class="tab-pill" data-src="sing-box" id="coreLogTabBtn">sing-box 内核日志</button>
+          <button type="button" class="tab-pill" data-src="tunnel" id="tunnelLogTabBtn">Cloudflare 隧道日志</button>
         </div>
         <div style="display:flex;align-items:center;gap:10px">
           <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--dim);cursor:pointer;user-select:none">
@@ -2733,7 +2734,8 @@ async function loadLogs(src) {
   if (src) curLogSource = src;
   const box = $('#logContentBox');
   const status = $('#logStatusText');
-  box.textContent = '正在获取 ' + (curLogSource === 'sing-box' ? 'sing-box' : 'sout') + ' 日志...';
+  const srcName = curLogSource === 'sing-box' ? 'sing-box 内核' : (curLogSource === 'tunnel' ? 'Cloudflare 隧道' : 'sout 服务');
+  box.textContent = '正在获取 ' + srcName + ' 日志...';
   try {
     const res = await api('/api/logs?source=' + encodeURIComponent(curLogSource) + '&lines=250');
     box.textContent = res.logs || '暂无日志输出';
