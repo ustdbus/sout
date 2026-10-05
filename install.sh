@@ -1313,15 +1313,15 @@ chmod 700 "$WORK_DIR"
 if [[ "$backend_kind" == "sing-box" ]] || (! check_sui && check_singbox); then
   echo -n "sing-box" > "${WORK_DIR}/panel_mode"
   detect_adaptive_mem_tuning
-  local sb_limit="35MiB"
-  local sb_gc="60"
+  sb_limit="35MiB"
+  sb_gc="60"
   if [[ "$HAS_SWAP" -eq 1 || ( -n "$AUTO_MEM_MB" && "$AUTO_MEM_MB" -gt 180 ) ]]; then
     # 德邦模式或内存 > 180MB：不限制 GOMEMLIMIT，使用原生默认
     sb_limit=""
     sb_gc="100"
   fi
-  local sb_env_systemd=""
-  local sb_env_openrc=""
+  sb_env_systemd=""
+  sb_env_openrc=""
   if [[ -n "$sb_limit" ]]; then
     sb_env_systemd="Environment=\"GOMEMLIMIT=${sb_limit}\"
 Environment=\"GOGC=${sb_gc}\""
@@ -1354,7 +1354,7 @@ SBEU
     systemctl enable sing-box >/dev/null 2>&1 || true
     systemctl restart sing-box >/dev/null 2>&1 || true
   else
-    local supervisor_line="command_background=\"yes\"\npidfile=\"/run/sing-box.pid\""
+    supervisor_line="command_background=\"yes\"\npidfile=\"/run/sing-box.pid\""
     if command -v supervise-daemon >/dev/null 2>&1; then
       supervisor_line="supervisor=\"supervise-daemon\""
     fi
