@@ -105,6 +105,100 @@ detect_adaptive_mem_tuning() {
 
 # 在 OpenRC/Alpine 上自动把 systemctl 调用翻译为 rc-service / rc-update。
 # 优先从 systemd unit 生成 OpenRC init 脚本，保证 cloudflared/sing-box 可被管理。
+
+# ==============================================================================
+# 日志轮转：给 sing-box / cloudflared / s-ui 的落盘日志加上大小上限
+# 这些服务的 init 由各自安装器生成，sout 不覆盖它们，统一在这里兜底。
+# 优先用系统 logrotate（Debian 自带），否则退化为自建脚本 + crond（Alpine/busybox）。
+# ==============================================================================
+SOUT_LOGROTATE_D="/etc/logrotate.d/sout-services"
+SOUT_ROTATE_SCRIPT="/usr/local/bin/sout-logrotate"
+
+install_log_rotation() {
+  # 三个服务都已在某个 logrotate 规则里时才认为无需重复配置
+  if command -v logrotate >/dev/null 2>&1 && command -v grep >/dev/null 2>&1; then
+    if grep -rqls 'sing-box' /etc/logrotate.d/ 2>/dev/null &&
+       grep -rqls 'cloudflared' /etc/logrotate.d/ 2>/dev/null &&
+       grep -rqls 's-ui' /etc/logrotate.d/ 2>/dev/null; then
+      return 0
+    fi
+  elif [[ -x "/usr/local/bin/sout-logrotate" ]]; then
+    return 0
+  fi
+
+  if command -v logrotate >/dev/null 2>&1; then
+    mkdir -p /etc/logrotate.d
+    cat > "$SOUT_LOGROTATE_D" <<'ROTEOF'
+/var/log/sing-box.log /var/log/sing-box.err /var/log/cloudflared.log /var/log/cloudflared.err /var/log/s-ui.log /var/log/s-ui.err {
+    size 4M
+    rotate 1
+    missingok
+    notifempty
+    copytruncate
+    compress
+}
+ROTEOF
+    logrotate -f "$SOUT_LOGROTATE_D" >/dev/null 2>&1 || true
+    echo "  [✓] 已为 sing-box / cloudflared / s-ui 配置 logrotate 日志轮转 (4MB x 1 份)"
+    return 0
+  fi
+
+  cat > "$SOUT_ROTATE_SCRIPT" <<'ROTEOF'
+#!/bin/sh
+# sout 日志轮转：单文件超过 4MB 时滚动为 .1（保留 1 份），由 crond 周期调用。
+MAX=$((4 * 1024 * 1024))
+for f in /var/log/sing-box.log /var/log/sing-box.err \
+         /var/log/cloudflared.log /var/log/cloudflared.err \
+         /var/log/s-ui.log /var/log/s-ui.err \
+         /var/log/sout.log /var/log/sout.err; do
+  [ -f "$f" ] || continue
+  size=$(wc -c < "$f" 2>/dev/null || echo 0)
+  [ "$size" -gt "$MAX" ] || continue
+  cat "$f" > "$f.1" 2>/dev/null || continue
+  : > "$f"
+done
+ROTEOF
+  chmod 755 "$SOUT_ROTATE_SCRIPT" 2>/dev/null || true
+
+  local cron_line="*/30 * * * * $SOUT_ROTATE_SCRIPT >/dev/null 2>&1"
+  if [[ -d /etc/cron.d ]]; then
+    echo "$cron_line" > /etc/cron.d/sout-logrotate 2>/dev/null || true
+    chmod 644 /etc/cron.d/sout-logrotate 2>/dev/null || true
+  elif [[ -d /etc/crontabs ]]; then
+    grep -q "sout-logrotate" /etc/crontabs/root 2>/dev/null || \
+      echo "$cron_line" >> /etc/crontabs/root 2>/dev/null || true
+  fi
+  if command -v rc-service >/dev/null 2>&1; then
+    rc-service crond start >/dev/null 2>&1 || true
+  fi
+  echo "  [✓] 已配置日志轮转脚本 (4MB x 1 份，每 30 分钟检查): $SOUT_ROTATE_SCRIPT"
+}
+
+
+# ==============================================================================
+# s-ui 日志落盘：s-ui 官方 OpenRC init 未配置 output_log/error_log，
+# 导致 Alpine 上「s-ui 日志」一栏为空。这里幂等地把日志路径补进它的 init 脚本。
+# ==============================================================================
+ensure_sui_log_redirect() {
+  [[ -f /etc/init.d/s-ui ]] || return 0
+  # systemd 平台由 journald 统一收取，无需落盘
+  if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+    return 0
+  fi
+  if grep -q 'output_log=' /etc/init.d/s-ui 2>/dev/null; then
+    return 0
+  fi
+  cp -a /etc/init.d/s-ui "/etc/init.d/s-ui.bak-$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+  if grep -q '^command_args=' /etc/init.d/s-ui 2>/dev/null; then
+    sed -i '/^command_args=/a output_log="/var/log/s-ui.log"\nerror_log="/var/log/s-ui.err"' /etc/init.d/s-ui 2>/dev/null || true
+  fi
+  if ! grep -q 'output_log=' /etc/init.d/s-ui 2>/dev/null; then
+    printf '\noutput_log="/var/log/s-ui.log"\nerror_log="/var/log/s-ui.err"\n' >> /etc/init.d/s-ui
+  fi
+  chmod +x /etc/init.d/s-ui 2>/dev/null || true
+  echo "  [✓] 已为 s-ui 补全日志落盘: /var/log/s-ui.log /var/log/s-ui.err（原脚本已备份）"
+}
+
 _openrc_init_from_unit() {
   local name="$1"
   local unit="/etc/systemd/system/${name}.service"
@@ -5077,6 +5171,12 @@ menu() {
     esac
   done
 }
+
+# 老机器升级上来时，s-ui 日志落盘与日志轮转可能尚未配置，这里幂等补一次
+if [[ "$INIT_SYS" == "openrc" ]]; then
+  ensure_sui_log_redirect >/dev/null 2>&1 || true
+  install_log_rotation >/dev/null 2>&1 || true
+fi  # 静默执行：结果只在需要时由终端菜单展示
 
 # 如果是被 source 载入而非直接执行，直接返回，避免在无 TTY 环境下误入交互菜单死循环
 if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
