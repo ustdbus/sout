@@ -80,3 +80,67 @@ func probePublicIP() string {
 	}
 	return ""
 }
+
+// publicIPv6Sources 是只回一行纯 IPv6 的接口。
+var publicIPv6Sources = []string{
+	"https://ipv6.icanhazip.com",
+	"https://api64.ipify.org",
+	"https://v6.ident.me",
+	"https://ifconfig.co/ip",
+}
+
+var (
+	publicIPv6Mu       sync.Mutex
+	publicIPv6Override string
+	publicIPv6Cache    string
+	publicIPv6At       time.Time
+)
+
+// setPublicIPv6Override 记录用户显式指定的母机公网 IPv6，空值表示不覆盖。
+func setPublicIPv6Override(ip string) {
+	publicIPv6Mu.Lock()
+	publicIPv6Override = strings.TrimSpace(ip)
+	publicIPv6Mu.Unlock()
+}
+
+// hostPublicIPv6 返回本机公网 IPv6；没有 IPv6 出口时返回空串（调用方据此决定是否回显）。
+func hostPublicIPv6() string {
+	publicIPv6Mu.Lock()
+	if publicIPv6Override != "" {
+		ip := publicIPv6Override
+		publicIPv6Mu.Unlock()
+		return ip
+	}
+	if publicIPv6Cache != "" {
+		cached := publicIPv6Cache
+		publicIPv6Mu.Unlock()
+		return cached
+	}
+	publicIPv6Mu.Unlock()
+
+	ip := probePublicIPv6()
+	if ip != "" {
+		publicIPv6Mu.Lock()
+		publicIPv6Cache = ip
+		publicIPv6At = time.Now()
+		publicIPv6Mu.Unlock()
+	}
+	return ip
+}
+
+// probePublicIPv6 逐个问外部接口，拿到第一个合法的 IPv6 就返回。
+// 无 IPv6 出口时 curl 会超时/报错，这里直接跳过，不影响 IPv4 流程。
+func probePublicIPv6() string {
+	for _, url := range publicIPv6Sources {
+		out, err := exec.Command("curl", "-6", "-s", "--max-time", "5", url).Output()
+		if err != nil {
+			continue
+		}
+		ip := strings.TrimSpace(string(out))
+		parsed := net.ParseIP(ip)
+		if parsed != nil && parsed.To4() == nil && parsed.To16() != nil {
+			return parsed.String()
+		}
+	}
+	return ""
+}

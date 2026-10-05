@@ -2320,23 +2320,26 @@ func (sb *SingBox) NodeDetail(id int) (*NodeDetailInfo, error) {
 	}
 
 	// 若未记录 addrs，自动根据节点类型回显连接地址
+	// 双栈处理：本机有公网 IPv4 / IPv6 就分别回显；只有一个就只回显那一个；都没有则留空
 	if len(addrs) == 0 {
 		if sni != "" && listen == "127.0.0.1" {
+			// 隧道/Argo 节点：客户端应连隧道域名
 			addrs = append(addrs, NodeAddrItem{
 				Server:     sni,
 				ServerPort: 443,
 			})
 		} else if port > 0 {
-			// 直连公网节点（TUIC, Hysteria2, Reality 等）：自动识别母机公网 IP 并回显
-			pubHost := hostPublicIP()
-			if pubHost == "" && sni != "" && net.ParseIP(sni) == nil {
-				pubHost = sni
+			// 直连公网节点（TUIC、Hysteria2、Reality 等）：自动识别母机公网地址并回显
+			v4 := hostPublicIP()
+			v6 := hostPublicIPv6()
+			if v4 == "" && v6 == "" && sni != "" && net.ParseIP(sni) == nil {
+				v4 = sni
 			}
-			if pubHost != "" {
-				addrs = append(addrs, NodeAddrItem{
-					Server:     pubHost,
-					ServerPort: port,
-				})
+			if v4 != "" {
+				addrs = append(addrs, NodeAddrItem{Server: v4, ServerPort: port})
+			}
+			if v6 != "" {
+				addrs = append(addrs, NodeAddrItem{Server: v6, ServerPort: port})
 			}
 		}
 	}

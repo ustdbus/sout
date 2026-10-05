@@ -2452,11 +2452,26 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 		if isArgo {
 			port = 443
 		}
-		addrs = append(addrs, AddrItem{
-			Server:     serverHost,
-			ServerPort: port,
-			Remark:     tag,
-		})
+		// 隧道/Argo 场景回显域名；直连场景回显本机公网地址（IPv4/IPv6 有几个回显几个）
+		if isArgo && serverHost != "" && net.ParseIP(serverHost) == nil {
+			addrs = append(addrs, AddrItem{
+				Server:     serverHost,
+				ServerPort: port,
+				Remark:     tag,
+			})
+		} else {
+			v4 := hostPublicIP()
+			v6 := hostPublicIPv6()
+			if v4 == "" && v6 == "" {
+				v4 = serverHost
+			}
+			if v4 != "" {
+				addrs = append(addrs, AddrItem{Server: v4, ServerPort: port, Remark: tag})
+			}
+			if v6 != "" {
+				addrs = append(addrs, AddrItem{Server: v6, ServerPort: port, Remark: tag})
+			}
+		}
 	}
 
 	var clientCfg map[string]map[string]any
