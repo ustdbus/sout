@@ -187,8 +187,30 @@ func StartAsyncUpdate() (started bool, msg string) {
 	}
 	updateMu.Unlock()
 
+	// 独立日志：sout 服务重启时 /var/log/sout.log 会被截断，更新过程的证据会丢失。
+	// 这里写到单独文件并追加，便于事后确认每一步到底做了什么。
+	updLogInit()
+	updLog("update 启动，当前版本 %s", version)
+
 	go runAsyncUpdate()
 	return true, "更新任务已启动"
+}
+
+const updLogPath = "/var/log/sout-update.log"
+
+func updLogInit() {
+	if f, err := os.OpenFile(updLogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
+		_ = f.Close()
+	}
+}
+
+func updLog(format string, args ...any) {
+	f, err := os.OpenFile(updLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s %s\n", time.Now().Format("2006-01-02 15:04:05"), fmt.Sprintf(format, args...))
 }
 
 func runAsyncUpdate() {
@@ -315,11 +337,20 @@ func doApplyUpdate() error {
 
 	// 终端管理脚本(/usr/local/bin/sout)同步替换；失败不影响二进制主流程
 	if hasNewFsh {
+		if fi, e := os.Stat(newFsh); e == nil {
+			updLog("准备替换终端管理脚本: %s (%d 字节)", newFsh, fi.Size())
+		}
+		_ = copyFileMode("/usr/local/bin/sout", "/usr/local/bin/sout.prev", 0755)
 		if err := copyFileMode(newFsh, "/usr/local/bin/sout", 0755); err != nil {
+			updLog("管理脚本替换失败: %v", err)
 			setUpdateProgress(func(p *UpdateProgress) {
 				p.Message = "管理脚本更新失败（二进制仍会更新）: " + err.Error()
 			})
+		} else {
+			updLog("终端管理脚本已替换为 /usr/local/bin/sout")
 		}
+	} else {
+		updLog("安装包内未找到 f.sh，跳过管理脚本更新")
 	}
 
 	self, err := os.Executable()
