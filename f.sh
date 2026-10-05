@@ -3133,7 +3133,7 @@ METAEOF
     if do_apply_cf_ssl_cert "$domain" "$cf_dns_key"; then
       if [[ -s "$cert_file" && -s "$key_file" ]]; then
         echo -e "  [+] 证书就绪，正在自动创建并挂载 TUIC 与 Hysteria2 高速节点..."
-        create_tuic_hy2_nodes "$domain" "$cert_file" "$key_file" "false"
+        create_tuic_hy2_nodes "$domain" "$cert_file" "$key_file" "false" "true"
       fi
     else
       echo -e "  ${Y}[!] 证书申请未成功或 API Key 无效，基础服务不受影响，您可稍后在终端菜单重新申请并补齐节点。${N}"
@@ -3148,7 +3148,7 @@ METAEOF
     if [[ "$has_tuic_hy2" == "false" ]]; then
       echo
       echo -e "  ${G}[✓] 本地已存在域名 [${domain}] 的完整证书，正在自动挂载 TUIC 与 Hysteria2 节点...${N}"
-      create_tuic_hy2_nodes "$domain" "$cert_file" "$key_file" "false"
+      create_tuic_hy2_nodes "$domain" "$cert_file" "$key_file" "false" "true"
     else
       echo -e "  ${G}[✓] 本地已存在域名 [${domain}] 证书且已有高速节点，保持原配置运行。${N}"
     fi
@@ -4169,6 +4169,7 @@ apply_tuic_hy2_to_singbox() {
   local cert_file="$2"
   local key_file="$3"
   local is_insecure="${4:-false}"
+  local quiet="${5:-false}"   # true=首次安装流程，节点明细不刷屏
 
   echo
   echo -e "  ${B}[+] 正在为 sing-box 原生内核配置 TUIC / Hysteria2 入站...${N}"
@@ -4433,21 +4434,27 @@ NODEOF
   chmod 600 "${WORK_DIR}/nodes_tuic_hy2.txt"
 
   echo
-  echo -e "${G}================================================================${N}"
-  echo -e "${G}  🎉 TUIC / Hysteria2 节点已成功在 sing-box 原生内核中创建！${N}"
-  echo -e "${G}================================================================${N}"
-  echo -e "  [TUIC 节点]"
-  echo -e "  端口:        ${tuic_port} (UDP)"
-  echo -e "  UUID:        ${tuic_uuid}"
-  echo -e "  密码:        ${tuic_pass}"
-  echo -e "  分享链接:    ${B}${tuic_link}${N}"
-  echo
-  echo -e "  [Hysteria2 节点]"
-  echo -e "  端口:        ${hy2_port} (UDP)"
-  echo -e "  密码:        ${hy2_pass}"
-  echo -e "  分享链接:    ${B}${hy2_link}${N}"
-  echo -e "${G}================================================================${N}"
-  echo -e "  💡 节点链接已自动保存至: ${WORK_DIR}/nodes_tuic_hy2.txt"
+  if [[ "$quiet" == "true" ]]; then
+    # 首次安装：只报结果，不刷节点明细（链接已落盘，需要时用 sout tuic 查看）
+    echo -e "  ${G}[✓] TUIC / Hysteria2 节点已创建完成${N}"
+    echo -e "      节点链接已保存至: ${WORK_DIR}/nodes_tuic_hy2.txt"
+  else
+    echo -e "${G}================================================================${N}"
+    echo -e "${G}  🎉 TUIC / Hysteria2 节点已成功在 sing-box 原生内核中创建！${N}"
+    echo -e "${G}================================================================${N}"
+    echo -e "  [TUIC 节点]"
+    echo -e "  端口:        ${tuic_port} (UDP)"
+    echo -e "  UUID:        ${tuic_uuid}"
+    echo -e "  密码:        ${tuic_pass}"
+    echo -e "  分享链接:    ${B}${tuic_link}${N}"
+    echo
+    echo -e "  [Hysteria2 节点]"
+    echo -e "  端口:        ${hy2_port} (UDP)"
+    echo -e "  密码:        ${hy2_pass}"
+    echo -e "  分享链接:    ${B}${hy2_link}${N}"
+    echo -e "${G}================================================================${N}"
+    echo -e "  💡 节点链接已自动保存至: ${WORK_DIR}/nodes_tuic_hy2.txt"
+  fi
   return 0
 }
 
@@ -4493,6 +4500,7 @@ create_tuic_hy2_nodes() {
   local in_cert_file="${2:-}"
   local in_key_file="${3:-}"
   local in_insecure="${4:-false}"
+  local in_quiet="${5:-false}"   # true=首次安装流程，节点明细不刷屏
 
   local cert_file="" key_file="" cert_domain="" is_insecure="false"
 
@@ -4637,7 +4645,7 @@ create_tuic_hy2_nodes() {
   fi
 
   if [[ "$cur_backend" == "sing-box" ]]; then
-    apply_tuic_hy2_to_singbox "$cert_domain" "$cert_file" "$key_file" "$is_insecure"
+    apply_tuic_hy2_to_singbox "$cert_domain" "$cert_file" "$key_file" "$is_insecure" "$in_quiet"
     return $?
   fi
 

@@ -1084,7 +1084,15 @@ ensure_backend() {
   echo
 
   local choice=""
-  if [[ -t 0 ]]; then
+  # 低内存机器（<=180MB）直接用 sing-box 轻量内核，不再询问：
+  # s-ui 面板自身常驻约 50MB，在 128MB 级机器上会明显挤压转发与出口进程的内存
+  local _mem_now=0
+  _mem_now=$(grep -i 'MemTotal' /proc/meminfo 2>/dev/null | awk '{print int($2/1024)}')
+  if [[ "${_mem_now:-0}" -gt 0 && "${_mem_now:-0}" -le 180 ]]; then
+    choice="2"
+    echo "  [!] 检测到内存仅 ${_mem_now}MB，已自动选择 [2] sing-box 轻量内核（不再询问）"
+    echo "      (s-ui 面板常驻约 50MB，低内存机型上会挤压转发性能)"
+  elif [[ -t 0 ]]; then
     read -rp "  请选择操作 [1-3] (默认: 2): " choice
   else
     read -rp "  请选择操作 [1-3] (默认: 2): " choice < /dev/tty || choice="2"
