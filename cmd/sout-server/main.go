@@ -22,7 +22,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v4.0.11"
+var version = "v4.1.0"
 
 func initLowMemoryProtection() {
 	var memTotalKB int64
@@ -107,12 +107,12 @@ func initLowMemoryProtection() {
 	if effectiveMB <= 180 {
 		// 128M 左右极小内存环境 (如 122MB~128MB Alpine/Debian 极限环境)
 		if os.Getenv("GOMEMLIMIT") == "" {
-			debug.SetMemoryLimit(18 * 1024 * 1024)
+			debug.SetMemoryLimit(25 * 1024 * 1024)
 		}
 		if os.Getenv("GOGC") == "" {
-			debug.SetGCPercent(50)
+			debug.SetGCPercent(60)
 		}
-		log.Printf("检测到无 Swap 极小内存环境 (有效物理内存 %d MB <= 180MB)，为确保留足 15%% 系统安全防爆余量，启用精细分层内存防护 (阿尔法安全模式，sout-server 堆限制 18MB，GOGC=50)", effectiveMB)
+		log.Printf("检测到无 Swap 极小内存环境 (有效物理内存 %d MB <= 180MB)，为确保留足 15%% 系统安全防爆余量，启用精细分层内存防护 (阿尔法安全模式，sout-server 堆限制 25MB，GOGC=60)", effectiveMB)
 	}
 }
 

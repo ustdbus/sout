@@ -207,7 +207,8 @@ detect_adaptive_mem_tuning() {
     AUTO_GOGC=""
   elif [[ "$mem_mb" -gt 0 && "$mem_mb" -le 180 ]]; then
     # 阿尔法安全模式 (仅针对 128M 左右且无 Swap 的机器，预留 >=15% 物理内存防爆隔离区，收紧 GOGC 至 60 避免堆瞬时翻倍溢出)
-    AUTO_GOMEMLIMIT="18MiB"
+    # 该值只作用于 sout-server（含内嵌 sing-box 引擎）；系统 sing-box / cloudflared 另有各自的 35MiB/60
+    AUTO_GOMEMLIMIT="25MiB"
     AUTO_GOGC="60"
   fi
 }
@@ -844,8 +845,8 @@ EOF
     local cf_gogc="60"
     local sb_memlimit="35MiB"
     local sb_gogc="60"
-    local aux_memlimit="18MiB"
-    local aux_gogc="50"
+    local aux_memlimit="25MiB"
+    local aux_gogc="60"
 
     # 1. systemd 环境注入
     if [[ -d /run/systemd/system ]]; then
