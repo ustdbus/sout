@@ -302,12 +302,25 @@ func doApplyUpdate() error {
 			}
 		}
 	}
+	// 一并更新终端管理脚本。此前更新流程只替换二进制，
+	// 导致 /usr/local/bin/sout 永远停留在安装时的版本（脚本层修复无法下发）。
+	newFsh := filepath.Join(tmp, "f.sh")
+	hasNewFsh := extractBinary(tarPath, "f.sh", newFsh) == nil
 	_ = os.Remove(tarPath)
 
 	setUpdateProgress(func(p *UpdateProgress) {
 		p.Status = "installing"
 		p.Message = "正在原子替换二进制程序..."
 	})
+
+	// 终端管理脚本(/usr/local/bin/sout)同步替换；失败不影响二进制主流程
+	if hasNewFsh {
+		if err := copyFileMode(newFsh, "/usr/local/bin/sout", 0755); err != nil {
+			setUpdateProgress(func(p *UpdateProgress) {
+				p.Message = "管理脚本更新失败（二进制仍会更新）: " + err.Error()
+			})
+		}
+	}
 
 	self, err := os.Executable()
 	if err != nil {
