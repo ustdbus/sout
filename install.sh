@@ -612,8 +612,47 @@ SBRC
 # ==============================================================================
 SYSCTL_BACKUP="${WORK_DIR}/sysctl_backup.conf"
 
+# 平台(容器/NAT机)是否锁定了内核参数：尝试按原值回写，成功才说明有权限。
+# 用相同的值写入不会真正改变内核状态，因此是安全的探测方式。
+sysctl_writable() {
+  local key="$1" path orig
+  path="/proc/sys/$(echo "$key" | tr '.' '/')"
+  [[ -w "$path" ]] || return 1
+  orig=$(sysctl -n "$key" 2>/dev/null) || return 1
+  [[ -n "$orig" ]] || return 1
+  sysctl -w "${key}=${orig}" >/dev/null 2>&1
+}
+
 apply_sysctl_optimization() {
   mkdir -p "$WORK_DIR" /etc/sysctl.d 2>/dev/null || true
+
+  # 0. 先探测平台是否允许改内核参数：受限机器上写了也没用，还留下误导性的“已优化”记录
+  local probe_keys=(
+    "net.core.rmem_max"
+    "net.ipv4.tcp_congestion_control"
+    "net.core.somaxconn"
+  )
+  local probe_ok=0 pk
+  for pk in "${probe_keys[@]}"; do
+    if sysctl_writable "$pk"; then
+      probe_ok=1
+      break
+    fi
+  done
+
+  local mem_total_mb=512
+  if [[ -f /proc/meminfo ]]; then
+    local mem_kb
+    mem_kb=$(grep -i 'MemTotal' /proc/meminfo | awk '{print $2}')
+    [[ -n "$mem_kb" && "$mem_kb" -gt 0 ]] && mem_total_mb=$(( mem_kb / 1024 ))
+  fi
+
+  if [[ $probe_ok -eq 0 ]]; then
+    echo "      检测到内核参数被平台锁定（容器/NAT 机型），跳过 sysctl 调优以免留下无效配置"
+    echo "      仍需防爆保护，继续执行内存自适应..."
+    optimize_low_memory "$mem_total_mb"
+    return 0
+  fi
 
   # 1. 备份原系统参数（仅首次备份，避免覆盖原始值）
   if [[ ! -f "$SYSCTL_BACKUP" ]]; then
@@ -641,13 +680,6 @@ apply_sysctl_optimization() {
   fi
 
   # 2. 根据内存大小动态选择缓冲区
-  local mem_total_mb=512
-  if [[ -f /proc/meminfo ]]; then
-    local mem_kb
-    mem_kb=$(grep -i 'MemTotal' /proc/meminfo | awk '{print $2}')
-    [[ -n "$mem_kb" && "$mem_kb" -gt 0 ]] && mem_total_mb=$(( mem_kb / 1024 ))
-  fi
-
   local rmem_max=4194304
   local wmem_max=4194304
   local udp_mem="4096 8192 16384"
@@ -686,10 +718,34 @@ net.ipv4.tcp_congestion_control = bbr
     echo "$conf_content" >> /etc/sysctl.conf 2>/dev/null || true
   fi
 
-  # 5. 生效参数（容器无权修改时静默忽略）
+  # 5. 生效参数
   sysctl -p /etc/sysctl.d/99-sout.conf >/dev/null 2>&1 || sysctl -p >/dev/null 2>&1 || true
 
-  # 6. 低内存 VPS/容器防爆保护
+  # 6. 回读校验：平台可能只开放一部分参数，逐项确认并如实报告
+  # 注意：这里只用 POSIX 语法（脚本以 /bin/sh 运行），不用进程替换
+  echo "$conf_content" | grep -E '^net\.' | sed 's/[[:space:]]*=[[:space:]]*/ /' > /tmp/.sout_sysctl_kv
+  local ok=0 locked=""
+  while IFS=' ' read -r k v; do
+    [[ -n "$k" ]] || continue
+    local p cur
+    p="/proc/sys/$(echo "$k" | tr '.' '/')"
+    cur=$(cat "$p" 2>/dev/null | tr -s ' ' ' ' | sed 's/ *$//')
+    if [[ "$cur" == "$v" ]]; then
+      ok=$(( ok + 1 ))
+    else
+      locked="${locked}\n${k}"
+    fi
+  done < /tmp/.sout_sysctl_kv
+  rm -f /tmp/.sout_sysctl_kv
+
+  if [[ -n "$locked" ]]; then
+    echo "      sysctl 已生效 ${ok} 项；以下项被平台锁定未生效:"
+    echo "$locked" | sed 's/^\\n//; s/\\n/\n        - /g; s/^/        - /'
+  else
+    echo "      sysctl 调优已全部生效（${ok} 项）"
+  fi
+
+  # 7. 低内存 VPS/容器防爆保护
   optimize_low_memory "$mem_total_mb"
 }
 
