@@ -8,6 +8,32 @@ WORK_DIR="/var/lib/sout"
 [[ -d "/usr/local/sout" && ! -d "/var/lib/sout" ]] && cp -rf /usr/local/sout /var/lib/sout 2>/dev/null || true
 WEB_PORT=8899
 
+# ==============================================================================
+# 统一 JSON 字段读取：替代 grep -oE/cut/awk 解析（键不存在或解析失败时输出空，由调用点 :- 兜底）
+# ==============================================================================
+json_get() {
+  JSON_FILE="${1:-}" JSON_KEY="${2:-}" python3 -c '
+import json, os
+f = os.environ.get("JSON_FILE", "")
+key = os.environ.get("JSON_KEY", "")
+try:
+    with open(f) as fp:
+        data = json.load(fp)
+    val = data.get(key)
+    if val is None:
+        print("")
+    elif isinstance(val, bool):
+        print("true" if val else "false")
+    elif isinstance(val, (int, float)):
+        print(val)
+    elif isinstance(val, str):
+        print(val)
+    else:
+        print("")
+except Exception:
+    print("")
+' 2>/dev/null || printf '%s\n' ""
+}
 if [[ $EUID -ne 0 ]]; then
   echo "请使用 root 权限运行此脚本 (sudo ./install.sh 或 sudo bash ...)" >&2
   exit 1
@@ -1077,7 +1103,7 @@ svc_enable_start() {
   local web_p="${WEB_PORT:-8899}"
   if [[ -f "${WORK_DIR}/settings.json" ]]; then
     local parsed_p
-    parsed_p=$(grep -oE '"port"[[:space:]]*:[[:space:]]*[0-9]+' "${WORK_DIR}/settings.json" 2>/dev/null | grep -oE '[0-9]+' || true)
+    parsed_p=$(json_get "${WORK_DIR}/settings.json" port)
     [[ -n "$parsed_p" ]] && web_p="$parsed_p"
   fi
   kill_port "$web_p"
@@ -1326,19 +1352,19 @@ BP=$(cat "${WORK_DIR}/basepath" 2>/dev/null | tr -d ' \r\n')
 BP="/${BP#/}"
 BP="${BP%/}/"
 
-ACTUAL_PORT=$(grep -oE '"port"[[:space:]]*:[[:space:]]*[0-9]+' "${WORK_DIR}/settings.json" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
+ACTUAL_PORT=$(json_get "${WORK_DIR}/settings.json" port)
 WEB_PORT="${ACTUAL_PORT:-8899}"
 
 CADDY_META="${WORK_DIR}/caddy_meta.json"
 backend_mode=$(cat "${WORK_DIR}/panel_mode" 2>/dev/null || echo "")
 
 if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$CADDY_META"; then
-  c_dom=$(grep -oE '"domain"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
-  c_sout_p=$(grep -oE '"sout_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
-  c_sui_p=$(grep -oE '"sui_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
-  c_sui_u=$(grep -oE '"sui_user"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
-  c_sui_w=$(grep -oE '"sui_pass"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
-  c_sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+  c_dom=$(json_get "$CADDY_META" domain)
+  c_sout_p=$(json_get "$CADDY_META" sout_path)
+  c_sui_p=$(json_get "$CADDY_META" sui_path)
+  c_sui_u=$(json_get "$CADDY_META" sui_user)
+  c_sui_w=$(json_get "$CADDY_META" sui_pass)
+  c_sub_p=$(json_get "$CADDY_META" sub_path)
   if [[ "$WANT_TUNNEL" != "y" && -x /usr/local/bin/sout ]]; then
     systemctl restart cloudflared 2>/dev/null || rc-service cloudflared restart 2>/dev/null || service cloudflared restart 2>/dev/null || true
     systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || true

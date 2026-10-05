@@ -2,6 +2,33 @@
 set -e
 
 # ==============================================================================
+# 统一 JSON 字段读取：替代 grep -oE/cut/awk 解析（键不存在或解析失败时输出空，由调用点 :- 兜底）
+# ==============================================================================
+json_get() {
+  JSON_FILE="${1:-}" JSON_KEY="${2:-}" python3 -c '
+import json, os
+f = os.environ.get("JSON_FILE", "")
+key = os.environ.get("JSON_KEY", "")
+try:
+    with open(f) as fp:
+        data = json.load(fp)
+    val = data.get(key)
+    if val is None:
+        print("")
+    elif isinstance(val, bool):
+        print("true" if val else "false")
+    elif isinstance(val, (int, float)):
+        print(val)
+    elif isinstance(val, str):
+        print(val)
+    else:
+        print("")
+except Exception:
+    print("")
+' 2>/dev/null || printf '%s\n' ""
+}
+
+# ==============================================================================
 # 初始化系统检测：systemd / OpenRC (Alpine)
 # ==============================================================================
 detect_init() {
@@ -196,7 +223,7 @@ _openrc_clean_ports() {
       local p="8899"
       if [[ -f "/var/lib/sout/settings.json" ]]; then
         local sp
-        sp=$(grep -oE '"port"[[:space:]]*:[[:space:]]*[0-9]+' "/var/lib/sout/settings.json" 2>/dev/null | grep -oE '[0-9]+' || true)
+        sp=$(json_get "/var/lib/sout/settings.json" port)
         [[ -n "$sp" ]] && p="$sp"
       fi
       kill_port "$p"
@@ -636,7 +663,7 @@ svc_logs_follow(){ journalctl -u "$UNIT" -f; }
 web_port() {
   if [[ -f "$WORK_DIR/settings.json" ]]; then
     local p
-    p=$(grep -oE '"port"[[:space:]]*:[[:space:]]*[0-9]+' "$WORK_DIR/settings.json" | grep -oE '[0-9]+' | head -1)
+    p=$(json_get "$WORK_DIR/settings.json" port)
     [[ -n "$p" ]] && { echo "$p"; return; }
   fi
   echo "$DEFAULT_PORT"
@@ -645,7 +672,7 @@ web_port() {
 web_listen_addr() {
   if [[ -f "$WORK_DIR/settings.json" ]]; then
     local a
-    a=$(grep -oE '"listen_addr"[[:space:]]*:[[:space:]]*"[^"]*"' "$WORK_DIR/settings.json" | cut -d'"' -f4)
+    a=$(json_get "$WORK_DIR/settings.json" listen_addr)
     [[ -n "$a" ]] && { echo "$a"; return; }
   fi
   echo "0.0.0.0"
@@ -654,7 +681,7 @@ web_listen_addr() {
 web_panel_url() {
   if [[ -f "$WORK_DIR/settings.json" ]]; then
     local u
-    u=$(grep -oE '"panel_url"[[:space:]]*:[[:space:]]*"[^"]*"' "$WORK_DIR/settings.json" | cut -d'"' -f4)
+    u=$(json_get "$WORK_DIR/settings.json" panel_url)
     [[ -n "$u" ]] && { echo "$u"; return; }
   fi
   echo ""
@@ -673,7 +700,7 @@ web_ssl_enabled() {
 web_ssl_domain() {
   if [[ -f "$WORK_DIR/settings.json" ]]; then
     local d
-    d=$(grep -oE '"ssl_domain"[[:space:]]*:[[:space:]]*"[^"]*"' "$WORK_DIR/settings.json" | cut -d'"' -f4)
+    d=$(json_get "$WORK_DIR/settings.json" ssl_domain)
     [[ -n "$d" ]] && { echo "$d"; return; }
   fi
   echo ""
@@ -682,7 +709,7 @@ web_ssl_domain() {
 web_ssl_cert() {
   if [[ -f "$WORK_DIR/settings.json" ]]; then
     local c
-    c=$(grep -oE '"ssl_cert"[[:space:]]*:[[:space:]]*"[^"]*"' "$WORK_DIR/settings.json" | cut -d'"' -f4)
+    c=$(json_get "$WORK_DIR/settings.json" ssl_cert)
     [[ -n "$c" ]] && { echo "$c"; return; }
   fi
   echo ""
@@ -691,7 +718,7 @@ web_ssl_cert() {
 web_ssl_key() {
   if [[ -f "$WORK_DIR/settings.json" ]]; then
     local k
-    k=$(grep -oE '"ssl_key"[[:space:]]*:[[:space:]]*"[^"]*"' "$WORK_DIR/settings.json" | cut -d'"' -f4)
+    k=$(json_get "$WORK_DIR/settings.json" ssl_key)
     [[ -n "$k" ]] && { echo "$k"; return; }
   fi
   echo ""
@@ -853,17 +880,17 @@ show_info() {
   if [[ "$c_en" == "true" ]]; then
     local c_mode="tunnel" c_dom="" c_sout_p="sout" c_sui_p="sui" c_sub_p="sub" c_tun_p="8081"
     if [[ -f "$CADDY_META" ]]; then
-      c_mode=$(grep -oE '"mode"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+      c_mode=$(json_get "$CADDY_META" mode)
       [[ -z "$c_mode" ]] && c_mode="tunnel"
-      c_dom=$(grep -oE '"domain"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
-      c_sout_p=$(grep -oE '"sout_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+      c_dom=$(json_get "$CADDY_META" domain)
+      c_sout_p=$(json_get "$CADDY_META" sout_path)
       [[ -z "$c_sout_p" ]] && c_sout_p="sout"
-      c_sui_p=$(grep -oE '"sui_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+      c_sui_p=$(json_get "$CADDY_META" sui_path)
       [[ -z "$c_sui_p" ]] && c_sui_p="sui"
-      c_sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+      c_sub_p=$(json_get "$CADDY_META" sub_path)
       [[ -z "$c_sub_p" ]] && c_sub_p="sub"
       local tp
-      tp=$(grep -oE '"tunnel_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
+      tp=$(json_get "$CADDY_META" tunnel_port)
       [[ -n "$tp" ]] && c_tun_p="$tp"
     fi
 
@@ -3212,9 +3239,9 @@ reload_caddy_proxy() {
   echo -e "  ${B}[+] 正在扫描并重新识别各组件 (隧道/sout/s-ui/节点) 最新路径与端口...${N}"
 
   local domain tunnel_port sout_p sui_p sub_p ws_p sout_port sui_port sub_port node_port meta_mode has_sui="false"
-  meta_mode=$(grep -oE '"mode"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
-  domain=$(grep -oE '"domain"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
-  tunnel_port=$(grep -oE '"tunnel_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
+  meta_mode=$(json_get "$CADDY_META" mode)
+  domain=$(json_get "$CADDY_META" domain)
+  tunnel_port=$(json_get "$CADDY_META" tunnel_port)
 
   # 0. 动态探测 Cloudflare 隧道的实时端口与活跃域名
   if [[ -f /etc/systemd/system/cloudflared.service ]]; then
@@ -3277,7 +3304,7 @@ except Exception:
       sout_needs_restart=1
     fi
   fi
-  sout_p=$(grep -oE '"sout_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+  sout_p=$(json_get "$CADDY_META" sout_path)
   local bp_val
   bp_val=$(web_basepath)
   [[ -n "$bp_val" ]] && sout_p="$bp_val"
@@ -3294,16 +3321,16 @@ except Exception:
   # 2. 检查后端类型；若为 s-ui 则动态探测并自动纠偏 s-ui 面板配置
   sui_port=0
   sui_p=""
-  sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+  sub_p=$(json_get "$CADDY_META" sub_path)
   [[ -z "$sub_p" ]] && sub_p="sub"
-  sub_port=$(grep -oE '"sub_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
+  sub_port=$(json_get "$CADDY_META" sub_port)
   [[ -z "$sub_port" ]] && sub_port="2097"
 
   local sui_needs_restart=0
   if is_sui_backend && [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
     has_sui="true"
     sui_port="2096"
-    sui_p=$(grep -oE '"sui_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
+    sui_p=$(json_get "$CADDY_META" sui_path)
     [[ -z "$sui_p" ]] && sui_p="sui"
     local sui_info
     sui_info=$(python3 -c "
@@ -3394,8 +3421,8 @@ print(f'{port}|{path}|{changed}|{sp_val}')
   fi
 
   # 3. 动态识别/创建 s-ui 隧道节点入站 (核心：识别监听在 127.0.0.1 的隧道节点并同步更新域名SNI)
-  ws_p=$(grep -oE '"ws_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" 2>/dev/null | cut -d'"' -f4)
-  node_port=$(grep -oE '"node_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
+  ws_p=$(json_get "$CADDY_META" ws_path)
+  node_port=$(json_get "$CADDY_META" node_port)
   [[ -z "$node_port" ]] && node_port="2082"
 
   if is_sui_backend && [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
@@ -4879,12 +4906,21 @@ caddy_menu() {
     echo -e "${B}========================================${N}"
     local en dom cf_st
     en=$(is_caddy_enabled)
-    cf_st=$(systemctl is-active cloudflared 2>/dev/null || echo "inactive")
+    # 兼容 systemd 与 OpenRC：Alpine 无 systemctl，需回落到 rc-service / 进程探测
+    if [[ "$INIT_SYS" == "systemd" ]]; then
+      cf_st=$(systemctl is-active cloudflared 2>/dev/null || echo "inactive")
+    else
+      if rc-service cloudflared status >/dev/null 2>&1 || pgrep -f "cloudflared" >/dev/null 2>&1; then
+        cf_st="active"
+      else
+        cf_st="inactive"
+      fi
+    fi
     
     if [[ "$en" == "true" ]]; then
-      dom=$(grep -oE '"domain"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" | cut -d'"' -f4)
+      dom=$(json_get "$CADDY_META" domain)
       local tun_p
-      tun_p=$(grep -oE '"tunnel_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
+      tun_p=$(json_get "$CADDY_META" tunnel_port)
       [[ -z "$tun_p" ]] && tun_p="8081"
 
       local cf_desc
@@ -4913,13 +4949,13 @@ caddy_menu() {
         1)
           if [[ -f "$CADDY_META" ]]; then
             local sout_p sui_p sub_p ws_p sout_port sui_port node_port
-            sout_p=$(grep -oE '"sout_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" | cut -d'"' -f4)
-            sui_p=$(grep -oE '"sui_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" | cut -d'"' -f4)
-            sub_p=$(grep -oE '"sub_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" | cut -d'"' -f4)
-            ws_p=$(grep -oE '"ws_path"[[:space:]]*:[[:space:]]*"[^"]*"' "$CADDY_META" | cut -d'"' -f4)
-            sout_port=$(grep -oE '"sout_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
-            sui_port=$(grep -oE '"sui_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
-            node_port=$(grep -oE '"node_port"[[:space:]]*:[[:space:]]*[0-9]+' "$CADDY_META" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
+            sout_p=$(json_get "$CADDY_META" sout_path)
+            sui_p=$(json_get "$CADDY_META" sui_path)
+            sub_p=$(json_get "$CADDY_META" sub_path)
+            ws_p=$(json_get "$CADDY_META" ws_path)
+            sout_port=$(json_get "$CADDY_META" sout_port)
+            sui_port=$(json_get "$CADDY_META" sui_port)
+            node_port=$(json_get "$CADDY_META" node_port)
             [[ -z "$sout_port" ]] && sout_port="8899"
             [[ -z "$sui_port" ]] && sui_port="0"
             [[ -z "$node_port" ]] && node_port="2082"
