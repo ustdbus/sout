@@ -1027,6 +1027,12 @@ async function poll(){
         ? '直接接管本机 sing-box 原生内核节点，点击每个节点的「+」从上方隧道池中选择出口绑定'
         : '直接读取 s-ui 面板中的已有节点，点击每个节点的「+」从上方隧道池中选择出口绑定';
     }
+    // 引擎日志标签随后端切换：sing-box 模式看内核日志，s-ui 模式看 s-ui 日志
+    const coreTab = $('#coreLogTabBtn');
+    if(coreTab){
+      coreTab.textContent = (backend === 'sing-box') ? 'sing-box 内核日志' : 's-ui 日志';
+      coreTab.dataset.src = (backend === 'sing-box') ? 'sing-box' : 'sui';
+    }
     renderExits();
     renderNodes();
   }catch(e){}
@@ -2782,7 +2788,9 @@ async function loadLogs(src) {
   if (src) curLogSource = src;
   const box = $('#logContentBox');
   const status = $('#logStatusText');
-  const srcName = curLogSource === 'sing-box' ? 'sing-box 内核' : (curLogSource === 'tunnel' ? 'Cloudflare 隧道' : 'sout 服务');
+  const srcName = curLogSource === 'sui' ? 's-ui'
+    : (curLogSource === 'sing-box' ? 'sing-box 内核'
+    : (curLogSource === 'tunnel' ? 'Cloudflare 隧道' : 'sout 服务'));
   box.textContent = '正在获取 ' + srcName + ' 日志...';
   try {
     const res = await api('/api/logs?source=' + encodeURIComponent(curLogSource) + '&lines=250');

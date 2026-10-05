@@ -193,6 +193,24 @@ func readLastLinesFromFile(filePath string, lines int) string {
 	return strings.Join(allLines, "\n")
 }
 
+// fetchServiceLogs 通用取日志：先试 systemd journal，再回退到服务自己的日志文件。
+// journal 不可用（OpenRC 等）时文件是唯一来源，所以这里对两类后端都带上候选文件。
+func fetchServiceLogs(unit string, lines int, files ...string) string {
+	if hasCmd("journalctl") {
+		cmd := exec.Command("journalctl", "-u", unit, "-n", strconv.Itoa(lines), "--no-pager")
+		if out, err := cmd.CombinedOutput(); err == nil && len(bytes.TrimSpace(out)) > 0 {
+			return string(out)
+		}
+	}
+	for _, f := range files {
+		if s := readLastLinesFromFile(f, lines); s != "" {
+			return s
+		}
+	}
+	// 文件也拿不到时回退内存缓冲，保证面板不至于空白
+	return globalLogBuffer.Get(lines)
+}
+
 // fetchLogs 获取最近日志，优先从 systemd journal 获取，回退到常见日志文件或内存日志缓冲区
 func fetchLogs(source string, lines int) string {
 	if lines <= 0 {
@@ -224,52 +242,28 @@ func fetchLogs(source string, lines int) string {
 		}
 		return "暂无 Cloudflare 隧道日志（若未启用隧道或刚启动，请稍候查看）"
 
-	case "sing-box", "sui", "core":
-		if hasCmd("journalctl") {
-			cmd := exec.Command("journalctl", "-u", "sing-box", "-n", strconv.Itoa(lines), "--no-pager")
-			out, err := cmd.CombinedOutput()
-			if err == nil && len(bytes.TrimSpace(out)) > 0 {
-				return string(out)
-			}
-			cmdSui := exec.Command("journalctl", "-u", "s-ui", "-n", strconv.Itoa(lines), "--no-pager")
-			outSui, errSui := cmdSui.CombinedOutput()
-			if errSui == nil && len(bytes.TrimSpace(outSui)) > 0 {
-				return string(outSui)
-			}
-		}
-		candidates := []string{
-			"/var/log/sing-box.err",
-			"/var/log/sing-box.log",
-			"/var/log/sing-box/sing-box.log",
-			"/var/log/sing-box/sing-box.err",
+	case "sui", "s-ui":
+		// s-ui 模式下内核由 s-ui 进程托管，连接日志都记在 s-ui 名下
+		return fetchServiceLogs("s-ui", lines,
 			"/var/log/s-ui.err",
 			"/var/log/s-ui.log",
-		}
-		for _, f := range candidates {
-			if s := readLastLinesFromFile(f, lines); s != "" {
-				return s
-			}
-		}
-		return "未找到 sing-box / s-ui 的服务日志或独立日志文件"
+			"/usr/local/s-ui/logs/s-ui.log",
+		)
+
+	case "sing-box", "core":
+		// 纯内核模式：可直接查 sing-box 服务，或读它自己落盘的日志
+		return fetchServiceLogs("sing-box", lines,
+			"/var/log/sing-box/sing-box.log",
+			"/var/log/sing-box/sing-box.err",
+			"/var/log/sing-box.err",
+			"/var/log/sing-box.log",
+		)
 
 	default: // "sout"
-		if hasCmd("journalctl") {
-			cmd := exec.Command("journalctl", "-u", "sout", "-n", strconv.Itoa(lines), "--no-pager")
-			out, err := cmd.CombinedOutput()
-			if err == nil && len(bytes.TrimSpace(out)) > 0 {
-				return string(out)
-			}
-		}
-		candidates := []string{
+		return fetchServiceLogs("sout", lines,
 			"/var/log/sout.err",
 			"/var/log/sout.log",
-		}
-		for _, f := range candidates {
-			if s := readLastLinesFromFile(f, lines); s != "" {
-				return s
-			}
-		}
-		return globalLogBuffer.Get(lines)
+		)
 	}
 }
 
