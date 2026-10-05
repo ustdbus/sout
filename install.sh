@@ -694,8 +694,10 @@ net.ipv4.tcp_congestion_control = bbr
 }
 
 optimize_low_memory() {
+  local mem_arg="${1:-}"
+  local keep_env="${2:-}"
   detect_adaptive_mem_tuning
-  local mem_mb="${AUTO_MEM_MB:-${1:-512}}"
+  local mem_mb="${AUTO_MEM_MB:-${mem_arg:-512}}"
   local has_swap="${AUTO_HAS_SWAP:-0}"
 
   # 1. 清理 /tmp 内存文件系统历史残留的 tar.gz 与二进制
@@ -705,12 +707,15 @@ optimize_low_memory() {
   sed -i '/MemorySwapMax/d' /etc/systemd/system/*.service.d/override.conf 2>/dev/null || true
 
   # 3. 清理 OpenRC /etc/init.d/ 历史遗留硬编码的 export GOMEMLIMIT 与 export GOGC
-  for s in cloudflared sing-box caddy sout fanout s-ui; do
-    if [[ -f "/etc/init.d/${s}" ]]; then
-      sed -i '/export GOMEMLIMIT/d' "/etc/init.d/${s}" 2>/dev/null || true
-      sed -i '/export GOGC/d' "/etc/init.d/${s}" 2>/dev/null || true
-    fi
-  done
+  #    keep_env 非空时跳过：那是本脚本刚按自适应结果写好的护栏，不是历史遗留
+  if [[ -z "$keep_env" ]]; then
+    for s in cloudflared sing-box caddy sout fanout s-ui; do
+      if [[ -f "/etc/init.d/${s}" ]]; then
+        sed -i '/export GOMEMLIMIT/d' "/etc/init.d/${s}" 2>/dev/null || true
+        sed -i '/export GOGC/d' "/etc/init.d/${s}" 2>/dev/null || true
+      fi
+    done
+  fi
 
   # 4. 调低 swappiness（从默认 100 降为 30），防止过早向虚拟 Swap 剧烈换页
   sysctl -w vm.swappiness=30 >/dev/null 2>&1 || true
@@ -1417,7 +1422,9 @@ fi
 seed_settings
 svc_install
 svc_enable_start
-optimize_low_memory
+# 带上 keep_env：此时本脚本已按自适应结果写好各服务的 GOMEMLIMIT/GOGC，
+# 不能再用"清理历史遗留"的逻辑把它们删掉（否则低内存护栏会丢失）
+optimize_low_memory "" keep_env
 
 echo "[6/6] 检查运行状态..."
 sleep 3
