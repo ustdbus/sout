@@ -12,12 +12,27 @@ WEB_PORT=8899
 # 统一 JSON 字段读取：替代 grep -oE/cut/awk 解析（键不存在或解析失败时输出空，由调用点 :- 兜底）
 # ==============================================================================
 json_get() {
-  # 交给 Go 子命令解析（不再依赖 python3）。
-  # 用绝对路径兜底：本函数可能在 $BIN 赋值之前就被调用。
-  local _bin="/usr/local/bin/sout-server"
-  [[ -x "$_bin" ]] || _bin="/usr/local/bin/sout"
-  [[ -x "$_bin" ]] || _bin="/usr/local/bin/fanout"
-  "$_bin" json get "${1:-}" "${2:-}" 2>/dev/null || printf '%s\n' ""
+  JSON_FILE="${1:-}" JSON_KEY="${2:-}" python3 -c '
+import json, os
+f = os.environ.get("JSON_FILE", "")
+key = os.environ.get("JSON_KEY", "")
+try:
+    with open(f) as fp:
+        data = json.load(fp)
+    val = data.get(key)
+    if val is None:
+        print("")
+    elif isinstance(val, bool):
+        print("true" if val else "false")
+    elif isinstance(val, (int, float)):
+        print(val)
+    elif isinstance(val, str):
+        print(val)
+    else:
+        print("")
+except Exception:
+    print("")
+' 2>/dev/null || printf '%s\n' ""
 }
 if [[ $EUID -ne 0 ]]; then
   echo "请使用 root 权限运行此脚本 (sudo ./install.sh 或 sudo bash ...)" >&2
@@ -1594,6 +1609,8 @@ else
       [[ -n "$local_p_val" ]] && sui_port="$local_p_val"
       local_path_val=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPath' LIMIT 1;" 2>/dev/null || true)
       [[ -n "$local_path_val" ]] && sui_path="$local_path_val"
+    elif command -v python3 >/dev/null 2>&1; then
+      sui_u=$(python3 -c "import sqlite3; con=sqlite3.connect('$sui_db'); cur=con.cursor(); r=cur.execute('SELECT username FROM users LIMIT 1').fetchone(); print(r[0] if r else 'admin'); con.close()" 2>/dev/null || echo "admin")
     fi
   fi
   [[ -z "$sui_u" ]] && sui_u="admin"

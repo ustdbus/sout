@@ -5,12 +5,27 @@ set -e
 # 统一 JSON 字段读取：替代 grep -oE/cut/awk 解析（键不存在或解析失败时输出空，由调用点 :- 兜底）
 # ==============================================================================
 json_get() {
-  # 交给 Go 子命令解析（不再依赖 python3）。
-  # 用绝对路径兜底：本函数可能在 $BIN 赋值之前就被调用。
-  local _bin="/usr/local/bin/sout-server"
-  [[ -x "$_bin" ]] || _bin="/usr/local/bin/sout"
-  [[ -x "$_bin" ]] || _bin="/usr/local/bin/fanout"
-  "$_bin" json get "${1:-}" "${2:-}" 2>/dev/null || printf '%s\n' ""
+  JSON_FILE="${1:-}" JSON_KEY="${2:-}" python3 -c '
+import json, os
+f = os.environ.get("JSON_FILE", "")
+key = os.environ.get("JSON_KEY", "")
+try:
+    with open(f) as fp:
+        data = json.load(fp)
+    val = data.get(key)
+    if val is None:
+        print("")
+    elif isinstance(val, bool):
+        print("true" if val else "false")
+    elif isinstance(val, (int, float)):
+        print(val)
+    elif isinstance(val, str):
+        print(val)
+    else:
+        print("")
+except Exception:
+    print("")
+' 2>/dev/null || printf '%s\n' ""
 }
 
 # ==============================================================================
@@ -930,6 +945,8 @@ get_sui_user() {
   if [[ -f "$sui_db" ]]; then
     if command -v sqlite3 >/dev/null 2>&1; then
       u=$(sqlite3 "$sui_db" "SELECT username FROM users LIMIT 1;" 2>/dev/null || echo "admin")
+    elif command -v python3 >/dev/null 2>&1; then
+      u=$(python3 -c "import sqlite3; con=sqlite3.connect('$sui_db'); cur=con.cursor(); r=cur.execute('SELECT username FROM users LIMIT 1').fetchone(); print(r[0] if r else 'admin'); con.close()" 2>/dev/null || echo "admin")
     fi
   fi
   [[ -z "$u" ]] && u="admin"
@@ -1199,7 +1216,21 @@ change_listen_and_port() {
     return
   fi
 
-  "$BIN" json set "$WORK_DIR/settings.json" "listen_addr=$new_addr" "port=$new_port" 2>/dev/null || true
+  python3 -c "
+import json, os
+path = '$WORK_DIR/settings.json'
+data = {}
+if os.path.exists(path):
+    try:
+        with open(path, 'r') as f:
+            data = json.load(f)
+    except: pass
+data['listen_addr'] = '$new_addr'
+data['port'] = int('$new_port')
+with open(path, 'w') as f:
+    json.dump(data, f, indent=2)
+os.chmod(path, 0o600)
+"
   svc_restart
   echo -e "  ${G}面板配置已更新并生效: 监听地址 -> ${new_addr}，管理端口 -> ${new_port}${N}"
 }
@@ -1222,11 +1253,22 @@ change_panel_url() {
   # 去除结尾所有斜杠
   new_url=$(echo "$new_url" | sed -e 's:/*$::')
 
-  if [[ -n "$new_url" ]]; then
-    "$BIN" json set "$WORK_DIR/settings.json" "panel_url=$new_url" 2>/dev/null || true
-  else
-    "$BIN" json del "$WORK_DIR/settings.json" panel_url 2>/dev/null || true
-  fi
+  python3 -c "
+import json, os
+path = '$WORK_DIR/settings.json'
+data = {}
+if os.path.exists(path):
+    try:
+        with open(path, 'r') as f:
+            data = json.load(f)
+    except: pass
+if '$new_url':
+    data['panel_url'] = '$new_url'
+else:
+    data.pop('panel_url', None)
+with open(path, 'w') as f:
+    json.dump(data, f, indent=2)
+"
   svc_restart
   if [[ -n "$new_url" ]]; then
     echo -e "  ${G}面板基础 URL 已更新为: ${new_url}${N}"
@@ -1291,7 +1333,15 @@ change_ssl() {
     read -rp "  请选择 [0-3]: " opt
     case "$opt" in
       1)
-        "$BIN" json set "$WORK_DIR/settings.json" "ssl_enabled=false" 2>/dev/null || true
+        python3 -c "
+import json, os
+path = '$WORK_DIR/settings.json'
+data = {}
+if os.path.exists(path):
+    with open(path) as f: data = json.load(f)
+data['ssl_enabled'] = False
+with open(path, 'w') as f: json.dump(data, f, indent=2)
+"
         svc_restart
         echo -e "  ${Y}已关闭 SSL，面板已切换回 HTTP 访问${N}"
         ;;
@@ -1308,14 +1358,31 @@ change_ssl() {
           echo -e "  ${R}私钥文件不存在: ${new_key}${N}"
           return
         fi
-        "$BIN" json set "$WORK_DIR/settings.json" "ssl_cert=$new_cert" "ssl_key=$new_key" 2>/dev/null || true
+        python3 -c "
+import json, os
+path = '$WORK_DIR/settings.json'
+data = {}
+if os.path.exists(path):
+    with open(path) as f: data = json.load(f)
+data['ssl_cert'] = '$new_cert'
+data['ssl_key'] = '$new_key'
+with open(path, 'w') as f: json.dump(data, f, indent=2)
+"
         svc_restart
         echo -e "  ${G}SSL 证书路径已更新并重启生效${N}"
         ;;
       3)
         echo
         read -rp "  请输入新域名 (如 sout.example.com): " new_dom
-        "$BIN" json set "$WORK_DIR/settings.json" "ssl_domain=$new_dom" 2>/dev/null || true
+        python3 -c "
+import json, os
+path = '$WORK_DIR/settings.json'
+data = {}
+if os.path.exists(path):
+    with open(path) as f: data = json.load(f)
+data['ssl_domain'] = '$new_dom'
+with open(path, 'w') as f: json.dump(data, f, indent=2)
+"
         svc_restart
         echo -e "  ${G}域名已更新为: ${new_dom}${N}"
         ;;
@@ -1345,7 +1412,18 @@ change_ssl() {
         echo -e "  ${R}私钥文件不存在: ${new_key}${N}"
         return
       fi
-      "$BIN" json set "$WORK_DIR/settings.json" "ssl_enabled=true" "ssl_domain=$new_dom" "ssl_cert=$new_cert" "ssl_key=$new_key" 2>/dev/null || true
+      python3 -c "
+import json, os
+path = '$WORK_DIR/settings.json'
+data = {}
+if os.path.exists(path):
+    with open(path) as f: data = json.load(f)
+data['ssl_enabled'] = True
+data['ssl_domain'] = '$new_dom'
+data['ssl_cert'] = '$new_cert'
+data['ssl_key'] = '$new_key'
+with open(path, 'w') as f: json.dump(data, f, indent=2)
+"
       svc_restart
       echo -e "  ${G}🎉 SSL 已成功开启！面板已切换为 HTTPS 安全加密访问。${N}"
     fi
@@ -2205,8 +2283,8 @@ setup_caddy_proxy() {
   if [[ -f "$meta_f" ]]; then
     if [[ -z "$tunnel_token" || "$tunnel_token" == *"..."* || "$tunnel_token" == *"***"* ]]; then
       local exist_token exist_dom
-      exist_token=$("$BIN" json get "$meta_f" tunnel_token 2>/dev/null || true)
-      exist_dom=$("$BIN" json get "$meta_f" domain 2>/dev/null || true)
+      exist_token=$(python3 -c 'import json, sys; d=json.load(open(sys.argv[1])); print(d.get("tunnel_token", ""))' "$meta_f" 2>/dev/null || true)
+      exist_dom=$(python3 -c 'import json, sys; d=json.load(open(sys.argv[1])); print(d.get("domain", ""))' "$meta_f" 2>/dev/null || true)
       if [[ -n "$exist_token" ]]; then
         tunnel_token="$exist_token"
         [[ -z "$domain" ]] && domain="$exist_dom"
@@ -2251,20 +2329,28 @@ setup_caddy_proxy() {
     sui_token=$(get_or_create_sui_token "$sui_db")
 
     if [[ ! -f "$sui_backup" ]]; then
-      # 用 sqlite3 读取后用 Go 子命令合成 JSON（不再依赖 python3）
-      if command -v sqlite3 >/dev/null 2>&1; then
-        local _bk_args=() _k _v
-        for _k in webPort webListen webPath webDomain webCertFile webKeyFile webURI \
-                  subPort subListen subPath subDomain subCertFile subKeyFile subURI subUpdates \
-                  subEncode subShowInfo subClashExt subJsonExt subClashSprtAll subClashNoDefGrp; do
-          _v=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='$_k' LIMIT 1;" 2>/dev/null || true)
-          [[ -n "$_v" ]] && _bk_args+=("$_k=$_v")
-        done
-        if [[ ${#_bk_args[@]} -gt 0 ]]; then
-          rm -f "$sui_backup"
-          "$BIN" json set "$sui_backup" "${_bk_args[@]}" 2>/dev/null || true
-        fi
-      fi
+      python3 -c "
+import sqlite3, json
+try:
+    con = sqlite3.connect('$sui_db')
+    cur = con.cursor()
+    keys = [
+        'webPort', 'webListen', 'webPath', 'webDomain', 'webCertFile', 'webKeyFile', 'webURI',
+        'subPort', 'subListen', 'subPath', 'subDomain', 'subCertFile', 'subKeyFile', 'subURI', 'subUpdates',
+        'subEncode', 'subShowInfo', 'subClashExt', 'subJsonExt', 'subClashSprtAll', 'subClashNoDefGrp'
+    ]
+    backup = {}
+    for k in keys:
+        cur.execute('SELECT value FROM settings WHERE key=?', (k,))
+        row = cur.fetchone()
+        if row and row[0] is not None:
+            backup[k] = row[0]
+    con.close()
+    with open('$sui_backup', 'w') as f:
+        json.dump(backup, f, indent=2)
+except Exception:
+    pass
+" 2>/dev/null || true
     fi
   fi
 
@@ -2989,8 +3075,21 @@ PYEOF
   echo "$sout_path" > "${WORK_DIR}/basepath"
   chmod 600 "${WORK_DIR}/basepath"
 
-  "$BIN" json set "$WORK_DIR/settings.json" \
-    "port=$sout_port" "listen_addr=127.0.0.1" "panel_url=https://$domain" "ssl_enabled=false" 2>/dev/null || true
+  python3 -c "
+import json, os
+path = '$WORK_DIR/settings.json'
+data = {}
+if os.path.exists(path):
+    try:
+        with open(path) as f: data = json.load(f)
+    except: pass
+data['port'] = $sout_port
+data['listen_addr'] = '127.0.0.1'
+data['panel_url'] = 'https://$domain'
+data['ssl_enabled'] = False
+with open(path, 'w') as f:
+    json.dump(data, f, indent=2)
+" 2>/dev/null || true
 
   # 6. 保存反代元数据
   local meta_mode="tunnel"
@@ -3114,8 +3213,20 @@ disable_caddy_proxy() {
   fi
 
   # 恢复 sout 为默认端口 8899 和 0.0.0.0 监听
-  "$BIN" json set "$WORK_DIR/settings.json" "port=8899" "listen_addr=0.0.0.0" 2>/dev/null || true
-  "$BIN" json del "$WORK_DIR/settings.json" panel_url 2>/dev/null || true
+  python3 -c "
+import json, os
+path = '$WORK_DIR/settings.json'
+data = {}
+if os.path.exists(path):
+    try:
+        with open(path) as f: data = json.load(f)
+    except: pass
+data['port'] = 8899
+data['listen_addr'] = '0.0.0.0'
+data.pop('panel_url', None)
+with open(path, 'w') as f:
+    json.dump(data, f, indent=2)
+" 2>/dev/null || true
 
   # 恢复 s-ui 监听与配置 (优先从备份还原，若端口被占用则自动随机空闲端口)
   local public_ip
@@ -3334,20 +3445,31 @@ reload_caddy_proxy() {
   local sout_needs_restart=0
   if [[ -f "${WORK_DIR}/settings.json" ]]; then
     local sout_info
-    # 读 settings.json、必要时回写，并输出 "port|needs_restart"（不再依赖 python3）
-    local _si_p _si_la _si_purl _si_restart="False"
-    _si_p=$("$BIN" json get "${WORK_DIR}/settings.json" port 2>/dev/null || true)
-    [[ -z "$_si_p" ]] && _si_p=8899
-    _si_la=$("$BIN" json get "${WORK_DIR}/settings.json" listen_addr 2>/dev/null || true)
-    _si_purl=$("$BIN" json get "${WORK_DIR}/settings.json" panel_url 2>/dev/null || true)
-    if [[ "$_si_la" != "127.0.0.1" ]]; then
-      "$BIN" json set "${WORK_DIR}/settings.json" "listen_addr=127.0.0.1" 2>/dev/null || true
-      _si_restart="True"
-    fi
-    if [[ "$_si_purl" != "https://${domain}" ]]; then
-      "$BIN" json set "${WORK_DIR}/settings.json" "panel_url=https://${domain}" 2>/dev/null || true
-    fi
-    sout_info="${_si_p}|${_si_restart}"
+    sout_info=$(python3 -c "
+import json
+try:
+    with open('${WORK_DIR}/settings.json') as f:
+        d = json.load(f)
+    p = d.get('port', 8899)
+    la = d.get('listen_addr', '')
+    purl = d.get('panel_url', '')
+    target_url = 'https://${domain}'
+    changed = False
+    needs_restart = False
+    if la != '127.0.0.1':
+        d['listen_addr'] = '127.0.0.1'
+        changed = True
+        needs_restart = True
+    if purl != target_url:
+        d['panel_url'] = target_url
+        changed = True
+    if changed:
+        with open('${WORK_DIR}/settings.json', 'w') as f:
+            json.dump(d, f, indent=2)
+    print(f'{p}|{needs_restart}')
+except Exception:
+    print('8899|False')
+" 2>/dev/null || echo "8899|False")
     sout_port=$(echo "$sout_info" | cut -d'|' -f1)
     if [[ "$(echo "$sout_info" | cut -d'|' -f2)" == "True" ]]; then
       sout_needs_restart=1

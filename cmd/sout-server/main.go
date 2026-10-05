@@ -117,11 +117,6 @@ func initLowMemoryProtection() {
 }
 
 func main() {
-	// 子命令（json / sui）供 shell 脚本调用，用于替代内联 Python 片段。
-	// 必须放在最前面：避免触发内存防护、日志捕获等服务初始化副作用。
-	if handled, code := runSubcommand(os.Args[1:]); handled {
-		os.Exit(code)
-	}
 	initLowMemoryProtection()
 	initLogCapture()
 	var (
