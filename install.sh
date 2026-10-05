@@ -626,14 +626,10 @@ sysctl_writable() {
 apply_sysctl_optimization() {
   mkdir -p "$WORK_DIR" /etc/sysctl.d 2>/dev/null || true
 
-  # 0. 先探测平台是否允许改内核参数：受限机器上写了也没用，还留下误导性的“已优化”记录
-  local probe_keys=(
-    "net.core.rmem_max"
-    "net.ipv4.tcp_congestion_control"
-    "net.core.somaxconn"
-  )
+  # 探测平台是否允许改内核参数：尝试按原值回写，能写通才算有权限。
+  # 用相同值写入不会真正改变内核状态，因此是安全的探测方式。
   local probe_ok=0 pk
-  for pk in "${probe_keys[@]}"; do
+  for pk in net.core.rmem_max net.ipv4.tcp_congestion_control net.core.somaxconn; do
     if sysctl_writable "$pk"; then
       probe_ok=1
       break
@@ -663,6 +659,7 @@ apply_sysctl_optimization() {
       "net.core.wmem_default"
       "net.core.netdev_max_backlog"
       "net.core.somaxconn"
+      "net.ipv4.tcp_max_syn_backlog"
       "net.ipv4.udp_mem"
       "net.ipv4.udp_rmem_min"
       "net.ipv4.udp_wmem_min"
@@ -679,50 +676,73 @@ apply_sysctl_optimization() {
     done
   fi
 
-  # 2. 根据内存大小动态选择缓冲区
-  local rmem_max=4194304
-  local wmem_max=4194304
-  local udp_mem="4096 8192 16384"
-  if [[ $mem_total_mb -gt 512 ]]; then
-    rmem_max=8388608
-    wmem_max=8388608
-    udp_mem="8192 16384 32768"
-  elif [[ $mem_total_mb -le 256 ]]; then
-    rmem_max=2097152
-    wmem_max=2097152
+  # 2. 目标值：采用代理社区推荐
+  #    Hysteria2 官方文档：QUIC 场景把 rmem_max / wmem_max 都设为 16MB
+  #    Queqiao 调优脚本：quic-go 会请求 8MiB UDP 缓冲，上限需留余量；
+  #                      并建议 somaxconn=8192、netdev_max_backlog=16384、tcp_max_syn_backlog=8192
+  #    说明：这几个是「上限/队列」参数，设大不会预分配内存，对 128MB 小机同样安全
+  local rmem_max=16777216
+  local wmem_max=16777216
+  local rmem_default=1048576
+  local wmem_default=1048576
+  local netdev_backlog=16384
+  local somaxconn=8192
+  local syn_backlog=8192
+  local udp_mem="4096 87380 16777216"
+  local udp_min=8192
+  # 极低内存机器上收紧 UDP 全局内存池（该项直接影响内存占用，与上限型参数不同）
+  if [[ $mem_total_mb -le 256 ]]; then
     udp_mem="2048 4096 8192"
   fi
 
   # 3. 尝试加载 BBR 模块
   modprobe tcp_bbr >/dev/null 2>&1 || true
 
-  # 4. 写入独立 sysctl 配置文件与 /etc/sysctl.conf
-  local conf_content="# === SOUT SYSCTL START ===
-net.core.rmem_max = ${rmem_max}
-net.core.wmem_max = ${wmem_max}
-net.core.rmem_default = 262144
-net.core.wmem_default = 262144
-net.core.netdev_max_backlog = 2500
-net.core.somaxconn = 4096
-net.ipv4.udp_mem = ${udp_mem}
-net.ipv4.udp_rmem_min = 8192
-net.ipv4.udp_wmem_min = 8192
-net.core.default_qdisc = fq
-net.ipv4.tcp_congestion_control = bbr
+  # 4. 逐项探测：只把平台允许修改的项写进配置，避免留下永远读不回来的声明
+  local conf_content="# === SOUT SYSCTL START ==="
+  local skipped=""
+  local pairs=(
+    "net.core.rmem_max=${rmem_max}"
+    "net.core.wmem_max=${wmem_max}"
+    "net.core.rmem_default=${rmem_default}"
+    "net.core.wmem_default=${wmem_default}"
+    "net.core.netdev_max_backlog=${netdev_backlog}"
+    "net.core.somaxconn=${somaxconn}"
+    "net.ipv4.tcp_max_syn_backlog=${syn_backlog}"
+    "net.ipv4.udp_mem=${udp_mem}"
+    "net.ipv4.udp_rmem_min=${udp_min}"
+    "net.ipv4.udp_wmem_min=${udp_min}"
+    "net.core.default_qdisc=fq"
+    "net.ipv4.tcp_congestion_control=bbr"
+  )
+  local pair k v
+  for pair in "${pairs[@]}"; do
+    k="${pair%%=*}"
+    v="${pair#*=}"
+    if sysctl_writable "$k"; then
+      conf_content="${conf_content}
+${k} = ${v}"
+    else
+      skipped="${skipped}${k} "
+    fi
+  done
+  conf_content="${conf_content}
 # === SOUT SYSCTL END ==="
 
-  echo "$conf_content" > /etc/sysctl.d/99-sout.conf 2>/dev/null || true
+  if [[ -n "$skipped" ]]; then
+    echo "      以下内核参数被平台锁定，已跳过（不会写入配置）:"
+    for k in $skipped; do echo "        - ${k}"; done
+  fi
 
+  # 5. 写入独立配置文件与 /etc/sysctl.conf
+  echo "$conf_content" > /etc/sysctl.d/99-sout.conf 2>/dev/null || true
   if [[ -f /etc/sysctl.conf ]]; then
     sed -i '/# === SOUT SYSCTL START ===/,/# === SOUT SYSCTL END ===/d' /etc/sysctl.conf 2>/dev/null || true
     echo "$conf_content" >> /etc/sysctl.conf 2>/dev/null || true
   fi
-
-  # 5. 生效参数
   sysctl -p /etc/sysctl.d/99-sout.conf >/dev/null 2>&1 || sysctl -p >/dev/null 2>&1 || true
 
-  # 6. 回读校验：平台可能只开放一部分参数，逐项确认并如实报告
-  # 注意：这里只用 POSIX 语法（脚本以 /bin/sh 运行），不用进程替换
+  # 6. 回读校验
   echo "$conf_content" | grep -E '^net\.' | sed 's/[[:space:]]*=[[:space:]]*/ /' > /tmp/.sout_sysctl_kv
   local ok=0 locked=""
   while IFS=' ' read -r k v; do
@@ -739,7 +759,7 @@ net.ipv4.tcp_congestion_control = bbr
   rm -f /tmp/.sout_sysctl_kv
 
   if [[ -n "$locked" ]]; then
-    echo "      sysctl 已生效 ${ok} 项；以下项被平台锁定未生效:"
+    echo "      sysctl 已生效 ${ok} 项；以下项写入后仍被覆盖:"
     echo "$locked" | sed 's/^\\n//; s/\\n/\n        - /g; s/^/        - /'
   else
     echo "      sysctl 调优已全部生效（${ok} 项）"
