@@ -185,6 +185,7 @@ func main() {
 	}
 
 	go mgr.WatchHealth()
+	go mgr.WatchExitReady()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)

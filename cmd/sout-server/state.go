@@ -36,6 +36,10 @@ type persistedTunnel struct {
 	SourceID       string `json:"source_id,omitempty"`
 	IP             string `json:"ip,omitempty"`
 	ExitIP         string `json:"exit_ip,omitempty"`
+	// 运行态（用于重启后如实呈现出口状态，避免状态信息丢失）
+	Status string `json:"status,omitempty"`
+	Err    string `json:"err,omitempty"`
+	Since  int64  `json:"since,omitempty"`
 }
 
 type persistedState struct {
@@ -77,6 +81,9 @@ func (m *Manager) saveState() error {
 			SourceID:       t.Node.SourceID,
 			IP:             t.Node.IP,
 			ExitIP:         t.ExitIP,
+			Status:         t.Status,
+			Err:            t.Err,
+			Since:          t.Since.Unix(),
 		})
 	}
 

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"path/filepath"
 )
 
 // RingLogBuffer 内存环形日志缓冲区，保存最近的日志行，确保无 systemd 环境也能查看日志
@@ -61,9 +62,97 @@ func (b *RingLogBuffer) Get(max int) string {
 	return strings.Join(b.lines[start:], "\n")
 }
 
+// 单个日志文件上限 4MB，保留 1 份备份 => 单个文件最多占用约 8MB。
+const logRotateMaxBytes = 4 * 1024 * 1024
+
+// rotatingLogWriter 追加写入日志文件，超过阈值时把当前文件改名为 .1 后重新开始。
+// 目的是避免无 systemd 环境下 stdout/stderr 被 OpenRC 重定向到文件后无限增长。
+type rotatingLogWriter struct {
+	mu       sync.Mutex
+	path     string
+	maxBytes int64
+	file     *os.File
+	size     int64
+}
+
+func newRotatingLogWriter(path string, maxBytes int64) (*rotatingLogWriter, error) {
+	w := &rotatingLogWriter{path: path, maxBytes: maxBytes}
+	if err := w.open(); err != nil {
+		return nil, err
+	}
+	return w, nil
+}
+
+func (w *rotatingLogWriter) open() error {
+	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0640)
+	if err != nil {
+		return err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return err
+	}
+	w.file = f
+	w.size = fi.Size()
+	return nil
+}
+
+func (w *rotatingLogWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.file == nil {
+		if err := w.open(); err != nil {
+			return 0, err
+		}
+	}
+	if w.size+int64(len(p)) > w.maxBytes {
+		_ = w.file.Close()
+		w.file = nil
+		_ = os.Rename(w.path, w.path+".1")
+		if err := w.open(); err != nil {
+			return 0, err
+		}
+	}
+	n, err := w.file.Write(p)
+	w.size += int64(n)
+	return n, err
+}
+
+// logFileWriter 为一个已被重定向的流创建轮转写入器；未被重定向到文件则返回 nil，
+// 以免在这里凭空创建重复的日志文件。
+func logFileWriter(stream *os.File) io.Writer {
+	if stream == nil {
+		return nil
+	}
+	fi, err := stream.Stat()
+	if err != nil {
+		return nil
+	}
+	if fi.Mode()&os.ModeCharDevice != 0 || fi.Mode()&os.ModeNamedPipe != 0 {
+		// 终端或管道（如 systemd journal），不需要内部轮转
+		return nil
+	}
+	path := stream.Name()
+	if path == "" || !filepath.IsAbs(path) {
+		return nil
+	}
+	w, err := newRotatingLogWriter(path, logRotateMaxBytes)
+	if err != nil {
+		return nil
+	}
+	return w
+}
+
+// initLogCapture 同时接管 stdout / stderr 与内存环形缓冲。
+// 无 systemd 时 OpenRC 会把这两个流重定向到文件，这里为其加上大小上限。
 func initLogCapture() {
-	mw := io.MultiWriter(os.Stderr, globalLogBuffer)
-	log.SetOutput(mw)
+	writers := []io.Writer{os.Stdout, os.Stderr, globalLogBuffer}
+	if fw := logFileWriter(os.Stderr); fw != nil {
+		// 已被重定向到文件：由轮转写入器负责落盘，避免同一份日志重复写两次
+		writers = []io.Writer{os.Stdout, fw, globalLogBuffer}
+	}
+	log.SetOutput(io.MultiWriter(writers...))
 }
 
 func readLastLinesFromFile(filePath string, lines int) string {

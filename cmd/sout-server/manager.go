@@ -60,6 +60,9 @@ type Manager struct {
 	maxSlots int
 	jobs     JobStore
 	engine   *embeddedEngine
+
+	syncMu       sync.Mutex
+	syncedExitIP map[int]string // 记录已同步过 outbounds 的出口状态（slot -> exitIP/status）
 }
 
 func NewManager(maxSlots int, workDir string) *Manager {
@@ -83,12 +86,13 @@ func NewManager(maxSlots int, workDir string) *Manager {
 	}
 
 	return &Manager{
-		tunnels:  map[int]*Tunnel{},
-		nodes:    initNodes,
-		fetched:  initFetched,
-		workDir:  workDir,
-		maxSlots: maxSlots,
-		engine:   engine,
+		tunnels:      map[int]*Tunnel{},
+		nodes:        initNodes,
+		fetched:      initFetched,
+		workDir:      workDir,
+		maxSlots:     maxSlots,
+		engine:       engine,
+		syncedExitIP: map[int]string{},
 	}
 }
 
@@ -352,8 +356,14 @@ func (m *Manager) tryCandidates(t *Tunnel, notify bool) bool {
 		}
 
 		if err == nil {
-			t.Status = "up"
+			// 若出口仍在后台等待 OpenVPN 握手就绪，保持 starting，
+			// 由就绪监控接手升级为 up 并同步出站；否则立即置 up。
+			t.mu.Lock()
+			if t.Status != "starting" {
+				t.Status = "up"
+			}
 			t.Err = ""
+			t.mu.Unlock()
 			if t.Node.HostName != oldHost {
 				t.recordHost(oldHost)
 				_ = m.rebind(oldHost, t)
@@ -825,5 +835,43 @@ func (m *Manager) notifyPanel() {
 	}
 	if err := p.OnTunnelsChanged(m.Tunnels()); err != nil {
 		log.Printf("同步节点对接后端失败: %v", err)
+	}
+}
+
+// WatchExitReady 观察后台等待就绪的出口：一旦从 starting 升为 up，
+// 立即把出站同步进面板配置，避免"出口已就绪但分流规则仍指向空出站"。
+func (m *Manager) WatchExitReady() {
+	for range time.Tick(5 * time.Second) {
+		for _, t := range m.Tunnels() {
+			if t.Status != "up" {
+				continue
+			}
+			t.mu.Lock()
+			key := t.ExitIP
+			if key == "" {
+				key = "up"
+			}
+			t.mu.Unlock()
+
+			m.syncMu.Lock()
+			prev, seen := m.syncedExitIP[t.Slot]
+			m.syncMu.Unlock()
+			if seen && prev == key {
+				continue
+			}
+
+			if err := m.resync(t); err != nil {
+				log.Printf("出口槽位 %d 就绪后同步出站失败: %v", t.Slot, err)
+				continue
+			}
+			m.syncMu.Lock()
+			m.syncedExitIP[t.Slot] = key
+			m.syncMu.Unlock()
+			if err := m.saveState(); err != nil {
+				log.Printf("保存状态失败: %v", err)
+			}
+			m.notifyPanel()
+			log.Printf("出口槽位 %d (%s) 已就绪 (出口 IP %s)，分流出站已同步", t.Slot, t.Node.HostName, t.ExitIP)
+		}
 	}
 }

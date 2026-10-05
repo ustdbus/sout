@@ -52,6 +52,7 @@ type Tunnel struct {
 	engine      *embeddedEngine
 	listener    net.Listener
 	boxInstance *sbox.Box
+	ready       chan struct{} // 非 nil 表示 VPN Gate 出口正在后台等待握手就绪
 	mu          sync.Mutex
 }
 
@@ -59,6 +60,19 @@ func (t *Tunnel) setEngine(engine *embeddedEngine) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.engine = engine
+}
+
+// markReadyLocked 通知后台就绪等待者停止（幂等，需持有 t.mu）。
+func (t *Tunnel) markReadyLocked() {
+	if t.ready == nil {
+		return
+	}
+	select {
+	case <-t.ready:
+		// 已关闭
+	default:
+		close(t.ready)
+	}
 }
 
 func (t *Tunnel) credential() SocksCred {
@@ -155,29 +169,37 @@ func (t *Tunnel) start(dir string) error {
 		return err
 	}
 
-	// 轮询等待 OpenVPN endpoint 握手完成并探测出口真实 IP (最多等待 15 秒)
-	exitIP, err := t.waitExitIP(15 * time.Second)
-	if err != nil {
-		engine.removeTunnel(t)
+	// 先做一次"快路径"探测：命中则立刻 up（绝大多数情况）
+	exitIP, err := t.waitExitIP(12 * time.Second)
+	if err == nil {
 		t.mu.Lock()
-		t.Status = "failed"
-		t.Err = fmt.Sprintf("探测出口 IP 失败: %v", err)
+		t.ExitIP = exitIP
+		t.Status = "up"
+		t.Since = time.Now()
+		t.Err = ""
 		t.mu.Unlock()
-		return err
+		return nil
 	}
 
+	// 握手比创建窗口慢：不要拆掉已经建立的端点，
+	// 保留端点转入后台继续等待，期间状态为 starting（健康检查只对 up 探活，不会误杀）。
 	t.mu.Lock()
-	t.ExitIP = exitIP
-	t.Status = "up"
-	t.Since = time.Now()
-	t.Err = ""
+	t.markReadyLocked()
+	t.ready = make(chan struct{})
+	t.Status = "starting"
+	t.Err = fmt.Sprintf("出口握手进行中，后台继续等待就绪（上次探测: %v）", err)
 	t.mu.Unlock()
+	log.Printf("出口槽位 %d (%s) 创建时握手未完成，保留端点转后台等待就绪", t.Slot, t.Node.HostName)
+	go t.waitExitIPAsync(5 * time.Minute)
 	return nil
 }
 
 func (t *Tunnel) stop() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// 通知后台就绪等待者退出，避免它对已停止的出口继续探测
+	t.markReadyLocked()
 
 	if t.boxInstance != nil {
 		_ = t.boxInstance.Close()
@@ -204,6 +226,35 @@ func (t *Tunnel) probeExitIP(timeout time.Duration) (string, error) {
 		return t.probeCustomExitIP()
 	}
 
+	// 每个探测源只给较短超时：必须让全部源都有机会被尝试，
+	// 否则单个不可达的源会吃光整个等待预算，导致 SOCKS5 回退永远执行不到。
+	const perSource = 2500 * time.Millisecond
+	var lastErr error
+	for _, u := range []string{"http://checkip.amazonaws.com", "http://icanhazip.com", "http://api.ipify.org", "http://ifconfig.me/ip", "https://api.ipify.org"} {
+		ip, err := t.probeViaHTTP(u, perSource)
+		if err == nil && ip != "" {
+			return ip, nil
+		}
+		if err != nil {
+			lastErr = err
+		}
+	}
+
+	// 回退：走本地 SOCKS5 端口探测（走完整隧道链路，最能反映真实可用性）
+	if ip, err := t.probeCustomExitIP(); err == nil && ip != "" {
+		return ip, nil
+	} else if err != nil {
+		lastErr = err
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("所有出口 IP 探测源均无有效 IPv4 响应")
+	}
+	return "", lastErr
+}
+
+// probeViaHTTP 通过指定 URL 经隧道链路探测出口 IPv4。
+func (t *Tunnel) probeViaHTTP(u string, timeout time.Duration) (string, error) {
 	transport := &http.Transport{
 		DisableKeepAlives: true,
 		DialContext: func(_ context.Context, network, addr string) (net.Conn, error) {
@@ -212,50 +263,89 @@ func (t *Tunnel) probeExitIP(timeout time.Duration) (string, error) {
 	}
 	defer transport.CloseIdleConnections()
 
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   timeout,
+	client := &http.Client{Transport: transport, Timeout: timeout}
+	resp, err := client.Get(u)
+	if err != nil {
+		return "", err
 	}
-
-	for _, u := range []string{"http://checkip.amazonaws.com", "http://ifconfig.me/ip", "http://icanhazip.com", "http://api.ipify.org"} {
-		resp, err := client.Get(u)
-		if err != nil {
-			continue
-		}
-		body, err := io.ReadAll(io.LimitReader(resp.Body, 128))
-		resp.Body.Close()
-		if err != nil || resp.StatusCode != http.StatusOK {
-			continue
-		}
-		ip := strings.TrimSpace(string(body))
-		if parsed := net.ParseIP(ip); parsed != nil && parsed.To4() != nil {
-			return parsed.String(), nil
-		}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 128))
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("探测源 %s 响应异常", u)
 	}
-
-	// 回退尝试通过本地 SOCKS5 端口探测
-	if ip, err := t.probeCustomExitIP(); err == nil && ip != "" {
-		return ip, nil
+	ip := strings.TrimSpace(string(body))
+	if parsed := net.ParseIP(ip); parsed != nil && parsed.To4() != nil {
+		return parsed.String(), nil
 	}
-
-	return "", fmt.Errorf("所有出口 IP 探测源均无有效 IPv4 响应")
+	return "", fmt.Errorf("探测源 %s 未返回有效 IPv4", u)
 }
 
 func (t *Tunnel) waitExitIP(timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
+	first := true
 	for time.Now().Before(deadline) {
-		if ip, err := t.probeExitIP(5 * time.Second); err == nil {
+		// 首次探测紧凑重试（首轮很快，用于"创建时就能立刻就绪"的快路径）
+		if !first {
+			time.Sleep(1500 * time.Millisecond)
+		}
+		first = false
+		if ip, err := t.probeExitIP(12 * time.Second); err == nil {
 			return ip, nil
 		} else {
 			lastErr = err
 		}
-		time.Sleep(1500 * time.Millisecond)
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("超时")
 	}
 	return "", fmt.Errorf("等待出口握手就绪失败: %w", lastErr)
+}
+
+// waitExitIPAsync 在后台继续等待出口握手就绪，成功后就地升级为 up 并保留端点。
+// 目的是避免"OpenVPN 握手比创建窗口慢"时把已经建立好的端点拆掉，
+// 否则分流规则对应的 outbound 会直接消失，且只能等健康检查的兜底重试。
+func (t *Tunnel) waitExitIPAsync(overall time.Duration) {
+	deadline := time.Now().Add(overall)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		select {
+		case <-t.ready:
+			return
+		default:
+		}
+		if ip, err := t.probeExitIP(12 * time.Second); err == nil {
+			t.mu.Lock()
+			t.ExitIP = ip
+			t.Status = "up"
+			t.Since = time.Now()
+			t.Err = ""
+			t.mu.Unlock()
+			log.Printf("出口槽位 %d (%s) 后台等待就绪成功，出口 IP 已确认为 %s", t.Slot, t.Node.HostName, ip)
+			return
+		} else {
+			lastErr = err
+		}
+		time.Sleep(3 * time.Second)
+	}
+
+	// 超过后台等待上限仍未就绪：此时才拆除端点并标记失败，交给上游换节点
+	t.mu.Lock()
+	engine := t.engine
+	host := t.Node.HostName
+	t.mu.Unlock()
+	if engine != nil {
+		engine.removeTunnel(t)
+	}
+	t.mu.Lock()
+	t.Status = "failed"
+	t.ExitIP = ""
+	if lastErr == nil {
+		lastErr = fmt.Errorf("超时")
+	}
+	t.Err = fmt.Sprintf("后台等待出口握手就绪超时: %v", lastErr)
+	t.mu.Unlock()
+	log.Printf("出口槽位 %d (%s) 后台等待就绪超时，已拆除端点并标记失败: %v", t.Slot, host, lastErr)
 }
 
 func (t *Tunnel) probeCustomExitIP() (string, error) {
