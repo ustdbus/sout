@@ -22,7 +22,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v4.0.0"
+var version = "v4.0.1"
 
 func initLowMemoryProtection() {
 	var memTotalKB int64
@@ -124,7 +124,6 @@ func main() {
 		maxSlots = flag.Int("max", 20, "最多同时运行的隧道数")
 		workDir  = flag.String("dir", "/var/lib/sout", "工作目录")
 	)
-	panelMode := flag.String("panel", "", "节点链接后端: 留空自动探测, s-ui")
 	publicIP := flag.String("ip", "", "母机公网 IPv4，用于分享链接/SOCKS5 地址；留空则自动探测")
 	showVersion := flag.Bool("version", false, "显示版本后退出")
 	flag.Parse()
@@ -160,7 +159,7 @@ func main() {
 	setPublicIPOverride(*publicIP)
 	go hostPublicIP() // 预热探测，别让首个请求阻塞
 
-	configurePanel(*workDir, *panelMode)
+	configurePanel(*workDir)
 	if p, err := openPanel(); err != nil {
 		log.Printf("节点链接后端暂不可用（可在 Web 界面查看原因）: %v", err)
 	} else {

@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -204,26 +203,22 @@ func closePanel() {
 	}
 }
 
+// panelState 只保留"自动探测"所需状态：forced 字段已随切换入口的移除而废弃。
 var panelState struct {
 	mu      sync.Mutex
 	current Panel
 	workDir string
-	forced  string
 }
 
 func panelModeFile(dir string) string { return filepath.Join(dir, "panel_mode") }
 
-func configurePanel(workDir, mode string) {
+// configurePanel 记录工作目录并清空缓存。
+// 模式不支持强制指定：始终由 DetectSUI/DetectSingBox 自动探测决定，
+// 所以这里只重置缓存，不再接收 mode 参数（原 -panel 参数已随之移除）。
+func configurePanel(workDir string) {
 	panelState.mu.Lock()
 	defer panelState.mu.Unlock()
 	panelState.workDir = workDir
-	if mode == "" {
-		blob, err := os.ReadFile(panelModeFile(workDir))
-		if err == nil {
-			mode = strings.TrimSpace(string(blob))
-		}
-	}
-	panelState.forced = mode
 	panelState.current = nil
 }
 
@@ -249,24 +244,7 @@ func openPanel() (Panel, error) {
 		return panelState.current, nil
 	}
 
-	switch panelState.forced {
-	case "s-ui":
-		s, err := DetectSUI(panelState.workDir)
-		if err != nil {
-			return nil, fmt.Errorf("指定了 s-ui 模式但探测失败: %w", err)
-		}
-		panelState.current = s
-		return s, nil
-	case "sing-box":
-		sb, err := DetectSingBox(panelState.workDir)
-		if err != nil {
-			return nil, fmt.Errorf("指定了 sing-box 模式但探测失败: %w", err)
-		}
-		panelState.current = sb
-		return sb, nil
-	}
-
-	// 自动探测：先看是否存在 s-ui，再看 sing-box
+	// 自动探测：先看是否存在 s-ui，再看 sing-box（唯一判定路径）
 	if s, err := DetectSUI(panelState.workDir); err == nil {
 		panelState.current = s
 		_ = savePanelMode(panelState.workDir, "s-ui")
@@ -281,66 +259,3 @@ func openPanel() (Panel, error) {
 	return nil, fmt.Errorf("未检测到支持的后端（请先安装 sing-box 内核或 s-ui 面板）")
 }
 
-func currentPanelMode() string {
-	panelState.mu.Lock()
-	defer panelState.mu.Unlock()
-	if panelState.forced != "" {
-		return panelState.forced
-	}
-	if panelState.current != nil {
-		return panelState.current.Kind()
-	}
-	return ""
-}
-
-func availablePanelModes(workDir string) []map[string]any {
-	modes := []map[string]any{}
-
-	sbOK, sbReason := true, ""
-	if _, err := DetectSingBox(workDir); err != nil {
-		sbOK, sbReason = false, err.Error()
-	}
-	modes = append(modes, map[string]any{"mode": "sing-box", "label": "sing-box 原生内核", "available": sbOK, "reason": sbReason})
-
-	suiOK, suiReason := true, ""
-	if _, err := DetectSUI(workDir); err != nil {
-		suiOK, suiReason = false, err.Error()
-	}
-	modes = append(modes, map[string]any{"mode": "s-ui", "label": "s-ui 面板 (sing-box)", "available": suiOK, "reason": suiReason})
-
-	return modes
-}
-
-func switchPanelMode(mode string) (Panel, error) {
-	switch mode {
-	case "", "sing-box", "s-ui":
-	default:
-		return nil, fmt.Errorf("未知后端模式 %q", mode)
-	}
-
-	panelState.mu.Lock()
-	old := panelState.current
-	workDir := panelState.workDir
-	panelState.mu.Unlock()
-	if old != nil {
-		old.Close()
-	}
-
-	panelState.mu.Lock()
-	panelState.forced = mode
-	panelState.current = nil
-	panelState.mu.Unlock()
-
-	p, err := openPanel()
-	if err != nil {
-		panelState.mu.Lock()
-		panelState.forced = ""
-		panelState.current = nil
-		panelState.mu.Unlock()
-		return nil, err
-	}
-	if err := savePanelMode(workDir, mode); err != nil {
-		log.Printf("记录后端模式失败: %v", err)
-	}
-	return p, nil
-}
