@@ -639,7 +639,8 @@ ${k} = ${v}"
     [[ -n "$k" ]] || continue
     local p cur
     p="/proc/sys/$(echo "$k" | tr '.' '/')"
-    cur=$(cat "$p" 2>/dev/null | tr -s ' ' ' ' | sed 's/ *$//')
+    # udp_mem 这类多值参数内核以制表符分隔，先统一成单空格再比较
+    cur=$(cat "$p" 2>/dev/null | tr -s ' \t' ' ' | sed 's/^ *//; s/ *$//')
     if [[ "$cur" == "$v" ]]; then
       ok=$(( ok + 1 ))
     else
