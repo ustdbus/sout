@@ -87,16 +87,22 @@ func LoadBasePath(dir string) (string, bool, error) {
 	return normalizeBasePath(bp), true, nil
 }
 
-func randomBasePath(n int) (string, error) {
+// randomString 用 crypto/rand 生成 n 个字符的随机串。
+// alphabet 决定字符集：访问路径与凭据的字符集不同（见各自常量注释）。
+func randomString(n int, alphabet string) (string, error) {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
 	out := make([]byte, n)
 	for i, v := range b {
-		out[i] = basePathAlphabet[int(v)%len(basePathAlphabet)]
+		out[i] = alphabet[int(v)%len(alphabet)]
 	}
 	return string(out), nil
+}
+
+func randomBasePath(n int) (string, error) {
+	return randomString(n, basePathAlphabet)
 }
 
 func normalizeBasePath(bp string) string {

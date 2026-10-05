@@ -637,16 +637,7 @@ func (m *Manager) Swap(slot int) error {
 	return nil
 }
 
-func (m *Manager) StopAll() {
-	for _, t := range m.Tunnels() {
-		_ = m.Stop(t.Slot)
-	}
-}
 
-func (m *Manager) SetCred(slot int, cred SocksCred) (SocksCred, error) {
-	c, _, err := m.UpdateTunnelConfig(slot, cred, 0)
-	return c, err
-}
 
 func (m *Manager) UpdateTunnelConfig(slot int, cred SocksCred, newPort int) (SocksCred, int, error) {
 	m.mu.RLock()

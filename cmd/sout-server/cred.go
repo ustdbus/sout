@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
 	"fmt"
 	"strings"
 )
@@ -30,15 +29,7 @@ func newSocksCred() (SocksCred, error) {
 }
 
 func randomCredString(n int) (string, error) {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	out := make([]byte, n)
-	for i, v := range b {
-		out[i] = credAlphabet[int(v)%len(credAlphabet)]
-	}
-	return string(out), nil
+	return randomString(n, credAlphabet)
 }
 
 // validateCred 校验用户填的凭据。

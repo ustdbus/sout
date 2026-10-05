@@ -922,40 +922,6 @@ func apiXUIStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func apiPanelMode(workDir string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			var in struct {
-				Mode string `json:"mode"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误"})
-				return
-			}
-			p, err := switchPanelMode(in.Mode)
-			if err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-				return
-			}
-			invalidateInbounds()
-			writeJSON(w, http.StatusOK, map[string]any{
-				"mode":     currentPanelMode(),
-				"kind":     p.Kind(),
-				"describe": p.Describe(),
-			})
-			return
-		}
-		resp := map[string]any{
-			"mode":  currentPanelMode(),
-			"modes": availablePanelModes(workDir),
-		}
-		if p, err := openPanel(); err == nil {
-			resp["kind"] = p.Kind()
-			resp["describe"] = p.Describe()
-		}
-		writeJSON(w, http.StatusOK, resp)
-	}
-}
 
 func apiXUIInbounds(m *Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

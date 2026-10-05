@@ -63,22 +63,6 @@ func localSUIClient() *http.Client {
 	}
 }
 
-func suiRunning() bool {
-	if hasCmd("systemctl") && dirExists("/run/systemd/system") {
-		if exec.Command("systemctl", "is-active", "--quiet", "s-ui").Run() == nil {
-			return true
-		}
-	}
-	if hasCmd("rc-service") {
-		if exec.Command("rc-service", "s-ui", "status").Run() == nil {
-			return true
-		}
-	}
-	if exec.Command("pgrep", "-x", "sui").Run() == nil {
-		return true
-	}
-	return false
-}
 
 func restartSUI() {
 	if hasCmd("systemctl") && dirExists("/run/systemd/system") {
@@ -127,10 +111,6 @@ func runSQLiteJSON(dbPath string, query string) ([]byte, error) {
 	return nil, fmt.Errorf("未找到 sqlite3 或 python3 工具")
 }
 
-func (s *SUI) sqliteQuery(query string) string {
-	res, _ := runSQLite(s.dbPath, query)
-	return res
-}
 
 func (s *SUI) sqliteJSONQuery(query string) ([]byte, error) {
 	return runSQLiteJSON(s.dbPath, query)
@@ -1197,18 +1177,6 @@ func (s *SUI) restartSingBox() {
 	_, _ = s.callAPI(http.MethodPost, "restartSb", nil)
 }
 
-func (s *SUI) restartSUI() {
-	if hasCmd("systemctl") && dirExists("/run/systemd/system") {
-		_ = exec.Command("systemctl", "restart", "s-ui").Run()
-	} else if hasCmd("rc-service") {
-		_ = exec.Command("rc-service", "s-ui", "stop").Run()
-		_ = exec.Command("rc-service", "s-ui", "zap").Run()
-		time.Sleep(300 * time.Millisecond)
-		_ = exec.Command("rc-service", "s-ui", "start").Run()
-	} else {
-		_ = exec.Command("service", "s-ui", "restart").Run()
-	}
-}
 
 func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {
 	outboundsObj, err := s.callAPI(http.MethodGet, "outbounds", nil)
@@ -3227,9 +3195,6 @@ func (s *SUI) UpdateInbound(id int, patch InboundPatch, tunnels []*Tunnel) error
 	return nil
 }
 
-func sqliteQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
-}
 
 func (s *SUI) NodeDetail(id int) (*NodeDetailInfo, error) {
 	inboundsObj, err := s.callAPI(http.MethodGet, fmt.Sprintf("inbounds?id=%d", id), nil)
