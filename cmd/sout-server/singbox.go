@@ -2319,47 +2319,27 @@ func (sb *SingBox) NodeDetail(id int) (*NodeDetailInfo, error) {
 		addrs = []NodeAddrItem{}
 	}
 
-	// 自动回显连接地址：
-	// - 隧道/Argo 节点(listen=127.0.0.1)：只能连隧道域名，不回显裸 IP
-	// - 直连节点(REALITY / TUIC / Hysteria2 等)：回显本机公网地址，IPv4 与 IPv6
-	//   缺哪个补哪个（已有记录但只有 IPv4 时，把 IPv6 补上；反之亦然）
-	isTunnelNode := listen == "127.0.0.1" && sni != ""
-	if isTunnelNode {
-		if len(addrs) == 0 {
-			addrs = append(addrs, NodeAddrItem{Server: sni, ServerPort: 443})
-		}
-	} else if port > 0 {
-		if len(addrs) == 0 {
+	// 若未记录 addrs，自动根据节点类型回显连接地址
+	// 双栈处理：本机有公网 IPv4 / IPv6 就分别回显；只有一个就只回显那一个；都没有则留空
+	if len(addrs) == 0 {
+		if sni != "" && listen == "127.0.0.1" {
+			// 隧道/Argo 节点：客户端应连隧道域名
+			addrs = append(addrs, NodeAddrItem{
+				Server:     sni,
+				ServerPort: 443,
+			})
+		} else if port > 0 {
+			// 直连公网节点（TUIC、Hysteria2、Reality 等）：自动识别母机公网地址并回显
 			v4 := hostPublicIP()
 			v6 := hostPublicIPv6()
+			if v4 == "" && v6 == "" && sni != "" && net.ParseIP(sni) == nil {
+				v4 = sni
+			}
 			if v4 != "" {
 				addrs = append(addrs, NodeAddrItem{Server: v4, ServerPort: port})
 			}
 			if v6 != "" {
 				addrs = append(addrs, NodeAddrItem{Server: v6, ServerPort: port})
-			}
-		} else {
-			hasV4, hasV6 := false, false
-			for _, a := range addrs {
-				ip := net.ParseIP(a.Server)
-				if ip == nil {
-					continue
-				}
-				if ip.To4() != nil {
-					hasV4 = true
-				} else {
-					hasV6 = true
-				}
-			}
-			if !hasV4 {
-				if v4 := hostPublicIP(); v4 != "" {
-					addrs = append(addrs, NodeAddrItem{Server: v4, ServerPort: port})
-				}
-			}
-			if !hasV6 {
-				if v6 := hostPublicIPv6(); v6 != "" {
-					addrs = append(addrs, NodeAddrItem{Server: v6, ServerPort: port})
-				}
 			}
 		}
 	}
