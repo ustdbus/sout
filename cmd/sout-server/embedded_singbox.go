@@ -313,10 +313,23 @@ func wireguardEndpoint(configJSON, tag string) (map[string]any, error) {
 
 	peerAddress := server
 	if net.ParseIP(server) == nil {
-		if addrs, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip4", server); err == nil && len(addrs) > 0 {
-			peerAddress = addrs[0].String()
-		} else if server == "engage.cloudflareclient.com" {
-			peerAddress = "162.159.192.1"
+		if server == "engage.cloudflareclient.com" {
+			if systemSupportsIPv6() {
+				// 双栈/纯 IPv6 环境下优先使用官方 IPv6 端点，避免 NAT 母机 IPv4 UDP 丢包阻断
+				peerAddress = "2606:4700:d0::a29f:c001"
+			} else {
+				peerAddress = "162.159.192.1"
+			}
+		} else {
+			targetProto := "ip4"
+			if systemSupportsIPv6() && hostPublicIP() == "" {
+				targetProto = "ip6"
+			}
+			if addrs, err := net.DefaultResolver.LookupNetIP(context.Background(), targetProto, server); err == nil && len(addrs) > 0 {
+				peerAddress = addrs[0].String()
+			} else if addrs, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip", server); err == nil && len(addrs) > 0 {
+				peerAddress = addrs[0].String()
+			}
 		}
 	}
 
