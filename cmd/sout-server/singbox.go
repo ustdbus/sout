@@ -1878,28 +1878,47 @@ func (sb *SingBox) syncOutboundsInternal(cfg map[string]any, tunnels []*Tunnel) 
 	// 如果某条路由规则指向的 outbound 为 "sout" 开头，但不在任何有效隧道及持久化绑定中，说明该出口已被彻底删除
 	orphanUsers := make(map[string]bool)
 	routeRaw, _ := cfg["route"].(map[string]any)
-	if routeRaw != nil {
-		rulesRaw, _ := routeRaw["rules"].([]any)
-		var keptRules []any
-		for _, r := range rulesRaw {
-			if rMap, ok := r.(map[string]any); ok {
-				ob, _ := rMap["outbound"].(string)
-				if strings.HasPrefix(ob, "sout") && !validSoutTags[ob] {
-					// 孤儿规则：收集待清理的用户
-					if authUsers, ok := rMap["auth_user"].([]any); ok {
-						for _, u := range authUsers {
-							if uStr, ok := u.(string); ok {
-								orphanUsers[uStr] = true
-							}
+	if routeRaw == nil {
+		routeRaw = map[string]any{"rules": []any{}}
+		cfg["route"] = routeRaw
+	}
+
+	// 全局前置链式出站自适应：
+	// 若存在已激活且运行中的全局前置链隧道 (例如 WARP)，基础直连默认路由 (route.final) 自动重定向至该前置链 SOCKS5 出站 (vps→warp→目标网站)；
+	// 若未开启前置链或已取消，恢复默认 "direct" 直连原生出站。
+	var chainTunnel *Tunnel
+	for _, t := range tunnels {
+		if t.IsChainUpstream && t.Status == "up" {
+			chainTunnel = t
+			break
+		}
+	}
+	if chainTunnel != nil {
+		routeRaw["final"] = "sout" + sanitizeTag(chainTunnel.Node.HostName)
+	} else {
+		routeRaw["final"] = "direct"
+	}
+
+	rulesRaw, _ := routeRaw["rules"].([]any)
+	var keptRules []any
+	for _, r := range rulesRaw {
+		if rMap, ok := r.(map[string]any); ok {
+			ob, _ := rMap["outbound"].(string)
+			if strings.HasPrefix(ob, "sout") && !validSoutTags[ob] {
+				// 孤儿规则：收集待清理的用户
+				if authUsers, ok := rMap["auth_user"].([]any); ok {
+					for _, u := range authUsers {
+						if uStr, ok := u.(string); ok {
+							orphanUsers[uStr] = true
 						}
 					}
-					continue // 丢弃孤儿路由规则
 				}
+				continue // 丢弃孤儿路由规则
 			}
-			keptRules = append(keptRules, r)
 		}
-		routeRaw["rules"] = keptRules
+		keptRules = append(keptRules, r)
 	}
+	routeRaw["rules"] = keptRules
 
 	// 建立有效用户路由映射
 	validRoutedUsers := make(map[string]bool)

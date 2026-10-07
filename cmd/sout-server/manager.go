@@ -597,6 +597,9 @@ func (m *Manager) ToggleChainUpstream(slot int) (bool, error) {
 		log.Printf("保存状态失败: %v", err)
 	}
 
+	// 关键补齐：通知主面板 (sing-box / s-ui) 同步出站并使基础直连路由 (route.final) 即时生效
+	m.notifyPanel()
+
 	return newState, nil
 }
 
