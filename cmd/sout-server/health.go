@@ -6,8 +6,8 @@ import (
 )
 
 const (
-	healthInterval = 15 * time.Second
-	healthFailures = 3 // 连续失败 3 次才判定掉线，避免网络抖动或公共 API 限流误杀
+	healthInterval = 45 * time.Second
+	healthFailures = 4 // 连续失败 4 次才判定掉线，平缓网络抖动与探测并发，消除 I/O 堵塞
 	healthTimeout  = 8 * time.Second
 )
 
@@ -48,8 +48,8 @@ func (m *Manager) WatchHealth() {
 				continue
 			}
 
-			if t.Kind == "custom" && (t.TargetSourceID == "" || t.TargetSourceID == "custom") {
-				log.Printf("自定义隧道 %d (%s) 探测未通过，正在原地重新建立连接...", t.Slot, t.Node.HostName)
+			if t.Kind == "custom" && (t.TargetSourceID == "" || t.TargetSourceID == "custom" || t.TargetSourceID == "preset-warp" || t.TargetSourceID == "warp" || t.Node.Protocol == "wireguard" || t.CustomProto == "wireguard") {
+				log.Printf("自定义/WARP 隧道 %d (%s) 探测未通过，正在原地重新建立连接...", t.Slot, t.Node.HostName)
 				fails[t.Slot] = 0
 				t.stop()
 				go m.bringUp(t, false)

@@ -62,8 +62,8 @@ func (b *RingLogBuffer) Get(max int) string {
 	return strings.Join(b.lines[start:], "\n")
 }
 
-// 单个日志文件上限 4MB，保留 1 份备份 => 单个文件最多占用约 8MB。
-const logRotateMaxBytes = 4 * 1024 * 1024
+// 单个日志文件上限 1MB，保留 1 份备份 => 单个文件最多占用约 2MB，防止容器磁盘 I/O 阻塞。
+const logRotateMaxBytes = 1 * 1024 * 1024
 
 // rotatingLogWriter 追加写入日志文件，超过阈值时把当前文件改名为 .1 后重新开始。
 // 目的是避免无 systemd 环境下 stdout/stderr 被 OpenRC 重定向到文件后无限增长。
@@ -149,8 +149,8 @@ func logFileWriter(stream *os.File) io.Writer {
 func initLogCapture() {
 	writers := []io.Writer{os.Stdout, os.Stderr, globalLogBuffer}
 	if fw := logFileWriter(os.Stderr); fw != nil {
-		// 已被重定向到文件：由轮转写入器负责落盘，避免同一份日志重复写两次
-		writers = []io.Writer{os.Stdout, fw, globalLogBuffer}
+		// 已被重定向到文件：仅由轮转写入器与内存缓冲接管，避免同一份日志向同一文件写入两次
+		writers = []io.Writer{fw, globalLogBuffer}
 	}
 	log.SetOutput(io.MultiWriter(writers...))
 }

@@ -380,6 +380,9 @@ func (m *Manager) tryCandidates(t *Tunnel, notify bool) bool {
 		// 记录失败节点到历史中，避免死循环选中
 		t.recordHost(node.HostName)
 		log.Printf("槽位 %d 尝试候选节点 %d/%d: %s (%s, %s) 失败: %v", t.Slot, i+1, len(candidates), node.HostName, node.IP, node.CountryCode, err)
+		if i+1 < len(candidates) {
+			time.Sleep(1500 * time.Millisecond) // 平缓退避，防止连环高频重试压垮容器 I/O
+		}
 	}
 	return false
 }
@@ -411,7 +414,7 @@ func (m *Manager) tryNode(t *Tunnel) error {
 }
 
 func (m *Manager) candidatesFor(t *Tunnel) []Node {
-	const maxTries = 30
+	const maxTries = 10
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 

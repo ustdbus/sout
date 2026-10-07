@@ -103,7 +103,7 @@ func newEmbeddedEngine(listenIP string) (*embeddedEngine, error) {
 	box, err := sbox.New(sbox.Options{
 		Context: ctx,
 		Options: option.Options{
-			Log: &option.LogOptions{Level: "warn", Timestamp: true},
+			Log: &option.LogOptions{Level: "fatal", Timestamp: true},
 			Outbounds: []option.Outbound{{
 				Type:    soutDynamicOutboundType,
 				Tag:     soutDynamicOutboundType,

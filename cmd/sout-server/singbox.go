@@ -462,7 +462,7 @@ func initDefaultSingBoxConfig(path string) error {
 	}
 	defaultCfg := map[string]any{
 		"log": map[string]any{
-			"level":     "info",
+			"level":     "warn",
 			"timestamp": true,
 		},
 		"inbounds": []any{},
