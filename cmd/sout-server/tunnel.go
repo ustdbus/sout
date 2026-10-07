@@ -170,8 +170,8 @@ func (t *Tunnel) start(dir string) error {
 		return err
 	}
 
-	// 轮询等待 OpenVPN endpoint 握手完成并探测出口真实 IP (最多等待 12 秒)
-	exitIP, err := t.waitExitIP(12 * time.Second)
+	// 轮询等待出口 endpoint 握手完成并探测出口真实 IP (最多等待 25 秒)
+	exitIP, err := t.waitExitIP(25 * time.Second)
 	if err != nil {
 		if engine != nil {
 			engine.removeTunnel(t)
@@ -228,7 +228,7 @@ func (t *Tunnel) probeExitIP(timeout time.Duration) (string, error) {
 	// 否则单个不可达的源会吃光整个等待预算，导致 SOCKS5 回退永远执行不到。
 	const perSource = 2500 * time.Millisecond
 	var lastErr error
-	for _, u := range []string{"http://checkip.amazonaws.com", "http://icanhazip.com", "http://api.ipify.org", "http://ifconfig.me/ip", "https://api.ipify.org"} {
+	for _, u := range []string{"http://whatismyip.akamai.com", "http://checkip.amazonaws.com", "http://icanhazip.com", "http://api.ipify.org", "http://ifconfig.me/ip", "https://api.ipify.org"} {
 		ip, err := t.probeViaHTTP(u, perSource)
 		if err == nil && ip != "" {
 			return ip, nil
@@ -285,10 +285,10 @@ func (t *Tunnel) waitExitIP(timeout time.Duration) (string, error) {
 	for time.Now().Before(deadline) {
 		// 首次探测紧凑重试（首轮很快，用于"创建时就能立刻就绪"的快路径）
 		if !first {
-			time.Sleep(1500 * time.Millisecond)
+			time.Sleep(800 * time.Millisecond)
 		}
 		first = false
-		if ip, err := t.probeExitIP(12 * time.Second); err == nil {
+		if ip, err := t.probeExitIP(2500 * time.Millisecond); err == nil {
 			return ip, nil
 		} else {
 			lastErr = err
@@ -322,7 +322,7 @@ func (t *Tunnel) probeCustomExitIP() (string, error) {
 		Timeout:   10 * time.Second,
 	}
 
-	for _, u := range []string{"http://checkip.amazonaws.com", "https://checkip.amazonaws.com", "http://ifconfig.me", "http://icanhazip.com", "http://api.ipify.org"} {
+	for _, u := range []string{"http://whatismyip.akamai.com", "http://checkip.amazonaws.com", "https://checkip.amazonaws.com", "http://ifconfig.me", "http://icanhazip.com", "http://api.ipify.org"} {
 		resp, err := client.Get(u)
 		if err != nil {
 			continue
