@@ -2400,6 +2400,9 @@ func RegisterWARPAccount() (*CustomNode, error) {
 	}
 
 	server := "engage.cloudflareclient.com"
+	if systemSupportsIPv6() {
+		server = "2606:4700:d0::a29f:c001"
+	}
 	port := 2408
 	tag := "WARP"
 

@@ -331,6 +331,11 @@ func wireguardEndpoint(configJSON, tag string) (map[string]any, error) {
 				peerAddress = addrs[0].String()
 			}
 		}
+	} else if systemSupportsIPv6() {
+		// 若已指定为 Cloudflare IPv4 官方端点，但在支持 IPv6 的母机上，自适应切换为官方 IPv6 端点，避免 NAT 母机 UDP 黑洞导致的卡死
+		if server == "162.159.192.1" || server == "162.159.193.1" || server == "162.159.195.1" {
+			peerAddress = "2606:4700:d0::a29f:c001"
+		}
 	}
 
 	peer := map[string]any{
