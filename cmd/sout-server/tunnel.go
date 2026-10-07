@@ -170,28 +170,25 @@ func (t *Tunnel) start(dir string) error {
 		return err
 	}
 
-	// 先做一次"快路径"探测：命中则立刻 up（绝大多数情况）
+	// 轮询等待 OpenVPN endpoint 握手完成并探测出口真实 IP (最多等待 12 秒)
 	exitIP, err := t.waitExitIP(12 * time.Second)
-	if err == nil {
+	if err != nil {
+		if engine != nil {
+			engine.removeTunnel(t)
+		}
 		t.mu.Lock()
-		t.ExitIP = exitIP
-		t.Status = "up"
-		t.Since = time.Now()
-		t.Err = ""
+		t.Status = "failed"
+		t.Err = fmt.Sprintf("探测出口 IP 失败: %v", err)
 		t.mu.Unlock()
-		return nil
+		return err
 	}
 
-	// 握手比创建窗口慢：不要拆掉已经建立的端点，
-	// 保留端点转入后台继续等待，期间状态为 starting（健康检查只对 up 探活，不会误杀）。
 	t.mu.Lock()
-	t.markReadyLocked()
-	t.ready = make(chan struct{})
-	t.Status = "starting"
-	t.Err = fmt.Sprintf("出口握手进行中，后台继续等待就绪（上次探测: %v）", err)
+	t.ExitIP = exitIP
+	t.Status = "up"
+	t.Since = time.Now()
+	t.Err = ""
 	t.mu.Unlock()
-	log.Printf("出口槽位 %d (%s) 创建时握手未完成，保留端点转后台等待就绪", t.Slot, t.Node.HostName)
-	go t.waitExitIPAsync(5 * time.Minute)
 	return nil
 }
 
@@ -303,51 +300,6 @@ func (t *Tunnel) waitExitIP(timeout time.Duration) (string, error) {
 	return "", fmt.Errorf("等待出口握手就绪失败: %w", lastErr)
 }
 
-// waitExitIPAsync 在后台继续等待出口握手就绪，成功后就地升级为 up 并保留端点。
-// 目的是避免"OpenVPN 握手比创建窗口慢"时把已经建立好的端点拆掉，
-// 否则分流规则对应的 outbound 会直接消失，且只能等健康检查的兜底重试。
-func (t *Tunnel) waitExitIPAsync(overall time.Duration) {
-	deadline := time.Now().Add(overall)
-	var lastErr error
-	for time.Now().Before(deadline) {
-		select {
-		case <-t.ready:
-			return
-		default:
-		}
-		if ip, err := t.probeExitIP(12 * time.Second); err == nil {
-			t.mu.Lock()
-			t.ExitIP = ip
-			t.Status = "up"
-			t.Since = time.Now()
-			t.Err = ""
-			t.mu.Unlock()
-			log.Printf("出口槽位 %d (%s) 后台等待就绪成功，出口 IP 已确认为 %s", t.Slot, t.Node.HostName, ip)
-			return
-		} else {
-			lastErr = err
-		}
-		time.Sleep(3 * time.Second)
-	}
-
-	// 超过后台等待上限仍未就绪：此时才拆除端点并标记失败，交给上游换节点
-	t.mu.Lock()
-	engine := t.engine
-	host := t.Node.HostName
-	t.mu.Unlock()
-	if engine != nil {
-		engine.removeTunnel(t)
-	}
-	t.mu.Lock()
-	t.Status = "failed"
-	t.ExitIP = ""
-	if lastErr == nil {
-		lastErr = fmt.Errorf("超时")
-	}
-	t.Err = fmt.Sprintf("后台等待出口握手就绪超时: %v", lastErr)
-	t.mu.Unlock()
-	log.Printf("出口槽位 %d (%s) 后台等待就绪超时，已拆除端点并标记失败: %v", t.Slot, host, lastErr)
-}
 
 func (t *Tunnel) probeCustomExitIP() (string, error) {
 	// 自定义代理通过本地监听端口建立 HTTP 客户端探测
