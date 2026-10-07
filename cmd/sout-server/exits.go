@@ -39,6 +39,7 @@ type Exit struct {
 	ISP        string        `json:"isp,omitempty"`
 	SourceName string        `json:"source_name,omitempty"`
 	Protocol   string        `json:"protocol,omitempty"` // "wireguard" | "https" | "http" | "openvpn" | "socks5"
+	IsChainUpstream bool     `json:"is_chain_upstream"`
 }
 
 // NodeBranch 是某个节点下的一个分流分支（如直连分支、日本家宽分支等）
@@ -281,6 +282,7 @@ func (m *Manager) ExitsOf() ExitsView {
 			ISP:        t.ISP,
 			SourceName: sourceName,
 			Protocol:   proto,
+			IsChainUpstream: t.IsChainUpstream,
 		})
 	}
 

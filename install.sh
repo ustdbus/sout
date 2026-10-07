@@ -812,7 +812,7 @@ EOF
 
   # 分支 A：若存在有效 Swap (has_swap=1，德邦模式)
   if [[ "$has_swap" -eq 1 ]]; then
-    echo "      检测到有效 Swap 缓冲，启用零限制全速原生 Go 运行时配置 (德邦模式)"
+    echo "      检测到有效 Swap 缓冲，启用零限制全速原生 Go 运行时配置"
     if [[ -d /run/systemd/system ]]; then
       for svc in cloudflared sing-box caddy sout s-ui; do
         if [[ -f "/etc/systemd/system/${svc}.service.d/override.conf" ]]; then
@@ -839,7 +839,7 @@ EOF
 
   # 分支 B：若不存在有效 Swap (has_swap=0，阿尔法安全模式，仅针对 128M 左右即 <=180MB 机型，预留 >=15% 物理内存防爆隔离区；GOGC 保持 Go 默认 100；>180MB 则保持原生默认不设限)
   if [[ $mem_mb -le 180 ]]; then
-    echo "      检测到无 Swap 极小内存环境 (${mem_mb} MB <= 180 MB)，为确保留足 15% 系统安全防爆余量，启用精细分层内存防护 (阿尔法安全模式)"
+    echo "      检测到无 Swap 极小内存环境 (${mem_mb} MB <= 180 MB)，为确保留足 15% 系统安全防爆余量，启用精细分层内存防护"
 
     local cf_memlimit="35MiB"
     local cf_gogc="100"
@@ -1524,6 +1524,59 @@ for _ in $(seq 1 10); do
   sleep 1
 done
 
+# 纯 IPv6 小鸡自愈流水线检测与初始化
+is_pure_ipv6=0
+has_v4=0
+has_v6=0
+if curl -s4m 3 https://api.ipify.org >/dev/null 2>&1 || curl -s4m 3 https://checkip.amazonaws.com >/dev/null 2>&1; then
+  has_v4=1
+fi
+if curl -s6m 3 https://api64.ipify.org >/dev/null 2>&1 || curl -s6m 3 https://ipv6.icanhazip.com >/dev/null 2>&1; then
+  has_v6=1
+fi
+if [[ "$has_v4" -eq 0 && "$has_v6" -eq 1 ]]; then
+  is_pure_ipv6=1
+fi
+
+if [[ "$is_pure_ipv6" -eq 1 ]]; then
+  echo "  [+] 检测到当前服务器为纯 IPv6 环境 (无原生公网 IPv4)"
+  echo "      正在自动申请注册 Cloudflare WARP 账号并建立前置出口隧道..."
+  sout_pw=$(cat "${WORK_DIR}/password" 2>/dev/null | tr -d ' \r\n')
+  cur_port=$(json_get "${WORK_DIR}/settings.json" port)
+  cur_port="${cur_port:-8899}"
+
+  # 1. 注册 WARP
+  warp_gen_res=$(curl -s -X POST -H "X-Sout-Password: ${sout_pw}" "http://127.0.0.1:${cur_port}/api/custom/warp/generate" 2>/dev/null || true)
+  if echo "$warp_gen_res" | grep -q '"ok":true'; then
+    echo "      WARP 节点账号申请成功，正在挂载为出口隧道..."
+    # 2. 导入为出口
+    import_res=$(curl -s -X POST -H "X-Sout-Password: ${sout_pw}" "http://127.0.0.1:${cur_port}/api/custom/source/import?id=preset-warp" 2>/dev/null || true)
+    slot_num=$(echo "$import_res" | grep -o '"slot":[0-9]*' | cut -d: -f2)
+    if [[ -n "$slot_num" ]]; then
+      # 3. 设为全局前置链式出站
+      toggle_res=$(curl -s -X POST -H "X-Sout-Password: ${sout_pw}" "http://127.0.0.1:${cur_port}/api/exit/chain_toggle?slot=${slot_num}" 2>/dev/null || true)
+      if echo "$toggle_res" | grep -q '"active":true'; then
+        echo "      已成功将 WARP 出口 (槽位 ${slot_num}) 设为全局前置链式出站，赋予全系统 IPv4 出口互联能力！"
+      fi
+    fi
+  else
+    echo "      WARP 注册请求跳过或暂不可用"
+  fi
+
+  # 4. 检查 NAT64 / DNS64 并恢复为常规公共 DNS
+  if grep -qE '(2001:67c:2b0|2a00:1098:2b|2a01:4f8|2a01:4f9|2606:4700:4700::64|2001:4860:4860::64)' /etc/resolv.conf 2>/dev/null; then
+    echo "      检测到安装前配置了 NAT64 / DNS64，正在恢复为常规公共 DNS..."
+    cp /etc/resolv.conf /etc/resolv.conf.bak.sout 2>/dev/null || true
+    cat << 'EOF' > /etc/resolv.conf
+nameserver 2606:4700:4700::1111
+nameserver 2001:4860:4860::8888
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+EOF
+    echo "      已恢复 /etc/resolv.conf 为官方常规公共 DNS (Cloudflare & Google)"
+  fi
+fi
+
 # 如果用户选择开启隧道（无论是自定义域名+Token，还是直接回车开启免费临时隧道）
 if [[ "$WANT_TUNNEL" == "y" ]]; then
   echo
@@ -1539,7 +1592,13 @@ if [[ "$WANT_TUNNEL" == "y" ]]; then
   exit 0
 fi
 
-IP=$(curl -s4m 5 https://checkip.amazonaws.com || curl -s4m 5 https://api.ipify.org || curl -s4m 5 https://ifconfig.me || echo "127.0.0.1")
+IP=$(curl -s4m 5 https://checkip.amazonaws.com || curl -s4m 5 https://api.ipify.org || curl -s4m 5 https://ifconfig.me || echo "")
+if [[ -z "$IP" ]]; then
+  IP=$(curl -s6m 5 https://ipv6.icanhazip.com || curl -s6m 5 https://api64.ipify.org || echo "127.0.0.1")
+  if [[ "$IP" =~ : ]]; then
+    IP="[${IP}]"
+  fi
+fi
 BP=$(cat "${WORK_DIR}/basepath" 2>/dev/null | tr -d ' \r\n')
 BP="/${BP#/}"
 BP="${BP%/}/"

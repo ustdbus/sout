@@ -48,6 +48,7 @@ type Tunnel struct {
 	TargetRegion   string    `json:"target_region,omitempty"`    // 国家代码或源 (如 "US", "JP", "ALL")
 	TargetSourceID string    `json:"target_source_id,omitempty"` // 源 ID
 	HistoryHosts   []string  `json:"history_hosts,omitempty"`
+	IsChainUpstream bool     `json:"is_chain_upstream,omitempty"`
 
 	engine      *embeddedEngine
 	listener    net.Listener

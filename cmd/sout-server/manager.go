@@ -59,7 +59,8 @@ type Manager struct {
 	workDir  string
 	maxSlots int
 	jobs     JobStore
-	engine   *embeddedEngine
+	engine            *embeddedEngine
+	chainUpstreamSlot int
 
 	syncMu       sync.Mutex
 	syncedExitIP map[int]string // 记录已同步过 outbounds 的出口状态（slot -> exitIP/status）
@@ -552,6 +553,53 @@ func (m *Manager) candidatesFor(t *Tunnel) []Node {
 	return out
 }
 
+// ToggleChainUpstream 切换指定槽位出口为全局前置链式出站节点（全局单选互斥）
+func (m *Manager) ToggleChainUpstream(slot int) (bool, error) {
+	m.mu.Lock()
+	t, ok := m.tunnels[slot]
+	if !ok {
+		m.mu.Unlock()
+		return false, fmt.Errorf("槽位 %d 的出口隧道不存在", slot)
+	}
+
+	var newUpstreamTag string
+	var newState bool
+	if t.IsChainUpstream {
+		t.IsChainUpstream = false
+		m.chainUpstreamSlot = 0
+		newState = false
+		newUpstreamTag = ""
+	} else {
+		for s, other := range m.tunnels {
+			if s != slot {
+				other.IsChainUpstream = false
+			}
+		}
+		t.IsChainUpstream = true
+		m.chainUpstreamSlot = slot
+		newState = true
+		isWG := t.CustomProto == "wireguard" || t.Node.Protocol == "wireguard"
+		if isWG {
+			newUpstreamTag = fmt.Sprintf("soutwireguard%d", slot)
+		} else {
+			newUpstreamTag = fmt.Sprintf("soutopenvpn%d", slot)
+		}
+	}
+	m.mu.Unlock()
+
+	// 通知内嵌引擎更新全局前置链标签并热重载受影响的隧道
+	if m.engine != nil {
+		m.engine.setChainUpstream(newUpstreamTag)
+	}
+
+	// 保存状态
+	if err := m.saveState(); err != nil {
+		log.Printf("保存状态失败: %v", err)
+	}
+
+	return newState, nil
+}
+
 func (m *Manager) Stop(slot int) error {
 	m.mu.Lock()
 	t, ok := m.tunnels[slot]
@@ -563,6 +611,12 @@ func (m *Manager) Stop(slot int) error {
 		return fmt.Errorf("槽位 %d 没有在运行", slot)
 	}
 	t.stop()
+	if t.IsChainUpstream || m.chainUpstreamSlot == slot {
+		m.chainUpstreamSlot = 0
+		if m.engine != nil {
+			m.engine.setChainUpstream("")
+		}
+	}
 	if err := m.saveState(); err != nil {
 		log.Printf("保存状态失败: %v", err)
 	}

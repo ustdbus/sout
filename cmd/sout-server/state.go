@@ -36,6 +36,7 @@ type persistedTunnel struct {
 	SourceID       string `json:"source_id,omitempty"`
 	IP             string `json:"ip,omitempty"`
 	ExitIP         string `json:"exit_ip,omitempty"`
+	IsChainUpstream bool   `json:"is_chain_upstream,omitempty"`
 	// 运行态（用于重启后如实呈现出口状态，避免状态信息丢失）
 	Status string `json:"status,omitempty"`
 	Err    string `json:"err,omitempty"`
@@ -81,6 +82,7 @@ func (m *Manager) saveState() error {
 			SourceID:       t.Node.SourceID,
 			IP:             t.Node.IP,
 			ExitIP:         t.ExitIP,
+			IsChainUpstream: t.IsChainUpstream,
 			Status:         t.Status,
 			Err:            t.Err,
 			Since:          t.Since.Unix(),
@@ -225,6 +227,18 @@ func (m *Manager) restoreState() (int, error) {
 			CustomUser:     p.CustomUser,
 			CustomPass:     p.CustomPass,
 			CustomProto:    proto,
+			IsChainUpstream: p.IsChainUpstream,
+		}
+		if p.IsChainUpstream {
+			m.chainUpstreamSlot = p.Slot
+			if m.engine != nil {
+				isWG := p.CustomProto == "wireguard" || node.Protocol == "wireguard"
+				tag := fmt.Sprintf("soutopenvpn%d", p.Slot)
+				if isWG {
+					tag = fmt.Sprintf("soutwireguard%d", p.Slot)
+				}
+				m.engine.setChainUpstream(tag)
+			}
 		}
 		t.setEngine(m.engine)
 		m.mu.Lock()

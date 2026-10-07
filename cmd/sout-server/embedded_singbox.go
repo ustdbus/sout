@@ -42,9 +42,11 @@ type embeddedEngine struct {
 	ctx context.Context
 	box *sbox.Box
 
-	routes   map[string]embeddedRoute
-	tunnels  map[int]embeddedTunnelState
-	listenIP string
+	routes           map[string]embeddedRoute
+	tunnels          map[int]embeddedTunnelState
+	activeTunnels    map[int]*Tunnel
+	chainUpstreamTag string
+	listenIP         string
 }
 
 type embeddedRoute struct {
@@ -70,9 +72,10 @@ func newEmbeddedEngine(listenIP string) (*embeddedEngine, error) {
 		listenIP = "127.0.0.1"
 	}
 	engine := &embeddedEngine{
-		routes:   make(map[string]embeddedRoute),
-		tunnels:  make(map[int]embeddedTunnelState),
-		listenIP: listenIP,
+		routes:        make(map[string]embeddedRoute),
+		tunnels:       make(map[int]embeddedTunnelState),
+		activeTunnels: make(map[int]*Tunnel),
+		listenIP:      listenIP,
 	}
 
 	inboundRegistry := sbinbound.NewRegistry()
@@ -153,9 +156,12 @@ func (o *soutDynamicOutbound) endpointFor(ctx context.Context, destination M.Soc
 	if route.block {
 		return nil, destination, fmt.Errorf("入站 %s 绑定的出口当前不可用", metadata.Inbound)
 	}
-	isWG := strings.HasPrefix(route.endpoint, "soutwireguard")
-	if route.direct || (!isWG && destination.IsIPv6()) {
+	if route.direct {
 		return N.SystemDialer, destination, nil
+	}
+	isWG := strings.HasPrefix(route.endpoint, "soutwireguard")
+	if !isWG && destination.IsIPv6() {
+		return nil, destination, fmt.Errorf("当前出口不支持 IPv6，已安全阻断以防真实 IPv6 泄露")
 	}
 	if destination.IsDomain() {
 		addresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip", destination.Fqdn)
@@ -174,7 +180,7 @@ func (o *soutDynamicOutbound) endpointFor(ctx context.Context, destination M.Soc
 		if chosen.IsValid() {
 			destination = M.SocksaddrFrom(chosen, destination.Port)
 		} else {
-			return N.SystemDialer, destination, nil
+			return nil, destination, fmt.Errorf("域名 %s 仅解析到 IPv6 且当前出口不支持 IPv6，已安全阻断以防真实 IPv6 泄露", destination.Fqdn)
 		}
 	}
 	endpoint, found := box.Endpoint().Get(route.endpoint)
@@ -337,9 +343,36 @@ func wireguardEndpoint(configJSON, tag string) (map[string]any, error) {
 	return endpoint, nil
 }
 
+func (e *embeddedEngine) setChainUpstream(tag string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.chainUpstreamTag == tag {
+		return
+	}
+	e.chainUpstreamTag = tag
+	if e.box == nil {
+		return
+	}
+
+	for slot, tunnel := range e.activeTunnels {
+		state, found := e.tunnels[slot]
+		if !found {
+			continue
+		}
+		if state.endpointTag == tag || tunnel.IsChainUpstream {
+			continue
+		}
+		_ = e.addTunnelLocked(tunnel)
+	}
+}
+
 func (e *embeddedEngine) addTunnel(tunnel *Tunnel) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	return e.addTunnelLocked(tunnel)
+}
+
+func (e *embeddedEngine) addTunnelLocked(tunnel *Tunnel) error {
 	if e.box == nil {
 		return fmt.Errorf("内嵌 sing-box 已关闭")
 	}
@@ -377,6 +410,11 @@ func (e *embeddedEngine) addTunnel(tunnel *Tunnel) error {
 		endpointConfig = cfg
 	}
 
+	// 链式出站：若不是前置链自身且存在活跃的 chainUpstreamTag，自动注入 detour
+	if endpointTag != e.chainUpstreamTag && !tunnel.IsChainUpstream && e.chainUpstreamTag != "" {
+		endpointConfig["detour"] = e.chainUpstreamTag
+	}
+
 	endpointOptions, err := decodeSingBoxOptions[option.Endpoint](e.ctx, endpointConfig)
 	if err != nil {
 		return fmt.Errorf("解析 %s endpoint 配置失败: %w", endpointLoggerName, err)
@@ -412,12 +450,14 @@ func (e *embeddedEngine) addTunnel(tunnel *Tunnel) error {
 	}
 
 	e.tunnels[tunnel.Slot] = embeddedTunnelState{endpointTag: endpointTag, socksTag: socksTag}
+	e.activeTunnels[tunnel.Slot] = tunnel
 	return nil
 }
 
 func (e *embeddedEngine) removeTunnel(tunnel *Tunnel) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	delete(e.activeTunnels, tunnel.Slot)
 	state, found := e.tunnels[tunnel.Slot]
 	if !found || e.box == nil {
 		return

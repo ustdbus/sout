@@ -55,6 +55,8 @@ button.success:hover:not(:disabled){background:#2ea043;border-color:#2ea043;colo
 button.icon{padding:4px 8px;background:transparent;border-color:transparent;color:var(--dim)}
 button.icon:hover:not(:disabled){color:var(--accent);border-color:var(--line);background:var(--panel)}
 button.icon.danger:hover:not(:disabled){color:var(--bad);border-color:rgba(248,81,73,.35);background:rgba(248,81,73,.1)}
+button.icon.chain-btn.active{color:var(--accent);border-color:var(--accent);background:rgba(88,166,255,.15);box-shadow:0 0 8px rgba(88,166,255,.25)}
+button.icon.chain-btn.active:hover:not(:disabled){background:rgba(88,166,255,.25);color:#fff}
 button.chip-btn{padding:3px 9px;font-size:12px;background:#21262d;border-radius:4px}
 svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;
   stroke-linecap:round;stroke-linejoin:round;flex:none}
@@ -819,6 +821,7 @@ option{background:#161b22;color:var(--text);padding:8px}
 <script>
 const $ = s => document.querySelector(s);
 const ICON = {
+  link:'<svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
   copy:'<svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
   plus:'<svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>',
   trash:'<svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
@@ -927,6 +930,10 @@ function renderExits(){
       : '<span class="pool-tag residential">🏠 家宽</span>';
     const pingBadge = e.ping > 0 ? ('<span class="metric-tag ping" title="延迟">' + e.ping + ' ms</span>') : '';
     const speedBadge = e.speed_mbps > 0 ? ('<span class="metric-tag speed" title="带宽">' + e.speed_mbps.toFixed(0) + ' Mbps</span>') : '';
+    const chainTitle = e.is_chain_upstream
+      ? '已设为全局前置链式出站（点击取消）'
+      : '将该出站设为全局前置链式出站';
+    const chainBtn = '<button class="icon chain-btn' + (e.is_chain_upstream ? ' active' : '') + '" data-chain="' + e.slot + '" title="' + chainTitle + '">' + ICON.link + '</button>';
     const swapBtn = '<button class="icon" data-swap="' + e.slot + '" title="换一个同地区/同源节点">' + ICON.redo + '</button>';
     const hostClean = (e.host || '').replace(/^(custom-|cs-)/, '');
     const fullMeta = place + (e.isp ? ' (' + e.isp + ')' : '') + ' · ' + (e.host || '');
@@ -941,6 +948,7 @@ function renderExits(){
       +   '<button class="chip-btn" data-cred="' + e.slot + '" title="VPS 本地 127.0.0.1 的 SOCKS5 内部桥接端口 :' + e.port + ' (用于对接 s-ui/sing-box 分流)。点击查看/修改认证凭据">' + ICON.lock + ' 内部桥接 :' + e.port + '</button>'
       + '</div>'
       + '<div class="branch-acts">'
+      +   chainBtn
       +   swapBtn
       +   '<button class="icon danger" data-stop="' + e.slot + '" title="停止此出口">' + ICON.trash + '</button>'
       + '</div>'
@@ -1294,6 +1302,18 @@ document.addEventListener('click', async e => {
       toast('已删除');
       poll();
     }catch(err){ toast(err.message, true); }
+  }
+
+  // 切换全局前置链式出站
+  const chain = e.target.closest('[data-chain]');
+  if(chain){
+    chain.disabled = true;
+    try{
+      const res = await api('/api/exit/chain_toggle?slot=' + chain.dataset.chain, {method:'POST'});
+      toast(res.active ? '已设为全局前置链式出站' : '已取消前置链式出站');
+      poll();
+    }catch(err){ toast(err.message, true); }
+    finally{ chain.disabled = false; }
   }
 
   // 停止出口

@@ -697,7 +697,7 @@ EOF
 
   # 分支 A：若存在有效 Swap (has_swap=1，德邦模式)
   if [[ "$has_swap" -eq 1 ]]; then
-    echo "      检测到有效 Swap 缓冲，启用零限制全速原生 Go 运行时配置 (德邦模式)"
+    echo "      检测到有效 Swap 缓冲，启用零限制全速原生 Go 运行时配置"
     if [[ -d /run/systemd/system ]]; then
       for svc in cloudflared sing-box caddy sout s-ui; do
         if [[ -f "/etc/systemd/system/${svc}.service.d/override.conf" ]]; then
@@ -724,7 +724,7 @@ EOF
 
   # 分支 B：若不存在有效 Swap (has_swap=0，阿尔法安全模式，仅针对 128M 左右即 <=180MB 机型，预留 >=15% 物理内存防爆隔离区；GOGC 保持 Go 默认 100；>180MB 则保持原生默认不设限)
   if [[ $mem_mb -le 180 ]]; then
-    echo "      检测到无 Swap 极小内存环境 (${mem_mb} MB <= 180 MB)，为确保留足 15% 系统安全防爆余量，启用精细分层内存防护 (阿尔法安全模式)"
+    echo "      检测到无 Swap 极小内存环境 (${mem_mb} MB <= 180 MB)，为确保留足 15% 系统安全防爆余量，启用精细分层内存防护"
 
     local cf_memlimit="35MiB"
     local cf_gogc="100"

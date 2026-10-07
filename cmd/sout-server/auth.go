@@ -246,6 +246,10 @@ func (a *Auth) Wrap(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		if pw := r.Header.Get("X-Sout-Password"); pw != "" && a.check(pw) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "未登录"})
 			return

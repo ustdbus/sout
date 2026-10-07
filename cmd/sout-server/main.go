@@ -22,7 +22,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v4.1.5"
+var version = "v4.2.0"
 
 func initLowMemoryProtection() {
 	var memTotalKB int64
@@ -99,7 +99,7 @@ func initLowMemoryProtection() {
 
 	hasSwap := swapTotalKB >= 32768
 	if hasSwap {
-		log.Printf("检测到有效 Swap 缓冲 (SwapTotal: %d KB)，启用零限制全速原生 Go 运行时配置 (德邦模式)", swapTotalKB)
+		log.Printf("检测到有效 Swap 缓冲 (SwapTotal: %d KB)，启用零限制全速原生 Go 运行时配置", swapTotalKB)
 		return
 	}
 
@@ -112,7 +112,7 @@ func initLowMemoryProtection() {
 		if os.Getenv("GOGC") == "" {
 			debug.SetGCPercent(100)
 		}
-		log.Printf("检测到无 Swap 极小内存环境 (有效物理内存 %d MB <= 180MB)，为确保留足 15%% 系统安全防爆余量，启用精细分层内存防护 (阿尔法安全模式，sout-server 堆限制 25MB，GOGC=100)", effectiveMB)
+		log.Printf("检测到无 Swap 极小内存环境 (有效物理内存 %d MB <= 180MB)，为确保留足 15%% 系统安全防爆余量，启用精细分层内存防护 (sout-server 堆限制 25MB，GOGC=100)", effectiveMB)
 	}
 }
 
@@ -214,6 +214,7 @@ func main() {
 	mux.HandleFunc("/api/jobs", apiJobs(mgr))
 	mux.HandleFunc("/api/jobs/dismiss", apiJobDismiss(mgr))
 	mux.HandleFunc("/api/exits", apiExits(mgr))
+	mux.HandleFunc("/api/exit/chain_toggle", apiExitChainToggle(mgr))
 	mux.HandleFunc("/api/xui", apiXUIStatus)
 	mux.HandleFunc("/api/xui/inbounds", apiXUIInbounds(mgr))
 	mux.HandleFunc("/api/xui/bind", apiXUIBind(mgr))
@@ -812,6 +813,31 @@ func apiUpdateApply(w http.ResponseWriter, r *http.Request) {
 func apiExits(m *Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, m.ExitsOf())
+	}
+}
+
+func apiExitChainToggle(m *Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
+			return
+		}
+		slotStr := r.URL.Query().Get("slot")
+		if slotStr == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "slot 不能为空"})
+			return
+		}
+		slot, err := strconv.Atoi(slotStr)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "slot 参数无效"})
+			return
+		}
+		active, err := m.ToggleChainUpstream(slot)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "active": active, "slot": slot})
 	}
 }
 
