@@ -608,10 +608,12 @@ func (sb *SingBox) restartService() {
 	if hasCmd("systemctl") && dirExists("/run/systemd/system") {
 		_ = exec.Command("systemctl", "restart", "sing-box").Run()
 	} else if hasCmd("rc-service") {
-		_ = exec.Command("rc-service", "sing-box", "stop").Run()
-		_ = exec.Command("rc-service", "sing-box", "zap").Run()
-		time.Sleep(300 * time.Millisecond)
-		_ = exec.Command("rc-service", "sing-box", "start").Run()
+		// 严禁使用 zap！zap 仅重置状态却不清理 supervise-daemon，会导致孤儿守护进程死循环 respawn。
+		if err := exec.Command("rc-service", "sing-box", "restart").Run(); err != nil {
+			_ = exec.Command("rc-service", "sing-box", "stop").Run()
+			time.Sleep(500 * time.Millisecond)
+			_ = exec.Command("rc-service", "sing-box", "start").Run()
+		}
 	} else if hasCmd("service") {
 		_ = exec.Command("service", "sing-box", "restart").Run()
 	}

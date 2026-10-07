@@ -97,10 +97,10 @@ detect_adaptive_mem_tuning() {
     AUTO_GOMEMLIMIT=""
     AUTO_GOGC=""
   elif [[ "$mem_mb" -gt 0 && "$mem_mb" -le 180 ]]; then
-    # 阿尔法安全模式 (仅针对 128M 左右且无 Swap 的机器，预留 >=15% 物理内存防爆隔离区；GOGC 保持 Go 默认 100)
+    # 阿尔法安全模式 (仅针对 128M 左右且无 Swap 的机器，预留 >=15% 物理内存防爆隔离区；GOGC 优化为 70)
     # GOMEMLIMIT 只作用于 sout-server（含内嵌 sing-box 引擎）；系统 sing-box / cloudflared 另有各自的 35MiB
     AUTO_GOMEMLIMIT="25MiB"
-    AUTO_GOGC="100"
+    AUTO_GOGC="70"
   fi
 }
 
@@ -266,6 +266,9 @@ depend() {
 }
 
 start_pre() {
+  if [ -n "\$name" ]; then
+    pkill -9 -f "supervise-daemon.*\$name" 2>/dev/null || true
+  fi
   if [ -n "\$command" ]; then
     local bin_name
     bin_name="\$(basename "\$command")"
@@ -287,6 +290,9 @@ start_pre() {
 
 stop_post() {
   rm -f "\$pidfile"
+  if [ -n "\$name" ]; then
+    pkill -9 -f "supervise-daemon.*\$name" 2>/dev/null || true
+  fi
   if [ -n "\$command" ]; then
     pkill -9 -x "\$(basename "\$command")" 2>/dev/null || true
   fi
@@ -345,6 +351,7 @@ _openrc_force_stop() {
       pkill -9 -f "sout-quick-tunnel" 2>/dev/null || true
       ;;
     sing-box)
+      pkill -9 -f "supervise-daemon.*sing-box" 2>/dev/null || true
       pkill -9 -f "/usr/local/bin/sing-box" 2>/dev/null || true
       ;;
   esac
@@ -722,16 +729,16 @@ EOF
     return 0
   fi
 
-  # 分支 B：若不存在有效 Swap (has_swap=0，阿尔法安全模式，仅针对 128M 左右即 <=180MB 机型，预留 >=15% 物理内存防爆隔离区；GOGC 保持 Go 默认 100；>180MB 则保持原生默认不设限)
+  # 分支 B：若不存在有效 Swap (has_swap=0，阿尔法安全模式，仅针对 128M 左右即 <=180MB 机型，预留 >=15% 物理内存防爆隔离区；GOGC 优化为 70；>180MB 则保持原生默认不设限)
   if [[ $mem_mb -le 180 ]]; then
     echo "      检测到无 Swap 极小内存环境 (${mem_mb} MB <= 180 MB)，为确保留足 15% 系统安全防爆余量，启用精细分层内存防护"
 
     local cf_memlimit="35MiB"
-    local cf_gogc="100"
+    local cf_gogc="70"
     local sb_memlimit="35MiB"
-    local sb_gogc="100"
+    local sb_gogc="70"
     local aux_memlimit="25MiB"
-    local aux_gogc="100"
+    local aux_gogc="70"
 
     # 1. systemd 环境注入
     if [[ -d /run/systemd/system ]]; then
@@ -2034,7 +2041,8 @@ sys.exit(0 if latest > cur else 1)
 
   echo
   echo -e "  ${B}[+] 正在启动服务并加载最新版本配置...${N}"
-  # 5. 升级完成后调用 svc_start 拉起 sout
+  # 5. 升级完成后同步刷新低内存优化配置，并调用 svc_start 拉起 sout
+  optimize_low_memory
   svc_start
 
   # 6. 根据后端模式重启对应的核心服务

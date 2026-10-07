@@ -30,9 +30,9 @@ sout 针对超小内存 VPS 与轻量容器（如 Alpine、Debian 极限环境�
 - **动态探测与平滑限额**：启动时自动读取 `/proc/meminfo` 与 cgroup v1/v2 物理限额，取两者真实有效最小值。
 - **超低内存实例 (<= 128MB / 125MB)**：
   - 自动设定 Go 堆软限制（`sout-server` 含内嵌 sing-box 引擎为 `25MB`、系统 `sing-box` / `cloudflared` 各为 `35MB`）；
-  - 自动启用垃圾回收 `GOGC=100`（Go 默认值），仅在堆超过软限制时才提高回收频次，兼顾 CPU 开销与内存安全。
+  - 自动启用垃圾回收 `GOGC=70`（超低内存优化），仅在堆超过软限制时才提高回收频次，兼顾 CPU 开销与内存安全。
 - **低内存实例 (<= 180MB)**：
-  - 与上一档同为阿尔法安全模式；`GOMEMLIMIT` 25MB、`GOGC=100`，并限制 journald 占用、降低 `vm.swappiness`。
+  - 与上一档同为阿尔法安全模式；`GOMEMLIMIT` 25MB、`GOGC=70`，并限制 journald 占用、降低 `vm.swappiness`。
 
 
 ## 核心特性
