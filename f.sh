@@ -687,7 +687,14 @@ optimize_low_memory() {
     fi
   done
 
-  # 4. 调低 swappiness（从默认 100 降为 30），防止过早向虚拟 Swap 剧烈换页
+  # 4. 优化 sing-box 核心日志级别为 warn，杜绝短连接高频刷盘消耗 CPU 与内存
+  if [[ -f /etc/sing-box/config.json ]]; then
+    sed -i 's/"level"[[:space:]]*:[[:space:]]*"info"/"level": "warn"/g' /etc/sing-box/config.json 2>/dev/null || true
+    sed -i 's/"level"[[:space:]]*:[[:space:]]*"debug"/"level": "warn"/g' /etc/sing-box/config.json 2>/dev/null || true
+    sed -i 's/"level"[[:space:]]*:[[:space:]]*"trace"/"level": "warn"/g' /etc/sing-box/config.json 2>/dev/null || true
+  fi
+
+  # 5. 调低 swappiness（从默认 100 降为 30），防止过早向虚拟 Swap 剧烈换页
   sysctl -w vm.swappiness=30 >/dev/null 2>&1 || true
 
   # 5. 限制 journald 运行时内存

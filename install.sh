@@ -476,7 +476,7 @@ install_singbox() {
     cat > /etc/sing-box/config.json <<'SBCONF'
 {
   "log": {
-    "level": "info",
+    "level": "warn",
     "timestamp": true
   },
   "inbounds": [],
