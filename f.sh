@@ -1032,9 +1032,9 @@ show_info() {
   echo
   echo -e "  程序版本:    ${G}${cur_ver}${N}"
   if [[ "$st" == "active" ]]; then
-    echo -e "  服务状态:    ${G}运行中 (active)${N}"
+    echo -e "  服务状态:    ${G}active${N}"
   else
-    echo -e "  服务状态:    ${R}已停止 (${st})${N}"
+    echo -e "  服务状态:    ${R}inactive (${st})${N}"
   fi
 
   cur_backend=$(cat "${WORK_DIR}/panel_mode" 2>/dev/null || echo "")
@@ -1053,14 +1053,42 @@ show_info() {
       sb_ver=$(cat "${WORK_DIR}/singbox_version" 2>/dev/null | tr -d ' \r\n')
     fi
     if [[ -z "$sb_ver" ]]; then
-      sb_ver=$(/usr/local/bin/sing-box version 2>/dev/null | head -1 | awk '{print $3}' || echo "原生内核")
-      [[ -n "$sb_ver" && "$sb_ver" != "原生内核" ]] && echo "$sb_ver" > "${WORK_DIR}/singbox_version" 2>/dev/null || true
+      sb_ver=$(/usr/local/bin/sing-box version 2>/dev/null | head -1 | awk '{print $3}' || echo "")
+      [[ -n "$sb_ver" ]] && echo "$sb_ver" > "${WORK_DIR}/singbox_version" 2>/dev/null || true
     fi
-    echo -e "  后端对接:    ${G}sing-box (${sb_ver}) 原生内核已就绪${N}"
+    local sb_tag="sing-box"
+    if [[ -n "$sb_ver" && "$sb_ver" != "原生内核" ]]; then
+      sb_tag="sing-box-v${sb_ver#v}"
+    fi
+    local sb_active=false
+    if [[ "$INIT_SYS" == "systemd" ]]; then
+      [[ $(systemctl is-active sing-box 2>/dev/null || echo "") == "active" ]] && sb_active=true
+    else
+      if rc-service sing-box status >/dev/null 2>&1 || pgrep -f "sing-box" >/dev/null 2>&1; then
+        sb_active=true
+      fi
+    fi
+    if $sb_active; then
+      echo -e "  后端对接:    ${G}${sb_tag}(active)${N}"
+    else
+      echo -e "  后端对接:    ${R}${sb_tag}(inactive)${N}"
+    fi
   elif [[ "$cur_backend" == "s-ui" ]]; then
-    echo -e "  后端对接:    ${G}s-ui (Sing-Box) 已就绪${N}"
+    local sui_active=false
+    if [[ "$INIT_SYS" == "systemd" ]]; then
+      [[ $(systemctl is-active s-ui 2>/dev/null || echo "") == "active" ]] && sui_active=true
+    else
+      if rc-service s-ui status >/dev/null 2>&1 || pgrep -f "s-ui" >/dev/null 2>&1; then
+        sui_active=true
+      fi
+    fi
+    if $sui_active; then
+      echo -e "  后端对接:    ${G}s-ui(active)${N}"
+    else
+      echo -e "  后端对接:    ${R}s-ui(inactive)${N}"
+    fi
   else
-    echo -e "  后端对接:    ${R}未检测到后端 (s-ui / sing-box)${N}"
+    echo -e "  后端对接:    ${R}none(inactive)${N}"
   fi
 
   if [[ "$c_en" == "true" ]]; then
@@ -1085,29 +1113,25 @@ show_info() {
     if [[ -z "$tun_eng" ]] && grep -q '"cf-tunnel-in"' /etc/sing-box/config.json 2>/dev/null; then
       tun_eng="sing-box"
     fi
-    local cf_st="${R}未运行${N}"
+    local tun_active=false
     if [[ "$tun_eng" == "sing-box" ]]; then
-      local sb_active=false
+      local sb_active_tun=false
       if [[ "$INIT_SYS" == "systemd" ]]; then
-        [[ $(systemctl is-active sing-box 2>/dev/null || echo "") == "active" ]] && sb_active=true
+        [[ $(systemctl is-active sing-box 2>/dev/null || echo "") == "active" ]] && sb_active_tun=true
       else
         if rc-service sing-box status >/dev/null 2>&1 || pgrep -f "sing-box" >/dev/null 2>&1; then
-          sb_active=true
+          sb_active_tun=true
         fi
       fi
-      if $sb_active && [[ -f /etc/sing-box/config.json ]] && grep -q '"cf-tunnel-in"' /etc/sing-box/config.json 2>/dev/null; then
-        cf_st="${G}运行中 (active)${N}"
-      else
-        cf_st="${R}未运行${N}"
+      if $sb_active_tun && [[ -f /etc/sing-box/config.json ]] && grep -q '"cf-tunnel-in"' /etc/sing-box/config.json 2>/dev/null; then
+        tun_active=true
       fi
     else
       if [[ "$INIT_SYS" == "systemd" ]]; then
-        if [[ $(systemctl is-active cloudflared 2>/dev/null || echo "") == "active" ]]; then
-          cf_st="${G}运行中 (active)${N}"
-        fi
+        [[ $(systemctl is-active cloudflared 2>/dev/null || echo "") == "active" ]] && tun_active=true
       else
         if rc-service cloudflared status >/dev/null 2>&1 || pgrep -f "cloudflared" >/dev/null 2>&1; then
-          cf_st="${G}运行中 (active)${N}"
+          tun_active=true
         fi
       fi
     fi
@@ -1117,12 +1141,16 @@ show_info() {
       local real_d
       real_d=$(journalctl -u cloudflared -n 50 --no-pager 2>/dev/null | grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' | tail -1 | sed 's|https://||' | tr -d ' \r\n')
       [[ -n "$real_d" ]] && c_dom="$real_d"
-      echo -e "  反代模式:    ${G}Cloudflare 官方免费临时隧道连接与轻量流量分流 (已开启)${N}"
+      echo -e "  反代模式:    ${G}Cloudflare 官方免费临时隧道连接与轻量流量分流 (active)${N}"
     else
-      echo -e "  反代模式:    ${G}Cloudflare 隧道连接与轻量流量分流 (已开启)${N}"
+      echo -e "  反代模式:    ${G}Cloudflare 隧道连接与轻量流量分流 (active)${N}"
     fi
 
-    echo -e "  隧道服务:    ${cf_st}"
+    if $tun_active; then
+      echo -e "  隧道服务:    ${G}127.0.0.1:${c_tun_p} (active)${N}"
+    else
+      echo -e "  隧道服务:    ${R}127.0.0.1:${c_tun_p} (inactive)${N}"
+    fi
     echo -e "  管理面板:    ${B}https://${c_dom}/${c_sout_p}/${N}"
     echo -e "  访问口令:    ${Y}${pw}${N}"
     if is_sui_backend && [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
@@ -3271,12 +3299,7 @@ METAEOF
   fi
   echo -e "${G}================================================================${N}"
   echo -e "  访问域名:      ${B}https://${domain}${N}"
-  if [[ "$has_sui" != "true" && -n "$tunnel_token" ]]; then
-    echo -e "  隧道服务:      ${G}sing-box 原生引擎 (运行中 / active，已淘汰独立 cloudflared)${N}"
-  else
-    echo -e "  隧道服务:      ${G}运行中 / active${N}"
-  fi
-  echo -e "  本地回源端口:  ${Y}127.0.0.1:${tunnel_port}${N}"
+  echo -e "  隧道服务:      ${G}127.0.0.1:${tunnel_port} (active)${N}"
   echo -e "  ----------------------------------------------------------------"
   echo -e "  [1] sout 家宽动态出口插件面板"
   echo -e "      访问地址:  ${B}https://${domain}/${sout_path}/${N}"
@@ -5259,14 +5282,14 @@ caddy_menu() {
 
       local cf_desc
       if [[ "$cf_st" == "active" ]]; then
-        cf_desc="${G}运行中 (active)${N}"
+        cf_desc="${G}127.0.0.1:${tun_p} (active)${N}"
       else
-        cf_desc="${R}已停止 [${cf_st}]${N}"
+        cf_desc="${R}127.0.0.1:${tun_p} (inactive)${N}"
       fi
 
-      echo -e "  反代状态:      ${G}已开启 (Cloudflare 隧道模式)${N}"
+      echo -e "  反代状态:      ${G}Cloudflare 隧道模式 (active)${N}"
       echo -e "  隧道服务:      ${cf_desc}"
-      echo -e "  分流网关:      ${G}内置运行中 (sout-server)${N}"
+      echo -e "  分流网关:      ${G}sout-server (active)${N}"
       echo -e "  托管域名:      ${B}${dom}${N}"
       echo -e "  本地回源:      ${Y}127.0.0.1:${tun_p}${N}"
       echo -e "${D}----------------------------------------${N}"

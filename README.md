@@ -95,13 +95,14 @@ sout
 ========================================
   sout - 动态家宽出口插件 (VPN Gate) 
 ========================================
-  程序版本:    v3.9.3
-  服务状态:    运行中 (active)
-  面板对接:    sing-box (原生模式)
-  反代模式:    Cloudflare 隧道与轻量网关分流 (已开启)
-  隧道服务:    运行中 (active) (本地回源: 127.0.0.1:8081)
+  程序版本:    v4.3.7
+  服务状态:    active
+  后端对接:    sing-box-v1.14.2(active)
+  反代模式:    Cloudflare 隧道连接与轻量流量分流 (active)
+  隧道服务:    127.0.0.1:8081 (active)
   管理面板:    https://sout.example.com/sout8978ee63/
   访问口令:    5d07dae1d1f0b49309
+  核心配置:    /etc/sing-box/config.json
   订阅链接:    https://sout.example.com/sout8978ee63/sub=5d07dae1d1f0b49309
   sout 唤起命令: sout
 ----------------------------------------
