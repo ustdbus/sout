@@ -5272,12 +5272,13 @@ caddy_menu() {
       echo -e "${D}----------------------------------------${N}"
       echo "  1) 查看轻量反代与分流详情"
       echo "  2) 重新配置隧道与域名 (修改 Token/域名/端口)"
-      echo "  3) 重启 Cloudflare 隧道"
-      echo "  4) 重新应用分流配置 (重启网关)"
-      echo "  5) 关闭隧道反代 (恢复独立端口模式)"
+      echo "  3) 查看 Cloudflare 隧道运行日志"
+      echo "  4) 重启 Cloudflare 隧道"
+      echo "  5) 重新应用分流配置 (重启网关)"
+      echo "  6) 关闭隧道反代 (恢复独立端口模式)"
       echo "  0) 返回上级菜单"
       echo
-      read -rp "  请选择 [0-5]: " opt
+      read -rp "  请选择 [0-6]: " opt
       case "$opt" in
         1)
           if [[ -f "$CADDY_META" ]]; then
@@ -5324,6 +5325,25 @@ caddy_menu() {
           pause ;;
         2) caddy_interactive_setup; pause ;;
         3)
+          echo
+          if [[ "$tun_eng" == "sing-box" ]]; then
+            if [[ -f /var/log/sing-box.log ]]; then
+              echo -e "  ${B}[+] 正在检索 sing-box 隧道运行日志...${N}"
+              grep -iE "cloudflared|cf-tunnel|tunnel|ingress|quic" /var/log/sing-box.log 2>/dev/null | tail -n 40 || tail -n 40 /var/log/sing-box.log
+            elif command -v journalctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+              journalctl -u sing-box -n 40 --no-pager
+            else
+              echo "未找到 sing-box 隧道运行日志"
+            fi
+          elif command -v journalctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+            journalctl -u cloudflared -n 40 --no-pager
+          elif [[ -f /var/log/cloudflared.err || -f /var/log/cloudflared.log ]]; then
+            tail -n 40 /var/log/cloudflared.err /var/log/cloudflared.log 2>/dev/null
+          else
+            echo "未找到 cloudflared 运行日志"
+          fi
+          pause ;;
+        4)
           echo -e "  正在重启 Cloudflare 隧道服务..."
           local cf_re_ok=false
           if [[ "$tun_eng" == "sing-box" ]]; then
@@ -5341,10 +5361,10 @@ caddy_menu() {
           fi
           [[ "$cf_re_ok" == "true" ]] && echo -e "  ${G}[✓] Cloudflare 隧道服务已成功重启${N}" || echo -e "  ${R}[×] 隧道服务重启失败${N}"
           pause ;;
-        4)
+        5)
           reload_caddy_proxy
           pause ;;
-        5) disable_caddy_proxy; pause; break ;;
+        6) disable_caddy_proxy; pause; break ;;
         0) break ;;
         *) ;;
       esac
