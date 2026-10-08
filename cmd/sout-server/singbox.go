@@ -229,6 +229,12 @@ func (sb *SingBox) MigrateLegacyVmessArgo() error {
 		tag, _ := ib["tag"].(string)
 		typ, _ := ib["type"].(string)
 
+		// 严禁让 cloudflared 隧道误入 vmess/vless argo 升级流程
+		if typ == "cloudflared" {
+			updatedInbounds = append(updatedInbounds, ib)
+			continue
+		}
+
 		// 检查并彻底清除画蛇添足的 multiplex（多路复用）配置，与 s-ui 纯净规范对齐
 		if _, hasMux := ib["multiplex"]; hasMux {
 			delete(ib, "multiplex")
@@ -1947,7 +1953,10 @@ func (sb *SingBox) syncOutboundsInternal(cfg map[string]any, tunnels []*Tunnel) 
 	inboundsRaw, _ := cfg["inbounds"].([]any)
 	for _, ib := range inboundsRaw {
 		if ibMap, ok := ib.(map[string]any); ok {
-			usersRaw, _ := ibMap["users"].([]any)
+			usersRaw, hasUsers := ibMap["users"].([]any)
+			if !hasUsers || usersRaw == nil {
+				continue
+			}
 			var keptUsers []any
 			for _, u := range usersRaw {
 				if uMap, ok := u.(map[string]any); ok {
@@ -2113,7 +2122,10 @@ func (sb *SingBox) DeleteBranchesByHost(host string, tunnels []*Tunnel) error {
 	inboundsRaw, _ := cfg["inbounds"].([]any)
 	for _, ib := range inboundsRaw {
 		if ibMap, ok := ib.(map[string]any); ok {
-			usersRaw, _ := ibMap["users"].([]any)
+			usersRaw, hasUsers := ibMap["users"].([]any)
+			if !hasUsers || usersRaw == nil {
+				continue
+			}
 			var keptUsers []any
 			for _, u := range usersRaw {
 				if uMap, ok := u.(map[string]any); ok {
