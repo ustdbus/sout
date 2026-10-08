@@ -3626,7 +3626,7 @@ except Exception:
     [[ -z "$sui_p" ]] && sui_p="sui"
     local sui_info
     sui_info=$(python3 -c "
-import sqlite3
+import sqlite3, os, json, urllib.request, urllib.parse
 con = sqlite3.connect('/usr/local/s-ui/db/s-ui.db')
 cur = con.cursor()
 cur.execute(\"SELECT value FROM settings WHERE key='webPort'\")
@@ -3679,13 +3679,13 @@ except Exception:
 
 if not api_success:
     if w_listen != '127.0.0.1':
-        cur.execute("UPDATE settings SET value='127.0.0.1' WHERE key='webListen'")
+        cur.execute(\"UPDATE settings SET value='127.0.0.1' WHERE key='webListen'\")
         changed = True
     if s_listen != '127.0.0.1':
-        cur.execute("UPDATE settings SET value='127.0.0.1' WHERE key='subListen'")
+        cur.execute(\"UPDATE settings SET value='127.0.0.1' WHERE key='subListen'\")
         changed = True
-    cur.execute("UPDATE settings SET value=? WHERE key='webURI'", (target_web_uri,))
-    cur.execute("UPDATE settings SET value=? WHERE key='subURI'", (target_sub_uri,))
+    cur.execute(\"UPDATE settings SET value=? WHERE key='webURI'\", (target_web_uri,))
+    cur.execute(\"UPDATE settings SET value=? WHERE key='subURI'\", (target_sub_uri,))
     if changed:
         con.commit()
 
