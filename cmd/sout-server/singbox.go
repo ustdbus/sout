@@ -1498,7 +1498,7 @@ func (sb *SingBox) CloneToTunnels(templateID int, hosts []string, tunnels []*Tun
 	}
 
 	inboundsRaw, _ := cfg["inbounds"].([]any)
-	ibMap, idx, err := resolveTemplateInbound(inboundsRaw, templateID)
+	ibMap, _, err := resolveTemplateInbound(inboundsRaw, templateID)
 	if err != nil {
 		return nil, err
 	}
