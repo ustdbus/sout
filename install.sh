@@ -1615,7 +1615,11 @@ if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$
   c_sui_w=$(json_get "$CADDY_META" sui_pass)
   c_sub_p=$(json_get "$CADDY_META" sub_path)
   if [[ "$WANT_TUNNEL" != "y" && -x /usr/local/bin/sout ]]; then
-    systemctl restart cloudflared 2>/dev/null || rc-service cloudflared restart 2>/dev/null || service cloudflared restart 2>/dev/null || true
+    local tun_eng
+    tun_eng=$(json_get "$CADDY_META" tunnel_engine)
+    if [[ "$tun_eng" != "sing-box" ]]; then
+      systemctl restart cloudflared 2>/dev/null || rc-service cloudflared restart 2>/dev/null || service cloudflared restart 2>/dev/null || true
+    fi
     systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || true
     systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true
     /usr/local/bin/sout reload_caddy >/dev/null 2>&1 || true

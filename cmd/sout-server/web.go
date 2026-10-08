@@ -1961,7 +1961,11 @@ async function refreshTunnelView() {
     $('#tnGatewayBadge').className = 'pool-tag ' + (isGateway ? 'residential' : 'datacenter');
 
     const isQuick = (t.mode === 'quick_tunnel') || (t.domain && t.domain.indexOf('.trycloudflare.com') !== -1);
-    $('#tnModeTitle').textContent = isQuick ? 'Cloudflare 免费临时隧道' : 'Cloudflare 命名隧道';
+    if (t.tunnel_engine === 'sing-box') {
+      $('#tnModeTitle').textContent = 'Cloudflare 隧道 (sing-box 原生引擎)';
+    } else {
+      $('#tnModeTitle').textContent = isQuick ? 'Cloudflare 免费临时隧道' : 'Cloudflare 命名隧道';
+    }
 
     const domain = t.domain || '';
     const soutPath = (t.sout_path || '').replace(/^\/+|\/+$/g, '');

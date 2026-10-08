@@ -24,6 +24,7 @@ type GatewayMeta struct {
 	Domain      string `json:"domain"`
 	TunnelToken string `json:"tunnel_token"`
 	TunnelPort  int    `json:"tunnel_port"`
+	TunnelEngine string `json:"tunnel_engine,omitempty"`
 	SoutPort    int    `json:"sout_port"`
 	SoutPath    string `json:"sout_path"`
 	SuiPort     int    `json:"sui_port"`
@@ -291,6 +292,7 @@ func GetGatewayStatus(workDir string) map[string]any {
 		"enabled":             false,
 		"domain":              "",
 		"tunnel_port":         8081,
+		"tunnel_engine":       "",
 		"sout_path":           "",
 		"sub_path":            "",
 		"sui_path":            "",
@@ -319,6 +321,9 @@ func GetGatewayStatus(workDir string) map[string]any {
 			st["domain"] = meta.Domain
 			st["mode"] = meta.Mode
 			st["tunnel_port"] = meta.TunnelPort
+			if meta.TunnelEngine != "" {
+				st["tunnel_engine"] = meta.TunnelEngine
+			}
 			st["sout_port"] = meta.SoutPort
 			st["sout_path"] = meta.SoutPath
 			st["sui_port"] = meta.SuiPort
@@ -339,27 +344,56 @@ func GetGatewayStatus(workDir string) map[string]any {
 		}
 	}
 
-	// 检查 cloudflared 进程运行状态
-	cfRunning := false
-	if exec.Command("pgrep", "-f", "cloudflared").Run() == nil {
-		cfRunning = true
-	} else if data, err := os.ReadFile("/run/cloudflared.pid"); err == nil {
-		pidStr := strings.TrimSpace(string(data))
-		if pidStr != "" && exec.Command("kill", "-0", pidStr).Run() == nil {
-			cfRunning = true
+	// 检查 sing-box 原生内置隧道识别与运行状态
+	sbConfigPath := "/etc/sing-box/config.json"
+	hasNativeTunnel := false
+	if sbData, err := os.ReadFile(sbConfigPath); err == nil {
+		sbContent := string(sbData)
+		if strings.Contains(sbContent, `"cloudflared"`) || strings.Contains(sbContent, `"cf-tunnel-in"`) {
+			hasNativeTunnel = true
 		}
 	}
-	st["cloudflared_running"] = cfRunning
 
-	// 若配置已启用隧道但进程意外掉线，自动触发后台拉起自愈，防止出现 1033 错误
-	if enabled, _ := st["enabled"].(bool); enabled && !cfRunning {
-		go func() {
-			if _, err := exec.LookPath("systemctl"); err == nil {
-				_ = exec.Command("systemctl", "start", "cloudflared").Run()
-			} else if _, err := exec.LookPath("rc-service"); err == nil {
-				_ = exec.Command("rc-service", "cloudflared", "start").Run()
+	cfRunning := false
+	if hasNativeTunnel {
+		st["tunnel_engine"] = "sing-box"
+		if exec.Command("pgrep", "-f", "sing-box").Run() == nil {
+			cfRunning = true
+		}
+		st["cloudflared_running"] = cfRunning
+
+		// 若配置了原生隧道但 sing-box 进程未运行，后台自愈拉起 sing-box
+		if enabled, _ := st["enabled"].(bool); enabled && !cfRunning {
+			go func() {
+				if _, err := exec.LookPath("systemctl"); err == nil {
+					_ = exec.Command("systemctl", "start", "sing-box").Run()
+				} else if _, err := exec.LookPath("rc-service"); err == nil {
+					_ = exec.Command("rc-service", "sing-box", "start").Run()
+				}
+			}()
+		}
+	} else {
+		// 独立 cloudflared 进程运行状态检查
+		if exec.Command("pgrep", "-f", "cloudflared").Run() == nil {
+			cfRunning = true
+		} else if data, err := os.ReadFile("/run/cloudflared.pid"); err == nil {
+			pidStr := strings.TrimSpace(string(data))
+			if pidStr != "" && exec.Command("kill", "-0", pidStr).Run() == nil {
+				cfRunning = true
 			}
-		}()
+		}
+		st["cloudflared_running"] = cfRunning
+
+		// 只有在非 sing-box 模式且启用了隧道时，才尝试拉起 cloudflared
+		if enabled, _ := st["enabled"].(bool); enabled && !cfRunning {
+			go func() {
+				if _, err := exec.LookPath("systemctl"); err == nil {
+					_ = exec.Command("systemctl", "start", "cloudflared").Run()
+				} else if _, err := exec.LookPath("rc-service"); err == nil {
+					_ = exec.Command("rc-service", "cloudflared", "start").Run()
+				}
+			}()
+		}
 	}
 
 	// 读取当前面板口令

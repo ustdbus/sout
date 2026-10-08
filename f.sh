@@ -2322,7 +2322,7 @@ setup_caddy_proxy() {
   fi
   echo -e "${B}================================================================${N}"
 
-  # 1. 确保已停用清理 Caddy，并安装 cloudflared
+  # 1. 确保已停用清理 Caddy 与独立 cloudflared
   if command -v caddy >/dev/null 2>&1; then
     rc-service caddy stop 2>/dev/null || true
     rc-update del caddy default 2>/dev/null || true
@@ -2330,7 +2330,19 @@ setup_caddy_proxy() {
     systemctl disable caddy 2>/dev/null || true
     pkill -9 -x caddy 2>/dev/null || true
   fi
-  install_cloudflared_bin || { echo -e "  ${R}安装 cloudflared 失败${N}"; return 1; }
+
+  # 彻底停止并注销现有独立的 cloudflared 服务与守护进程
+  systemctl stop cloudflared 2>/dev/null || true
+  systemctl disable cloudflared 2>/dev/null || true
+  rc-service cloudflared stop 2>/dev/null || true
+  rc-update del cloudflared default 2>/dev/null || true
+  pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
+  rm -f /etc/systemd/system/cloudflared.service /etc/init.d/cloudflared 2>/dev/null || true
+
+  # 仅在非固定 Token 且需要临时隧道时按需拉取，常规命名隧道无需安装独立进程
+  if [[ "$is_quick" == "true" ]]; then
+    install_cloudflared_bin || { echo -e "  ${R}安装 cloudflared 失败${N}"; return 1; }
+  fi
 
   # 2. 检查后端类型并分配本地端口与安全路径
   local has_sui=false
@@ -2451,8 +2463,12 @@ except Exception:
   public_ip=$(curl -s4m 5 https://checkip.amazonaws.com 2>/dev/null || curl -s4m 5 https://api.ipify.org 2>/dev/null || curl -s4m 5 https://ifconfig.me 2>/dev/null || echo "$domain")
   cur_cc=$(get_tcp_congestion)
 
-  echo -e "  [+] 正在启动 Cloudflare 隧道服务 (${protocol})..."
-  setup_cloudflared_service "$tunnel_token" "$tunnel_port" "$protocol"
+  if [[ "$is_quick" == "true" ]]; then
+    echo -e "  [+] 正在启动 Cloudflare 免费临时隧道服务 (${protocol})..."
+    setup_cloudflared_service "$tunnel_token" "$tunnel_port" "$protocol"
+  else
+    echo -e "  [+] Cloudflare 原生隧道将由 sing-box 内嵌驱动 (${protocol})..."
+  fi
 
   if [[ "$is_quick" == "true" ]]; then
     echo -e "  [+] 正在等待 Cloudflare 分配免费临时域名..."
@@ -2484,6 +2500,8 @@ except Exception:
   SUI_ADMIN_USER="$sui_admin_user" \
   APPLY_CERT="$apply_cert" \
   CONGESTION_CONTROL="$cur_cc" \
+  TUNNEL_TOKEN="$tunnel_token" \
+  TUNNEL_PROTOCOL="$protocol" \
   python3 <<'PYEOF'
 import json, os, uuid, urllib.request, urllib.parse, string, random, base64
 
@@ -2607,6 +2625,21 @@ else:
                 if not tag or not proto or tag in seen_tags: continue
                 seen_tags.add(tag)
 
+                # 特殊处理 cloudflared 原生隧道入站：保留 token/protocol，绝不添加 users 字段
+                if proto == 'cloudflared':
+                    cf_ib = {
+                        'type': 'cloudflared',
+                        'tag': tag,
+                    }
+                    token_val = ib.get('token') or ib.get('raw', {}).get('token', '')
+                    if token_val:
+                        cf_ib['token'] = token_val
+                    proto_val = ib.get('protocol') or ib.get('raw', {}).get('protocol', 'quic')
+                    if proto_val:
+                        cf_ib['protocol'] = proto_val
+                    final_inbs.append(cf_ib)
+                    continue
+
                 if ib.get('addrs'): addrs_store[tag] = ib['addrs']
                 s_ib = {
                     'type': proto,
@@ -2673,6 +2706,21 @@ else:
                 final_inbs.append(s_ib)
 
             conf['inbounds'] = final_inbs
+
+            # 确保 route.rules 首部存在 cf-tunnel-in 直连规则
+            has_cf_tunnel = any(ib.get('tag') == 'cf-tunnel-in' or ib.get('type') == 'cloudflared' for ib in final_inbs)
+            if has_cf_tunnel:
+                if 'route' not in conf or not isinstance(conf['route'], dict):
+                    conf['route'] = {}
+                if 'rules' not in conf['route'] or not isinstance(conf['route']['rules'], list):
+                    conf['route']['rules'] = []
+                new_rules = [r for r in conf['route']['rules'] if not (isinstance(r, dict) and 'cf-tunnel-in' in r.get('inbound', []))]
+                new_rules.insert(0, {
+                    'inbound': ['cf-tunnel-in'],
+                    'outbound': 'direct'
+                })
+                conf['route']['rules'] = new_rules
+
             os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
             with open(self.config_path, 'w') as f: json.dump(conf, f, indent=2)
 
@@ -2973,7 +3021,25 @@ api('POST', 'save', {
 })
 created_inbound_tags.append(reality_tag)
 
-# 3. 重新查询最新所有入站 ID
+# 若为原生 sing-box 模式且存在 TUNNEL_TOKEN，添加/更新 cf-tunnel-in 原生入站
+tunnel_token = os.environ.get('TUNNEL_TOKEN', '').strip()
+tunnel_proto = os.environ.get('TUNNEL_PROTOCOL', 'quic').strip() or 'quic'
+if not has_sui and tunnel_token:
+    cf_tag = 'cf-tunnel-in'
+    existing_cf = next((r for r in inbound_rows if r.get('tag') == cf_tag or r.get('type') == 'cloudflared'), None)
+    cf_payload = {
+        'id': existing_cf.get('id') if existing_cf else 9999,
+        'type': 'cloudflared',
+        'tag': cf_tag,
+        'token': tunnel_token,
+        'protocol': tunnel_proto
+    }
+    api('POST', 'save', {
+        'object': 'inbounds',
+        'action': 'edit' if existing_cf else 'new',
+        'data': json.dumps(cf_payload)
+    })
+
 # 3. 重新查询最新所有入站 ID (100% 原生 API)
 inbounds_resp = api('GET', 'inbounds') or {}
 inbounds_obj = inbounds_resp.get('obj') or []
@@ -2982,7 +3048,7 @@ if isinstance(inbounds_obj, dict):
 else:
     inbound_rows = inbounds_obj or []
 inbound_rows = [r for r in inbound_rows if isinstance(r, dict)]
-all_current_ib_ids = [r.get('id') for r in inbound_rows if r.get('id') is not None]
+all_current_ib_ids = [r.get('id') for r in inbound_rows if r.get('id') is not None and r.get('type') != 'cloudflared']
 
 # 4. 配置 admin 客户端，关联全部入站 (100% 原生 API)
 clients_resp = api('GET', 'clients') or {}
@@ -3109,11 +3175,16 @@ with open(path, 'w') as f:
 
   # 6. 保存反代元数据
   local meta_mode="tunnel"
-  [[ "$is_quick" == "true" ]] && meta_mode="quick_tunnel"
+  local meta_engine="sing-box"
+  if [[ "$is_quick" == "true" ]]; then
+    meta_mode="quick_tunnel"
+    meta_engine="standalone"
+  fi
   cat > "$CADDY_META" <<METAEOF
 {
   "enabled": true,
   "mode": "${meta_mode}",
+  "tunnel_engine": "${meta_engine}",
   "protocol": "${protocol}",
   "domain": "${domain}",
   "tunnel_token": "${tunnel_token}",
@@ -3179,7 +3250,11 @@ METAEOF
   fi
   echo -e "${G}================================================================${N}"
   echo -e "  访问域名:      ${B}https://${domain}${N}"
-  echo -e "  隧道服务:      ${G}cloudflared (运行中 / active)${N}"
+  if [[ "$has_sui" != "true" && -n "$tunnel_token" ]]; then
+    echo -e "  隧道服务:      ${G}sing-box 原生引擎 (运行中 / active，已淘汰独立 cloudflared)${N}"
+  else
+    echo -e "  隧道服务:      ${G}运行中 / active${N}"
+  fi
   echo -e "  本地回源端口:  ${Y}127.0.0.1:${tunnel_port}${N}"
   echo -e "  ----------------------------------------------------------------"
   echo -e "  [1] sout 家宽动态出口插件面板"
@@ -3223,6 +3298,36 @@ disable_caddy_proxy() {
   systemctl disable caddy 2>/dev/null || rc-update del caddy default 2>/dev/null || true
   systemctl stop cloudflared 2>/dev/null || rc-service cloudflared stop 2>/dev/null || true
   systemctl disable cloudflared 2>/dev/null || rc-update del cloudflared default 2>/dev/null || true
+  pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
+
+  # 从 /etc/sing-box/config.json 安全移除 cf-tunnel-in 入站以及 route.rules 中的直连规则
+  if [[ -f /etc/sing-box/config.json ]]; then
+    python3 -c '
+import json
+try:
+    with open("/etc/sing-box/config.json", "r") as f:
+        conf = json.load(f)
+    changed = False
+    inbounds = conf.get("inbounds", [])
+    new_inbs = [ib for ib in inbounds if ib.get("tag") != "cf-tunnel-in" and ib.get("type") != "cloudflared"]
+    if len(new_inbs) != len(inbounds):
+        conf["inbounds"] = new_inbs
+        changed = True
+    
+    rules = conf.get("route", {}).get("rules", [])
+    new_rules = [r for r in rules if not ("cf-tunnel-in" in r.get("inbound", []))]
+    if len(new_rules) != len(rules):
+        conf["route"]["rules"] = new_rules
+        changed = True
+
+    if changed:
+        with open("/etc/sing-box/config.json", "w") as f:
+            json.dump(conf, f, indent=2)
+except Exception:
+    pass
+' 2>/dev/null || true
+    systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || service sing-box restart 2>/dev/null || true
+  fi
 
   if [[ -f "$CADDY_META" ]]; then
     rm -f "$CADDY_META"
@@ -5099,16 +5204,26 @@ caddy_menu() {
     echo -e "${B}========================================${N}"
     echo -e "${B}  Cloudflare隧道连接与轻量流量分流管理${N}"
     echo -e "${B}========================================${N}"
-    local en dom cf_st
+    local en dom cf_st tun_eng
     en=$(is_caddy_enabled)
-    # 兼容 systemd 与 OpenRC：Alpine 无 systemctl，需回落到 rc-service / 进程探测
-    if [[ "$INIT_SYS" == "systemd" ]]; then
-      cf_st=$(systemctl is-active cloudflared 2>/dev/null || echo "inactive")
-    else
-      if rc-service cloudflared status >/dev/null 2>&1 || pgrep -f "cloudflared" >/dev/null 2>&1; then
+    tun_eng=$(json_get "$CADDY_META" tunnel_engine)
+    if [[ "$tun_eng" == "sing-box" ]]; then
+      if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+        cf_st=$(systemctl is-active sing-box 2>/dev/null || echo "inactive")
+      elif rc-service sing-box status >/dev/null 2>&1 || pgrep -f "sing-box" >/dev/null 2>&1; then
         cf_st="active"
       else
         cf_st="inactive"
+      fi
+    else
+      if [[ "$INIT_SYS" == "systemd" ]]; then
+        cf_st=$(systemctl is-active cloudflared 2>/dev/null || echo "inactive")
+      else
+        if rc-service cloudflared status >/dev/null 2>&1 || pgrep -f "cloudflared" >/dev/null 2>&1; then
+          cf_st="active"
+        else
+          cf_st="inactive"
+        fi
       fi
     fi
     
@@ -5120,7 +5235,11 @@ caddy_menu() {
 
       local cf_desc
       if [[ "$cf_st" == "active" ]]; then
-        cf_desc="${G}运行中${N}"
+        if [[ "$tun_eng" == "sing-box" ]]; then
+          cf_desc="${G}运行中 (sing-box 原生引擎)${N}"
+        else
+          cf_desc="${G}运行中${N}"
+        fi
       else
         cf_desc="${R}已停止 [${cf_st}]${N}"
       fi
@@ -5187,7 +5306,16 @@ caddy_menu() {
         2) caddy_interactive_setup; pause ;;
         3)
           echo
-          if command -v journalctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+          if [[ "$tun_eng" == "sing-box" ]]; then
+            if [[ -f /var/log/sing-box.log ]]; then
+              echo -e "  ${B}[+] 正在检索 sing-box 隧道运行日志...${N}"
+              grep -iE "cloudflared|cf-tunnel|tunnel|ingress" /var/log/sing-box.log 2>/dev/null | tail -n 40 || tail -n 40 /var/log/sing-box.log
+            elif command -v journalctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+              journalctl -u sing-box -n 40 --no-pager
+            else
+              echo "未找到 sing-box 隧道运行日志"
+            fi
+          elif command -v journalctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
             journalctl -u cloudflared -n 40 --no-pager
           elif [[ -f /var/log/cloudflared.err || -f /var/log/cloudflared.log ]]; then
             tail -n 40 /var/log/cloudflared.err /var/log/cloudflared.log 2>/dev/null
@@ -5198,10 +5326,18 @@ caddy_menu() {
         4)
           echo -e "  正在重启 Cloudflare 隧道服务..."
           local cf_re_ok=false
-          if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
-            systemctl restart cloudflared 2>/dev/null && cf_re_ok=true
-          elif command -v rc-service >/dev/null 2>&1; then
-            (rc-service cloudflared restart 2>/dev/null || rc-service cloudflared start 2>/dev/null) && cf_re_ok=true
+          if [[ "$tun_eng" == "sing-box" ]]; then
+            if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+              systemctl restart sing-box 2>/dev/null && cf_re_ok=true
+            elif command -v rc-service >/dev/null 2>&1; then
+              (rc-service sing-box restart 2>/dev/null || rc-service sing-box start 2>/dev/null) && cf_re_ok=true
+            fi
+          else
+            if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+              systemctl restart cloudflared 2>/dev/null && cf_re_ok=true
+            elif command -v rc-service >/dev/null 2>&1; then
+              (rc-service cloudflared restart 2>/dev/null || rc-service cloudflared start 2>/dev/null) && cf_re_ok=true
+            fi
           fi
           [[ "$cf_re_ok" == "true" ]] && echo -e "  ${G}[✓] Cloudflare 隧道服务已成功重启${N}" || echo -e "  ${R}[×] 隧道服务重启失败${N}"
           pause ;;
@@ -5304,14 +5440,24 @@ case "${1:-}" in
   reload_caddy) reload_caddy_proxy ;;
   restart_tunnel)
     shift
-    if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
-      systemctl restart cloudflared 2>/dev/null || true
-    elif command -v rc-service >/dev/null 2>&1; then
-      rc-service cloudflared stop >/dev/null 2>&1 || true
-      rc-service cloudflared zap >/dev/null 2>&1 || true
-      pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
-      sleep 0.5
-      rc-service cloudflared start >/dev/null 2>&1 || true
+    local tun_eng
+    tun_eng=$(json_get "$CADDY_META" tunnel_engine)
+    if [[ "$tun_eng" == "sing-box" ]]; then
+      if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+        systemctl restart sing-box 2>/dev/null || true
+      elif command -v rc-service >/dev/null 2>&1; then
+        rc-service sing-box restart 2>/dev/null || true
+      fi
+    else
+      if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+        systemctl restart cloudflared 2>/dev/null || true
+      elif command -v rc-service >/dev/null 2>&1; then
+        rc-service cloudflared stop >/dev/null 2>&1 || true
+        rc-service cloudflared zap >/dev/null 2>&1 || true
+        pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
+        sleep 0.5
+        rc-service cloudflared start >/dev/null 2>&1 || true
+      fi
     fi
     reload_caddy_proxy >/dev/null 2>&1 || true
     echo "OK"
