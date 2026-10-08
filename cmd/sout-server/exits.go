@@ -351,6 +351,9 @@ func (m *Manager) ExitsOf() ExitsView {
 
 	// 识别基础原生入站并去重保序 (仅基础原生母节点生成独立卡片)
 	for _, ib := range list {
+		if strings.EqualFold(ib.Protocol, "cloudflared") || ib.Tag == "cf-tunnel-in" || strings.HasPrefix(ib.Tag, "cf-tunnel") {
+			continue
+		}
 		if !ib.IsBase {
 			continue
 		}
@@ -370,6 +373,9 @@ func (m *Manager) ExitsOf() ExitsView {
 
 	// 第三轮：挂载分支
 	for _, ib := range list {
+		if strings.EqualFold(ib.Protocol, "cloudflared") || ib.Tag == "cf-tunnel-in" || strings.HasPrefix(ib.Tag, "cf-tunnel") {
+			continue
+		}
 		targetID := ib.ID
 		if ib.ClientID > 0 {
 			targetID = ib.ClientID

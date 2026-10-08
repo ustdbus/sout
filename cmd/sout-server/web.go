@@ -959,7 +959,8 @@ function renderExits(){
 // ---- 渲染节点列表 ----
 function renderNodes(){
   const box = $('#nodesContainer');
-  const nodes = viewData.nodes || [];
+  const rawNodes = viewData.nodes || [];
+  const nodes = rawNodes.filter(n => (n.protocol || '').toUpperCase() !== 'CLOUDFLARED' && n.name !== 'cf-tunnel-in' && !n.name.startsWith('cf-tunnel'));
   if(!nodes.length){
     const bName = (viewData && viewData.backend === 'sing-box') ? 'sing-box 内核' : 's-ui 面板';
     box.innerHTML = '<div class="empty">' + bName + '中暂无入站节点，请先创建基础入站后刷新</div>';

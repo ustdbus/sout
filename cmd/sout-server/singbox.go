@@ -661,6 +661,9 @@ func (sb *SingBox) Inbounds(live map[string]bool) ([]Inbound, error) {
 		baseID := (idx + 1) * 1000
 		proto, _ := ibMap["type"].(string)
 		tag, _ := ibMap["tag"].(string)
+		if proto == "cloudflared" || tag == "cf-tunnel-in" || strings.HasPrefix(tag, "cf-tunnel") {
+			continue
+		}
 		port := int(getFloat(ibMap["listen_port"]))
 		remark := tag
 		if remark == "" {
@@ -2277,6 +2280,9 @@ func (sb *SingBox) NodeDetail(id int) (*NodeDetailInfo, error) {
 	ibMap, _ := inboundsRaw[idx].(map[string]any)
 	proto, _ := ibMap["type"].(string)
 	tag, _ := ibMap["tag"].(string)
+	if proto == "cloudflared" || tag == "cf-tunnel-in" || strings.HasPrefix(tag, "cf-tunnel") {
+		return nil, fmt.Errorf("该入站为底层隧道流量入口，非普通业务节点")
+	}
 	port := int(getFloat(ibMap["listen_port"]))
 	listen, _ := ibMap["listen"].(string)
 
@@ -2416,7 +2422,11 @@ func (sb *SingBox) UpdateNodeConfig(id int, listen string, listenPort int, addrs
 	}
 
 	ibMap, _ := inboundsRaw[idx].(map[string]any)
+	proto, _ := ibMap["type"].(string)
 	tag, _ := ibMap["tag"].(string)
+	if proto == "cloudflared" || tag == "cf-tunnel-in" || strings.HasPrefix(tag, "cf-tunnel") {
+		return fmt.Errorf("禁止修改底层隧道入口配置")
+	}
 
 	origIbJSON, _ := json.Marshal(ibMap)
 

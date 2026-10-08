@@ -222,6 +222,51 @@ func fetchLogs(source string, lines int) string {
 
 	switch source {
 	case "tunnel", "cloudflared":
+		isSingboxTunnel := false
+		if b, err := os.ReadFile("/etc/sing-box/config.json"); err == nil && (strings.Contains(string(b), "\"cloudflared\"") || strings.Contains(string(b), "\"cf-tunnel-in\"")) {
+			isSingboxTunnel = true
+		} else if b, err := os.ReadFile(filepath.Join(currentBasePathDir(), "caddy_meta.json")); err == nil && strings.Contains(string(b), "\"tunnel_engine\": \"sing-box\"") {
+			isSingboxTunnel = true
+		}
+
+		if isSingboxTunnel {
+			var sbLogs string
+			if hasCmd("journalctl") {
+				cmd := exec.Command("journalctl", "-u", "sing-box", "-n", strconv.Itoa(lines*2), "--no-pager")
+				if out, err := cmd.CombinedOutput(); err == nil && len(bytes.TrimSpace(out)) > 0 {
+					sbLogs = string(out)
+				}
+			}
+			if sbLogs == "" {
+				for _, f := range []string{"/var/log/sing-box.log", "/var/log/sing-box/sing-box.log", "/var/log/sing-box.err"} {
+					if s := readLastLinesFromFile(f, lines*2); s != "" {
+						sbLogs = s
+						break
+					}
+				}
+			}
+			if sbLogs != "" {
+				var tunnelLines []string
+				for _, line := range strings.Split(sbLogs, "\n") {
+					lower := strings.ToLower(line)
+					if strings.Contains(lower, "cloudflared") || strings.Contains(lower, "cf-tunnel") || strings.Contains(lower, "tunnel") || strings.Contains(lower, "quic") || strings.Contains(lower, "ingress") {
+						tunnelLines = append(tunnelLines, line)
+					}
+				}
+				if len(tunnelLines) > 0 {
+					if len(tunnelLines) > lines {
+						tunnelLines = tunnelLines[len(tunnelLines)-lines:]
+					}
+					return strings.Join(tunnelLines, "\n")
+				}
+				allLines := strings.Split(sbLogs, "\n")
+				if len(allLines) > lines {
+					allLines = allLines[len(allLines)-lines:]
+				}
+				return strings.Join(allLines, "\n")
+			}
+		}
+
 		if hasCmd("journalctl") {
 			cmd := exec.Command("journalctl", "-u", "cloudflared", "-n", strconv.Itoa(lines), "--no-pager")
 			out, err := cmd.CombinedOutput()

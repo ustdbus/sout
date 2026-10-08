@@ -982,6 +982,9 @@ func (s *SUI) Inbounds(live map[string]bool) ([]Inbound, error) {
 
 	var list []Inbound
 	for _, item := range inboundsList {
+		if item.Type == "cloudflared" || item.Tag == "cf-tunnel-in" || strings.HasPrefix(item.Tag, "cf-tunnel") {
+			continue
+		}
 		if isResidentialBranch(item.Tag) {
 			continue // 忽略旧版克隆入站
 		}
@@ -3237,6 +3240,9 @@ func (s *SUI) NodeDetail(id int) (*NodeDetailInfo, error) {
 			return nil, fmt.Errorf("未找到节点 %d", id)
 		}
 		row := rows[0]
+		if row.Type == "cloudflared" || row.Tag == "cf-tunnel-in" || strings.HasPrefix(row.Tag, "cf-tunnel") {
+			return nil, fmt.Errorf("该入站为底层隧道流量入口，非普通业务节点")
+		}
 		listen := "::"
 		listenPort := 0
 		if len(row.Options) > 0 {
@@ -3267,6 +3273,9 @@ func (s *SUI) NodeDetail(id int) (*NodeDetailInfo, error) {
 	inb := rawWrap.Inbounds[0]
 	tag, _ := inb["tag"].(string)
 	typ, _ := inb["type"].(string)
+	if typ == "cloudflared" || tag == "cf-tunnel-in" || strings.HasPrefix(tag, "cf-tunnel") {
+		return nil, fmt.Errorf("该入站为底层隧道流量入口，非普通业务节点")
+	}
 	listen := "::"
 	listenPort := 0
 	if l, ok := inb["listen"].(string); ok && l != "" {

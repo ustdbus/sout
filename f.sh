@@ -1080,14 +1080,32 @@ show_info() {
       [[ -n "$tp" ]] && c_tun_p="$tp"
     fi
 
+    local tun_eng=""
+    [[ -f "$CADDY_META" ]] && tun_eng=$(json_get "$CADDY_META" tunnel_engine)
     local cf_st="${R}未运行${N}"
-    if [[ "$INIT_SYS" == "systemd" ]]; then
-      if [[ $(systemctl is-active cloudflared 2>/dev/null || echo "") == "active" ]]; then
-        cf_st="${G}运行中 (active)${N}"
+    if [[ "$tun_eng" == "sing-box" ]]; then
+      local sb_active=false
+      if [[ "$INIT_SYS" == "systemd" ]]; then
+        [[ $(systemctl is-active sing-box 2>/dev/null || echo "") == "active" ]] && sb_active=true
+      else
+        if rc-service sing-box status >/dev/null 2>&1 || pgrep -f "sing-box" >/dev/null 2>&1; then
+          sb_active=true
+        fi
+      fi
+      if $sb_active && [[ -f /etc/sing-box/config.json ]] && grep -q '"cf-tunnel-in"' /etc/sing-box/config.json 2>/dev/null; then
+        cf_st="${G}运行中 (sing-box 原生引擎)${N}"
+      else
+        cf_st="${R}未运行${N}"
       fi
     else
-      if rc-service cloudflared status >/dev/null 2>&1 || pgrep -f "cloudflared" >/dev/null 2>&1; then
-        cf_st="${G}运行中 (active)${N}"
+      if [[ "$INIT_SYS" == "systemd" ]]; then
+        if [[ $(systemctl is-active cloudflared 2>/dev/null || echo "") == "active" ]]; then
+          cf_st="${G}运行中 (active)${N}"
+        fi
+      else
+        if rc-service cloudflared status >/dev/null 2>&1 || pgrep -f "cloudflared" >/dev/null 2>&1; then
+          cf_st="${G}运行中 (active)${N}"
+        fi
       fi
     fi
 
@@ -5252,7 +5270,7 @@ caddy_menu() {
       echo -e "${D}----------------------------------------${N}"
       echo "  1) 查看轻量反代与分流详情"
       echo "  2) 重新配置隧道与域名 (修改 Token/域名/端口)"
-      echo "  3) 查看 cloudflared 隧道运行日志"
+      echo "  3) 查看 Cloudflare 隧道运行日志"
       echo "  4) 重启 Cloudflare 隧道"
       echo "  5) 重新应用分流配置 (重启网关)"
       echo "  6) 关闭隧道反代 (恢复独立端口模式)"
