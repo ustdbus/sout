@@ -1115,16 +1115,38 @@ show_info() {
     fi
     local tun_active=false
     if [[ "$tun_eng" == "sing-box" ]]; then
-      local sb_active_tun=false
-      if [[ "$INIT_SYS" == "systemd" ]]; then
-        [[ $(systemctl is-active sing-box 2>/dev/null || echo "") == "active" ]] && sb_active_tun=true
-      else
-        if rc-service sing-box status >/dev/null 2>&1 || pgrep -f "sing-box" >/dev/null 2>&1; then
-          sb_active_tun=true
+      if [[ "$cur_backend" == "s-ui" ]]; then
+        local sui_active_tun=false
+        if [[ "$INIT_SYS" == "systemd" ]]; then
+          [[ $(systemctl is-active s-ui 2>/dev/null || echo "") == "active" ]] && sui_active_tun=true
+        else
+          if rc-service s-ui status >/dev/null 2>&1 || pgrep -f "s-ui" >/dev/null 2>&1 || pgrep -f "sui" >/dev/null 2>&1; then
+            sui_active_tun=true
+          fi
         fi
-      fi
-      if $sb_active_tun && [[ -f /etc/sing-box/config.json ]] && grep -q '"cf-tunnel-in"' /etc/sing-box/config.json 2>/dev/null; then
-        tun_active=true
+        local has_cf_inbound=false
+        if [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
+          has_cf_inbound=$(python3 -c "import sqlite3; con=sqlite3.connect('/usr/local/s-ui/db/s-ui.db'); cur=con.cursor(); print('true' if cur.execute(\"SELECT 1 FROM inbounds WHERE type='cloudflared' OR tag='cf-tunnel-in' LIMIT 1\").fetchone() else 'false')" 2>/dev/null || echo "false")
+        fi
+        if $sui_active_tun && [[ "$has_cf_inbound" == "true" ]]; then
+          tun_active=true
+        elif [[ $(systemctl is-active cloudflared 2>/dev/null || echo "") == "active" ]] || pgrep -f "/usr/local/bin/cloudflared" >/dev/null 2>&1; then
+          tun_active=true
+        fi
+      else
+        local sb_active_tun=false
+        if [[ "$INIT_SYS" == "systemd" ]]; then
+          [[ $(systemctl is-active sing-box 2>/dev/null || echo "") == "active" ]] && sb_active_tun=true
+        else
+          if rc-service sing-box status >/dev/null 2>&1 || pgrep -f "sing-box" >/dev/null 2>&1; then
+            sb_active_tun=true
+          fi
+        fi
+        if $sb_active_tun && [[ -f /etc/sing-box/config.json ]] && grep -q '"cf-tunnel-in"' /etc/sing-box/config.json 2>/dev/null; then
+          tun_active=true
+        elif [[ $(systemctl is-active cloudflared 2>/dev/null || echo "") == "active" ]] || pgrep -f "/usr/local/bin/cloudflared" >/dev/null 2>&1; then
+          tun_active=true
+        fi
       fi
     else
       if [[ "$INIT_SYS" == "systemd" ]]; then
@@ -2517,6 +2539,12 @@ except Exception:
     setup_cloudflared_service "$tunnel_token" "$tunnel_port" "$protocol"
   else
     echo -e "  [+] Cloudflare 原生隧道将由 sing-box 内嵌驱动 (${protocol})..."
+    systemctl stop cloudflared 2>/dev/null || true
+    systemctl disable cloudflared 2>/dev/null || true
+    rc-service cloudflared stop 2>/dev/null || true
+    rc-update del cloudflared default 2>/dev/null || true
+    pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
+    rm -f /etc/systemd/system/cloudflared.service /etc/init.d/cloudflared 2>/dev/null || true
   fi
 
   if [[ "$is_quick" == "true" ]]; then
@@ -3070,14 +3098,14 @@ api('POST', 'save', {
 })
 created_inbound_tags.append(reality_tag)
 
-# 若为原生 sing-box 模式且存在 TUNNEL_TOKEN，添加/更新 cf-tunnel-in 原生入站
+# 若存在 TUNNEL_TOKEN，不论是 s-ui 还是原生 sing-box，均添加/更新 cf-tunnel-in 原生内置入站
 tunnel_token = os.environ.get('TUNNEL_TOKEN', '').strip()
 tunnel_proto = os.environ.get('TUNNEL_PROTOCOL', 'quic').strip() or 'quic'
-if not has_sui and tunnel_token:
+if tunnel_token:
     cf_tag = 'cf-tunnel-in'
     existing_cf = next((r for r in inbound_rows if r.get('tag') == cf_tag or r.get('type') == 'cloudflared'), None)
     cf_payload = {
-        'id': existing_cf.get('id') if existing_cf else 9999,
+        'id': existing_cf.get('id') if existing_cf else 0,
         'type': 'cloudflared',
         'tag': cf_tag,
         'token': tunnel_token,
@@ -3371,6 +3399,22 @@ except Exception:
     pass
 ' 2>/dev/null || true
     systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || service sing-box restart 2>/dev/null || true
+  fi
+
+  # 从 s-ui 数据库安全移除 cf-tunnel-in 原生入站
+  if [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
+    python3 -c "
+import sqlite3
+try:
+    con = sqlite3.connect('/usr/local/s-ui/db/s-ui.db')
+    cur = con.cursor()
+    cur.execute(\"DELETE FROM inbounds WHERE tag='cf-tunnel-in' OR type='cloudflared'\")
+    con.commit()
+    con.close()
+except Exception:
+    pass
+" 2>/dev/null || true
+    systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || service s-ui restart 2>/dev/null || true
   fi
 
   if [[ -f "$CADDY_META" ]]; then
@@ -5255,9 +5299,11 @@ caddy_menu() {
       tun_eng="sing-box"
     fi
     if [[ "$tun_eng" == "sing-box" ]]; then
+      local svc_target="sing-box"
+      is_sui_backend && svc_target="s-ui"
       if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
-        cf_st=$(systemctl is-active sing-box 2>/dev/null || echo "inactive")
-      elif rc-service sing-box status >/dev/null 2>&1 || pgrep -f "sing-box" >/dev/null 2>&1; then
+        cf_st=$(systemctl is-active "$svc_target" 2>/dev/null || echo "inactive")
+      elif rc-service "$svc_target" status >/dev/null 2>&1 || pgrep -f "$svc_target" >/dev/null 2>&1 || pgrep -f "sui" >/dev/null 2>&1; then
         cf_st="active"
       else
         cf_st="inactive"
@@ -5350,13 +5396,16 @@ caddy_menu() {
         3)
           echo
           if [[ "$tun_eng" == "sing-box" ]]; then
-            if [[ -f /var/log/sing-box.log ]]; then
-              echo -e "  ${B}[+] 正在检索 sing-box 隧道运行日志...${N}"
-              grep -iE "cloudflared|cf-tunnel|tunnel|ingress|quic" /var/log/sing-box.log 2>/dev/null | tail -n 40 || tail -n 40 /var/log/sing-box.log
-            elif command -v journalctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
-              journalctl -u sing-box -n 40 --no-pager
+            local svc_log_target="sing-box"
+            is_sui_backend && svc_log_target="s-ui"
+            if command -v journalctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+              echo -e "  ${B}[+] 正在检索 ${svc_log_target} 隧道运行日志...${N}"
+              journalctl -u "$svc_log_target" -n 40 --no-pager
+            elif [[ -f "/var/log/${svc_log_target}.log" ]]; then
+              echo -e "  ${B}[+] 正在检索 ${svc_log_target} 隧道运行日志...${N}"
+              grep -iE "cloudflared|cf-tunnel|tunnel|ingress|quic" "/var/log/${svc_log_target}.log" 2>/dev/null | tail -n 40 || tail -n 40 "/var/log/${svc_log_target}.log"
             else
-              echo "未找到 sing-box 隧道运行日志"
+              echo "未找到 ${svc_log_target} 隧道运行日志"
             fi
           elif command -v journalctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
             journalctl -u cloudflared -n 40 --no-pager
@@ -5370,10 +5419,12 @@ caddy_menu() {
           echo -e "  正在重启 Cloudflare 隧道服务..."
           local cf_re_ok=false
           if [[ "$tun_eng" == "sing-box" ]]; then
+            local svc_re_target="sing-box"
+            is_sui_backend && svc_re_target="s-ui"
             if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
-              systemctl restart sing-box 2>/dev/null && cf_re_ok=true
+              systemctl restart "$svc_re_target" 2>/dev/null && cf_re_ok=true
             elif command -v rc-service >/dev/null 2>&1; then
-              (rc-service sing-box restart 2>/dev/null || rc-service sing-box start 2>/dev/null) && cf_re_ok=true
+              (rc-service "$svc_re_target" restart 2>/dev/null || rc-service "$svc_re_target" start 2>/dev/null) && cf_re_ok=true
             fi
           else
             if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
@@ -5488,10 +5539,12 @@ case "${1:-}" in
       tun_eng="sing-box"
     fi
     if [[ "$tun_eng" == "sing-box" ]]; then
+      local svc_cmd_target="sing-box"
+      is_sui_backend && svc_cmd_target="s-ui"
       if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
-        systemctl restart sing-box 2>/dev/null || true
+        systemctl restart "$svc_cmd_target" 2>/dev/null || true
       elif command -v rc-service >/dev/null 2>&1; then
-        rc-service sing-box restart 2>/dev/null || true
+        rc-service "$svc_cmd_target" restart 2>/dev/null || true
       fi
     else
       if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then

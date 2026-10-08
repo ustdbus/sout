@@ -232,13 +232,16 @@ func fetchLogs(source string, lines int) string {
 		if isSingboxTunnel {
 			var sbLogs string
 			if hasCmd("journalctl") {
-				cmd := exec.Command("journalctl", "-u", "sing-box", "-n", strconv.Itoa(lines*2), "--no-pager")
-				if out, err := cmd.CombinedOutput(); err == nil && len(bytes.TrimSpace(out)) > 0 {
-					sbLogs = string(out)
+				for _, unit := range []string{"sing-box", "s-ui"} {
+					cmd := exec.Command("journalctl", "-u", unit, "-n", strconv.Itoa(lines*2), "--no-pager")
+					if out, err := cmd.CombinedOutput(); err == nil && len(bytes.TrimSpace(out)) > 0 {
+						sbLogs = string(out)
+						break
+					}
 				}
 			}
 			if sbLogs == "" {
-				for _, f := range []string{"/var/log/sing-box.log", "/var/log/sing-box/sing-box.log", "/var/log/sing-box.err"} {
+				for _, f := range []string{"/var/log/sing-box.log", "/var/log/sing-box/sing-box.log", "/var/log/sing-box.err", "/var/log/s-ui.log"} {
 					if s := readLastLinesFromFile(f, lines*2); s != "" {
 						sbLogs = s
 						break

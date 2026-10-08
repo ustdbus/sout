@@ -344,7 +344,7 @@ func GetGatewayStatus(workDir string) map[string]any {
 		}
 	}
 
-	// 检查 sing-box 原生内置隧道识别与运行状态
+	// 检查 sing-box 原生内置隧道识别与运行状态（涵盖原生 sing-box 与 s-ui 驱动内核）
 	sbConfigPath := "/etc/sing-box/config.json"
 	hasNativeTunnel := false
 	if sbData, err := os.ReadFile(sbConfigPath); err == nil {
@@ -353,22 +353,39 @@ func GetGatewayStatus(workDir string) map[string]any {
 			hasNativeTunnel = true
 		}
 	}
+	isSUI := false
+	if st["panel_mode"] == "s-ui" {
+		isSUI = true
+	} else if _, err := os.Stat("/usr/local/s-ui/db/s-ui.db"); err == nil {
+		isSUI = true
+	}
+	if !hasNativeTunnel && isSUI {
+		if eng, _ := st["tunnel_engine"].(string); eng == "sing-box" {
+			hasNativeTunnel = true
+		}
+	}
 
 	cfRunning := false
 	if hasNativeTunnel {
 		st["tunnel_engine"] = "sing-box"
-		if exec.Command("pgrep", "-f", "sing-box").Run() == nil {
+		checkProc := "sing-box"
+		serviceName := "sing-box"
+		if isSUI {
+			checkProc = "sui"
+			serviceName = "s-ui"
+		}
+		if exec.Command("pgrep", "-f", checkProc).Run() == nil {
 			cfRunning = true
 		}
 		st["cloudflared_running"] = cfRunning
 
-		// 若配置了原生隧道但 sing-box 进程未运行，后台自愈拉起 sing-box
+		// 若配置了原生隧道但对应服务未运行，后台自愈拉起对应服务
 		if enabled, _ := st["enabled"].(bool); enabled && !cfRunning {
 			go func() {
 				if _, err := exec.LookPath("systemctl"); err == nil {
-					_ = exec.Command("systemctl", "start", "sing-box").Run()
+					_ = exec.Command("systemctl", "start", serviceName).Run()
 				} else if _, err := exec.LookPath("rc-service"); err == nil {
-					_ = exec.Command("rc-service", "sing-box", "start").Run()
+					_ = exec.Command("rc-service", serviceName, "start").Run()
 				}
 			}()
 		}
