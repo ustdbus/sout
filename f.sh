@@ -1082,6 +1082,9 @@ show_info() {
 
     local tun_eng=""
     [[ -f "$CADDY_META" ]] && tun_eng=$(json_get "$CADDY_META" tunnel_engine)
+    if [[ -z "$tun_eng" ]] && grep -q '"cf-tunnel-in"' /etc/sing-box/config.json 2>/dev/null; then
+      tun_eng="sing-box"
+    fi
     local cf_st="${R}未运行${N}"
     if [[ "$tun_eng" == "sing-box" ]]; then
       local sb_active=false
@@ -5225,6 +5228,9 @@ caddy_menu() {
     local en dom cf_st tun_eng
     en=$(is_caddy_enabled)
     tun_eng=$(json_get "$CADDY_META" tunnel_engine)
+    if [[ -z "$tun_eng" ]] && grep -q '"cf-tunnel-in"' /etc/sing-box/config.json 2>/dev/null; then
+      tun_eng="sing-box"
+    fi
     if [[ "$tun_eng" == "sing-box" ]]; then
       if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
         cf_st=$(systemctl is-active sing-box 2>/dev/null || echo "inactive")
