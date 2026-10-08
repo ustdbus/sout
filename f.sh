@@ -2132,8 +2132,19 @@ sys.exit(0 if latest > cur else 1)
 
   # 7. 若开启了 Cloudflare 隧道，联动重启隧道并执行内置轻量反代网关重新探测分流
   if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$CADDY_META" 2>/dev/null; then
-    echo -e "  ${B}[+] 检测到已开启 Cloudflare 隧道反代，正在自动重启隧道服务...${N}"
-    systemctl restart cloudflared 2>/dev/null || rc-service cloudflared restart 2>/dev/null || service cloudflared restart 2>/dev/null || true
+    local t_eng
+    t_eng=$(json_get "$CADDY_META" tunnel_engine)
+    if [[ "$t_eng" == "sing-box" ]] || grep -q '"cf-tunnel-in"' /etc/sing-box/config.json 2>/dev/null || is_sui_backend; then
+      systemctl stop cloudflared 2>/dev/null || true
+      systemctl disable cloudflared 2>/dev/null || true
+      rc-service cloudflared stop 2>/dev/null || true
+      rc-update del cloudflared default 2>/dev/null || true
+      pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
+      rm -f /etc/systemd/system/cloudflared.service /etc/init.d/cloudflared 2>/dev/null || true
+    else
+      echo -e "  ${B}[+] 检测到已开启 Cloudflare 隧道反代，正在自动重启隧道服务...${N}"
+      systemctl restart cloudflared 2>/dev/null || rc-service cloudflared restart 2>/dev/null || service cloudflared restart 2>/dev/null || true
+    fi
     echo -e "  ${B}[+] 正在自动执行内置轻量反代网关重新探测并分流...${N}"
     reload_caddy_proxy
   fi
@@ -4046,6 +4057,8 @@ d['sub_port'] = int('${sub_port}')
 d['sub_path'] = '${save_sub_path}'
 d['ws_path'] = '${save_ws_path}'
 d['node_port'] = int('${node_port}')
+if d.get('mode', 'tunnel') != 'quick_tunnel':
+    d['tunnel_engine'] = 'sing-box'
 with open(p, 'w') as f:
     json.dump(d, f, indent=2)
 " 2>/dev/null || true
