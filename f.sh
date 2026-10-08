@@ -5464,8 +5464,10 @@ case "${1:-}" in
   reload_caddy) reload_caddy_proxy ;;
   restart_tunnel)
     shift
-    local tun_eng
     tun_eng=$(json_get "$CADDY_META" tunnel_engine)
+    if [[ -z "$tun_eng" ]] && grep -q '"cf-tunnel-in"' /etc/sing-box/config.json 2>/dev/null; then
+      tun_eng="sing-box"
+    fi
     if [[ "$tun_eng" == "sing-box" ]]; then
       if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
         systemctl restart sing-box 2>/dev/null || true
