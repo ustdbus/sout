@@ -1460,6 +1460,33 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 	return links
 }
 
+// resolveTemplateInbound 安全解析模板节点，自动跳过 cloudflared 隧道等非代理入站并自适应存量偏移
+func resolveTemplateInbound(inboundsRaw []any, templateID int) (map[string]any, int, error) {
+	idx := (templateID / 1000) - 1
+	if idx < 0 || idx >= len(inboundsRaw) {
+		return nil, -1, fmt.Errorf("指定的模板节点不存在 (ID: %d)", templateID)
+	}
+	ibMap, ok := inboundsRaw[idx].(map[string]any)
+	if !ok {
+		return nil, -1, fmt.Errorf("节点数据无效")
+	}
+	typ, _ := ibMap["type"].(string)
+	tag, _ := ibMap["tag"].(string)
+	if typ == "cloudflared" || tag == "cf-tunnel-in" || typ == "direct" || typ == "block" {
+		if idx+1 < len(inboundsRaw) {
+			if nextMap, ok := inboundsRaw[idx+1].(map[string]any); ok {
+				nextType, _ := nextMap["type"].(string)
+				nextTag, _ := nextMap["tag"].(string)
+				if nextType != "cloudflared" && nextTag != "cf-tunnel-in" && nextType != "direct" && nextType != "block" {
+					return nextMap, idx + 1, nil
+				}
+			}
+		}
+		return nil, -1, fmt.Errorf("指定的模板节点为非代理入站 (类型: %s)", typ)
+	}
+	return ibMap, idx, nil
+}
+
 // CloneToTunnels 派生分流节点至目标隧道
 func (sb *SingBox) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) ([]int, error) {
 	sb.mu.Lock()
@@ -1471,14 +1498,9 @@ func (sb *SingBox) CloneToTunnels(templateID int, hosts []string, tunnels []*Tun
 	}
 
 	inboundsRaw, _ := cfg["inbounds"].([]any)
-	idx := (templateID / 1000) - 1
-	if idx < 0 || idx >= len(inboundsRaw) {
-		return nil, fmt.Errorf("指定的模板节点不存在 (ID: %d)", templateID)
-	}
-
-	ibMap, ok := inboundsRaw[idx].(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("节点数据无效")
+	ibMap, idx, err := resolveTemplateInbound(inboundsRaw, templateID)
+	if err != nil {
+		return nil, err
 	}
 
 	usersRaw, _ := ibMap["users"].([]any)
@@ -1745,12 +1767,8 @@ func (sb *SingBox) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) err
 
 	// 接着为所有匹配到的 binding 兜底保证：若客户端或规则丢失，原地补齐重建
 	for _, b := range matchedBindings {
-		tplIdx := (b.TemplateID / 1000) - 1
-		if tplIdx < 0 || tplIdx >= len(inboundsRaw) {
-			continue
-		}
-		ibMap, ok := inboundsRaw[tplIdx].(map[string]any)
-		if !ok {
+		ibMap, _, err := resolveTemplateInbound(inboundsRaw, b.TemplateID)
+		if err != nil {
 			continue
 		}
 		targetClientName := fmt.Sprintf("soutu%d%s", b.TemplateID, newHostTag)
@@ -1990,16 +2008,15 @@ func (sb *SingBox) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
 	routeRaw, _ := cfg["route"].(map[string]any)
 
 	for _, id := range ids {
-		tplIdx := (id / 1000) - 1
-		if tplIdx < 0 || tplIdx >= len(inboundsRaw) {
+		ibMap, tplIdx, err := resolveTemplateInbound(inboundsRaw, id)
+		if err != nil {
 			continue
 		}
 
 		if id%1000 > 0 {
 			// 精准删除特定 Client 分流分支
 			cIdx := (id % 1000) - 1
-			ibMap, ok := inboundsRaw[tplIdx].(map[string]any)
-			if ok {
+			if ok := true; ok {
 				usersRaw, _ := ibMap["users"].([]any)
 				if cIdx >= 0 && cIdx < len(usersRaw) {
 					delUser, _ := usersRaw[cIdx].(map[string]any)
@@ -2558,12 +2575,8 @@ func (sb *SingBox) OnTunnelsChanged(tunnels []*Tunnel) error {
 			if b.TemplateID <= 0 {
 				continue
 			}
-			tplIdx := (b.TemplateID / 1000) - 1
-			if tplIdx < 0 || tplIdx >= len(inboundsRaw) {
-				continue
-			}
-			ibMap, ok := inboundsRaw[tplIdx].(map[string]any)
-			if !ok {
+			ibMap, _, err := resolveTemplateInbound(inboundsRaw, b.TemplateID)
+			if err != nil {
 				continue
 			}
 
