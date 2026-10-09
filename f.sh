@@ -840,9 +840,33 @@ web_basepath() {
 }
 
 public_ip() {
+  # 1. 优先读取安装时持久化记录的主机公网 IP
+  if [[ -f "${WORK_DIR}/host_ip" ]]; then
+    local hip
+    hip=$(cat "${WORK_DIR}/host_ip" 2>/dev/null | tr -d ' \r\n')
+    if [[ -n "$hip" && "$hip" != "127.0.0.1" ]]; then
+      echo "$hip"
+      return
+    fi
+  fi
+  if [[ -n "${HOST_PUBLIC_IP:-}" && "${HOST_PUBLIC_IP}" != "127.0.0.1" ]]; then
+    echo "$HOST_PUBLIC_IP"
+    return
+  fi
+
+  # 2. 依次探测原生 IPv4 与 IPv6 出口
   local ip
-  ip=$(curl -s4m 3 https://checkip.amazonaws.com || curl -s4m 3 https://api.ipify.org || curl -s4m 3 https://ifconfig.me || echo "127.0.0.1")
-  echo "$ip"
+  ip=$(curl -s4m 3 https://checkip.amazonaws.com 2>/dev/null || curl -s4m 3 https://api.ipify.org 2>/dev/null || curl -s4m 3 https://ifconfig.me 2>/dev/null || true)
+  if [[ -n "$ip" ]]; then
+    echo "$ip"
+    return
+  fi
+  ip=$(curl -s6m 3 https://api64.ipify.org 2>/dev/null || curl -s6m 3 https://ipv6.icanhazip.com 2>/dev/null || curl -s6m 3 https://v6.ident.me 2>/dev/null || true)
+  if [[ -n "$ip" ]]; then
+    echo "$ip"
+    return
+  fi
+  echo "127.0.0.1"
 }
 
 pause() {
@@ -2454,7 +2478,8 @@ except Exception:
   fi
 
   local public_ip cur_cc
-  public_ip=$(curl -s4m 5 https://checkip.amazonaws.com 2>/dev/null || curl -s4m 5 https://api.ipify.org 2>/dev/null || curl -s4m 5 https://ifconfig.me 2>/dev/null || echo "$domain")
+  public_ip=$(public_ip)
+  [[ "$public_ip" == "127.0.0.1" ]] && public_ip="$domain"
   cur_cc=$(get_tcp_congestion)
 
   if [[ "$is_quick" == "true" ]]; then
@@ -4337,7 +4362,7 @@ apply_tuic_hy2_to_singbox() {
   local pip
   pip=$(public_ip || true)
   local node_server="$pip"
-  [[ -z "$node_server" ]] && node_server="$cert_domain"
+  [[ -z "$node_server" || "$node_server" == "127.0.0.1" ]] && node_server="$cert_domain"
 
   # 自动探测已有的 TUIC 与 Hysteria2 端口与凭据（若已存在则严格继承；不存在则自动分配随机高位端口，免除询问）
   local exist_tuic_p exist_hy2_p exist_tuic_uuid exist_tuic_pwd exist_hy2_pwd
@@ -4574,8 +4599,13 @@ PYEOF
   local insec_flag=0
   [[ "$is_insecure" == "true" ]] && insec_flag=1
 
-  local tuic_link="tuic://${tuic_uuid}:${tuic_pass}@${node_server}:${tuic_port}?sni=${cert_domain}&alpn=h3&congestion_control=bbr&allow_insecure=${insec_flag}#TUIC-${cert_domain}"
-  local hy2_link="hysteria2://${hy2_pass}@${node_server}:${hy2_port}?sni=${cert_domain}&insecure=${insec_flag}#Hy2-${cert_domain}"
+  local link_server="$node_server"
+  if [[ "$link_server" =~ : && ! "$link_server" =~ ^\[ ]]; then
+    link_server="[${link_server}]"
+  fi
+
+  local tuic_link="tuic://${tuic_uuid}:${tuic_pass}@${link_server}:${tuic_port}?sni=${cert_domain}&alpn=h3&congestion_control=bbr&allow_insecure=${insec_flag}#TUIC-${cert_domain}"
+  local hy2_link="hysteria2://${hy2_pass}@${link_server}:${hy2_port}?sni=${cert_domain}&insecure=${insec_flag}#Hy2-${cert_domain}"
 
   mkdir -p "$WORK_DIR"
   cat > "${WORK_DIR}/nodes_tuic_hy2.txt" <<NODEOF

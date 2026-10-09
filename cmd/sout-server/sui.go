@@ -2628,7 +2628,15 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 			} else {
 				v.Set("security", "none")
 			}
-			links = append(links, fmt.Sprintf("vless://%s@%s:%d?%s#%s", uuidStr, formatURLHost(host), port, v.Encode(), url.PathEscape(remark)))
+			actualHost := host
+			if out.TLS.Reality.Enabled {
+				if actualHost == "" || actualHost == "127.0.0.1" || actualHost == "0.0.0.0" || (tunnelHost != "" && actualHost == tunnelHost) {
+					if connIP := hostConnectIP(); connIP != "" {
+						actualHost = connIP
+					}
+				}
+			}
+			links = append(links, fmt.Sprintf("vless://%s@%s:%d?%s#%s", uuidStr, formatURLHost(actualHost), port, v.Encode(), url.PathEscape(remark)))
 
 		case "tuic":
 			uuidStr, _ := clientCfg["tuic"]["uuid"].(string)
@@ -2636,12 +2644,16 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 			v := url.Values{}
 			targetHost := host
 			targetSNI := out.TLS.ServerName
-			if net.ParseIP(targetHost) == nil {
-				if pubIP := hostPublicIP(); pubIP != "" {
+			if targetHost == "" || targetHost == "127.0.0.1" || targetHost == "0.0.0.0" {
+				if connIP := hostConnectIP(); connIP != "" {
+					targetHost = connIP
+				}
+			} else if net.ParseIP(targetHost) == nil {
+				if connIP := hostConnectIP(); connIP != "" {
 					if targetSNI == "" || targetSNI == "127.0.0.1" || targetSNI == "0.0.0.0" {
 						targetSNI = targetHost
 					}
-					targetHost = pubIP
+					targetHost = connIP
 				}
 			}
 			if out.TLS.Enabled || targetSNI != "" {
@@ -2702,12 +2714,16 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 			v := url.Values{}
 			targetHost := host
 			targetSNI := out.TLS.ServerName
-			if net.ParseIP(targetHost) == nil {
-				if pubIP := hostPublicIP(); pubIP != "" {
+			if targetHost == "" || targetHost == "127.0.0.1" || targetHost == "0.0.0.0" {
+				if connIP := hostConnectIP(); connIP != "" {
+					targetHost = connIP
+				}
+			} else if net.ParseIP(targetHost) == nil {
+				if connIP := hostConnectIP(); connIP != "" {
 					if targetSNI == "" || targetSNI == "127.0.0.1" || targetSNI == "0.0.0.0" {
 						targetSNI = targetHost
 					}
-					targetHost = pubIP
+					targetHost = connIP
 				}
 			}
 			if targetSNI != "" {

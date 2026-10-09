@@ -48,17 +48,44 @@ setup_nat64_if_pure_ipv6() {
   local has_v4=0
   local has_v6=0
 
-  # 优先检测原生 IPv4 出口连通性
-  if curl -s4m 3 https://api.ipify.org >/dev/null 2>&1 || \
-     curl -s4m 3 https://checkip.amazonaws.com >/dev/null 2>&1 || \
-     curl -s4m 3 http://v4.ident.me >/dev/null 2>&1; then
+  # 优先检测原生 IPv4 出口连通性并记录
+  local detected_v4=""
+  detected_v4=$(curl -s4m 3 https://api.ipify.org 2>/dev/null || \
+                curl -s4m 3 https://checkip.amazonaws.com 2>/dev/null || \
+                curl -s4m 3 http://v4.ident.me 2>/dev/null || true)
+  if [[ -n "$detected_v4" ]]; then
     has_v4=1
   fi
 
-  # 检测 IPv6 出口连通性
-  if curl -s6m 3 https://api64.ipify.org >/dev/null 2>&1 || \
-     curl -s6m 3 https://ipv6.icanhazip.com >/dev/null 2>&1; then
+  # 检测 IPv6 出口连通性并记录
+  local detected_v6=""
+  detected_v6=$(curl -s6m 3 https://api64.ipify.org 2>/dev/null || \
+                curl -s6m 3 https://ipv6.icanhazip.com 2>/dev/null || \
+                curl -s6m 3 https://v6.ident.me 2>/dev/null || true)
+  if [[ -n "$detected_v6" ]]; then
     has_v6=1
+  fi
+
+  # 记录母机主公网 IP，持久化落盘至 /var/lib/sout/host_ip，杜绝后续流程中重复探测出错
+  local primary_ip=""
+  if [[ "$has_v4" -eq 1 ]]; then
+    primary_ip="$detected_v4"
+  elif [[ "$has_v6" -eq 1 ]]; then
+    primary_ip="$detected_v6"
+  fi
+
+  mkdir -p /var/lib/sout
+  if [[ -n "$primary_ip" ]]; then
+    echo "$primary_ip" > /var/lib/sout/host_ip 2>/dev/null || true
+    export HOST_PUBLIC_IP="$primary_ip"
+  fi
+  if [[ -n "$detected_v6" ]]; then
+    echo "$detected_v6" > /var/lib/sout/host_ipv6 2>/dev/null || true
+    export HOST_PUBLIC_IPV6="$detected_v6"
+  fi
+  if [[ -n "$detected_v4" ]]; then
+    echo "$detected_v4" > /var/lib/sout/host_ipv4 2>/dev/null || true
+    export HOST_PUBLIC_IPV4="$detected_v4"
   fi
 
   # 若无公网 IPv4 且有 IPv6，则判定为纯 IPv6 机器
@@ -1540,12 +1567,15 @@ if [[ "$WANT_TUNNEL" == "y" ]]; then
   exit 0
 fi
 
-IP=$(curl -s4m 5 https://checkip.amazonaws.com || curl -s4m 5 https://api.ipify.org || curl -s4m 5 https://ifconfig.me || echo "")
+IP=$(cat "${WORK_DIR}/host_ip" 2>/dev/null | tr -d ' \r\n')
 if [[ -z "$IP" ]]; then
-  IP=$(curl -s6m 5 https://ipv6.icanhazip.com || curl -s6m 5 https://api64.ipify.org || echo "127.0.0.1")
-  if [[ "$IP" =~ : ]]; then
-    IP="[${IP}]"
+  IP=$(curl -s4m 5 https://checkip.amazonaws.com || curl -s4m 5 https://api.ipify.org || curl -s4m 5 https://ifconfig.me || echo "")
+  if [[ -z "$IP" ]]; then
+    IP=$(curl -s6m 5 https://ipv6.icanhazip.com || curl -s6m 5 https://api64.ipify.org || echo "127.0.0.1")
   fi
+fi
+if [[ "$IP" =~ : && ! "$IP" =~ ^\[ ]]; then
+  IP="[${IP}]"
 fi
 BP=$(cat "${WORK_DIR}/basepath" 2>/dev/null | tr -d ' \r\n')
 BP="/${BP#/}"

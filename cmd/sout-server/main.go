@@ -21,7 +21,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v4.4.2"
+var version = "v4.4.3"
 
 func initLowMemoryProtection() {
 	// 全面采用与 Ubuntu 一致的原生全速模式（GOGC=100，零内存上限截断），彻底移除所有人为限制

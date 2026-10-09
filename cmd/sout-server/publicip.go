@@ -2,6 +2,7 @@ package main
 
 import (
 	"net"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -49,6 +50,20 @@ func hostPublicIP() string {
 		return ip
 	}
 	publicIPMu.Unlock()
+
+	// 优先从安装时记录的持久化文件读取
+	for _, p := range []string{"/var/lib/sout/host_ipv4", "/var/lib/sout/host_ip"} {
+		if data, err := os.ReadFile(p); err == nil {
+			val := strings.TrimSpace(string(data))
+			if parsed := net.ParseIP(val); parsed != nil && parsed.To4() != nil {
+				publicIPMu.Lock()
+				publicIPCache = parsed.String()
+				publicIPAt = time.Now()
+				publicIPMu.Unlock()
+				return parsed.String()
+			}
+		}
+	}
 
 	ip := probePublicIP()
 	if ip == "" {
@@ -118,6 +133,20 @@ func hostPublicIPv6() string {
 	}
 	publicIPv6Mu.Unlock()
 
+	// 优先从安装时记录的持久化文件读取
+	for _, p := range []string{"/var/lib/sout/host_ipv6", "/var/lib/sout/host_ip"} {
+		if data, err := os.ReadFile(p); err == nil {
+			val := strings.TrimSpace(string(data))
+			if parsed := net.ParseIP(val); parsed != nil && parsed.To4() == nil && parsed.To16() != nil {
+				publicIPv6Mu.Lock()
+				publicIPv6Cache = parsed.String()
+				publicIPv6At = time.Now()
+				publicIPv6Mu.Unlock()
+				return parsed.String()
+			}
+		}
+	}
+
 	ip := probePublicIPv6()
 	if ip != "" {
 		publicIPv6Mu.Lock()
@@ -126,6 +155,27 @@ func hostPublicIPv6() string {
 		publicIPv6Mu.Unlock()
 	}
 	return ip
+}
+
+// hostConnectIP 返回母机公网直连 IP。
+// 双栈或纯 IPv4 环境返回 IPv4，纯 IPv6 环境返回 IPv6。
+func hostConnectIP() string {
+	if ip := hostPublicIP(); ip != "" && ip != "127.0.0.1" {
+		return ip
+	}
+	if v6 := hostPublicIPv6(); v6 != "" {
+		return v6
+	}
+	// 尝试从持久化文件兜底
+	for _, p := range []string{"/var/lib/sout/host_ip", "/var/lib/sout/host_ipv6"} {
+		if data, err := os.ReadFile(p); err == nil {
+			val := strings.TrimSpace(string(data))
+			if val != "" && val != "127.0.0.1" {
+				return val
+			}
+		}
+	}
+	return ""
 }
 
 // probePublicIPv6 逐个问外部接口，拿到第一个合法的 IPv6 就返回。

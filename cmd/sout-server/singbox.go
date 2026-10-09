@@ -1329,6 +1329,7 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 			v.Set("encryption", "none")
 			v.Set("type", transportType)
 
+			actualHost := connectHost
 			if isReality {
 				v.Set("security", "reality")
 				v.Set("sni", itemSNI)
@@ -1341,6 +1342,12 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 				}
 				if flowStr != "" {
 					v.Set("flow", flowStr)
+				}
+				// Reality 节点是直连节点，绝不能使用回环地址或隧道回源域名
+				if actualHost == "" || actualHost == "127.0.0.1" || actualHost == "0.0.0.0" || (wsHost != "" && actualHost == wsHost) {
+					if connIP := hostConnectIP(); connIP != "" {
+						actualHost = connIP
+					}
 				}
 			} else if itemHasTLS {
 				v.Set("security", "tls")
@@ -1373,7 +1380,7 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 			}
 
 			link := fmt.Sprintf("vless://%s@%s:%d?%s#%s",
-				uuidStr, formatURLHost(connectHost), connectPort, v.Encode(), url.PathEscape(remark))
+				uuidStr, formatURLHost(actualHost), connectPort, v.Encode(), url.PathEscape(remark))
 			links = append(links, link)
 
 		case "trojan":
@@ -1415,12 +1422,16 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 			}
 			targetHost := connectHost
 			targetSNI := itemSNI
-			if net.ParseIP(targetHost) == nil {
-				if pubIP := hostPublicIP(); pubIP != "" {
+			if targetHost == "" || targetHost == "127.0.0.1" || targetHost == "0.0.0.0" {
+				if connIP := hostConnectIP(); connIP != "" {
+					targetHost = connIP
+				}
+			} else if net.ParseIP(targetHost) == nil {
+				if connIP := hostConnectIP(); connIP != "" {
 					if targetSNI == "" || targetSNI == "127.0.0.1" || targetSNI == "0.0.0.0" {
 						targetSNI = targetHost
 					}
-					targetHost = pubIP
+					targetHost = connIP
 				}
 			}
 			link := fmt.Sprintf("tuic://%s@%s:%d?congestion_control=bbr&alpn=%s&sni=%s&allow_insecure=%s#%s",
@@ -1434,12 +1445,16 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 			}
 			targetHost := connectHost
 			targetSNI := itemSNI
-			if net.ParseIP(targetHost) == nil {
-				if pubIP := hostPublicIP(); pubIP != "" {
+			if targetHost == "" || targetHost == "127.0.0.1" || targetHost == "0.0.0.0" {
+				if connIP := hostConnectIP(); connIP != "" {
+					targetHost = connIP
+				}
+			} else if net.ParseIP(targetHost) == nil {
+				if connIP := hostConnectIP(); connIP != "" {
 					if targetSNI == "" || targetSNI == "127.0.0.1" || targetSNI == "0.0.0.0" {
 						targetSNI = targetHost
 					}
-					targetHost = pubIP
+					targetHost = connIP
 				}
 			}
 			link := fmt.Sprintf("hysteria2://%s@%s:%d?sni=%s&insecure=%s#%s",
