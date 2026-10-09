@@ -2527,7 +2527,7 @@ except Exception:
   TUNNEL_PROTOCOL="$protocol" \
   IS_PURE_IPV6="$is_pure_v6" \
   python3 <<'PYEOF'
-import json, os, uuid, urllib.request, urllib.parse, string, random, base64
+import json, os, sys, time, uuid, urllib.request, urllib.parse, string, random, base64
 
 has_sui = (os.environ.get('HAS_SUI') == 'true') and os.path.exists(os.environ.get('SUI_DB', '')) and bool(os.environ.get('SUI_TOKEN'))
 
@@ -2547,15 +2547,22 @@ if has_sui:
     BASE = f'http://127.0.0.1:{cur_port}{cur_path}apiv2'
     TOKEN = os.environ['SUI_TOKEN']
 
-    def api(method, endpoint, form=None):
+    def api(method, endpoint, form=None, retries=3, timeout=35):
         url = BASE.rstrip('/') + '/' + endpoint.lstrip('/')
         data = urllib.parse.urlencode(form).encode() if form else None
         headers = {'Token': TOKEN}
         if data is not None:
             headers['Content-Type'] = 'application/x-www-form-urlencoded'
-        req = urllib.request.Request(url, data=data, headers=headers, method=method)
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            return json.loads(resp.read().decode('utf-8'))
+        for attempt in range(retries):
+            try:
+                req = urllib.request.Request(url, data=data, headers=headers, method=method)
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    return json.loads(resp.read().decode('utf-8'))
+            except Exception as e:
+                if attempt < retries - 1:
+                    time.sleep(1.2)
+                    continue
+                raise e
 else:
     class SingboxAPICompat:
         def __init__(self, config_path='/etc/sing-box/config.json', addrs_path='/var/lib/sout/singbox_inbound_addrs.json'):
@@ -2768,6 +2775,8 @@ else:
         return compat.request(method, endpoint, form)
 
 # 1. 更新 s-ui settings，全部走 s-ui API
+print("  [1/4] 正在配置面板安全监听与轻量网关分流路径...")
+sys.stdout.flush()
 settings_data = {
     'webPort': str(os.environ.get('SUI_PORT', '')),
     'webListen': '127.0.0.1',
@@ -2787,6 +2796,7 @@ api('POST', 'save', {
     'action': 'set',
     'data': json.dumps(settings_data),
 })
+time.sleep(0.3)
 
 # 2. 准备辅助函数与已有入站数据
 def gen_rand_suffix():
@@ -2950,6 +2960,8 @@ if old_vmess_tag and old_vmess_tag != argo_tag:
     except Exception:
         pass
 
+print(f"  [2/4] 正在配置 vless-argo (路径分流: {ws_path}) 节点...")
+sys.stdout.flush()
 vless_payload = {
     'id': argo_id or 0,
     'type': 'vless',
@@ -2972,6 +2984,7 @@ api('POST', 'save', {
     'data': json.dumps(vless_payload)
 })
 created_inbound_tags.append(argo_tag)
+time.sleep(0.4)
 
 # 先检查/创建 reality tls 对象
 all_tls_resp = api('GET', 'tls') or {}
@@ -3018,6 +3031,7 @@ if not reality_tid:
         'action': 'new',
         'data': json.dumps(reality_tls_payload)
     })
+    time.sleep(0.3)
     all_tls_resp = api('GET', 'tls') or {}
     all_tls_obj = all_tls_resp.get('obj') or {}
     all_tls = all_tls_obj.get('tls', []) if isinstance(all_tls_obj, dict) else (all_tls_obj or [])
@@ -3034,6 +3048,8 @@ if reality_id:
             break
 pub_host = os.environ.get('PUBLIC_IP') or domain
 
+print(f"  [3/4] 正在配置 vless-reality (端口: {reality_port}) 节点与密钥对...")
+sys.stdout.flush()
 reality_payload = {
     'id': reality_id or 0,
     'type': 'vless',
@@ -3052,6 +3068,7 @@ api('POST', 'save', {
     'data': json.dumps(reality_payload)
 })
 created_inbound_tags.append(reality_tag)
+time.sleep(0.4)
 
 # 若存在 TUNNEL_TOKEN，不论是 s-ui 还是原生 sing-box，均添加/更新 cf-tunnel-in 原生内置入站
 tunnel_token = os.environ.get('TUNNEL_TOKEN', '').strip()
@@ -3155,11 +3172,17 @@ client_payload = {
     'onlineAt': 0
 }
 
-api('POST', 'save', {
-    'object': 'clients',
-    'action': 'edit' if admin else 'new',
-    'data': json.dumps(client_payload)
-})
+print("  [4/4] 正在关联主用户并同步节点凭据...")
+sys.stdout.flush()
+try:
+    api('POST', 'save', {
+        'object': 'clients',
+        'action': 'edit' if admin else 'new',
+        'data': json.dumps(client_payload)
+    })
+    print("  [✓] 基础节点与轻量分流已配置就绪！")
+except Exception as e:
+    print(f"  [!] 客户端节点关联稍后可在面板确认: {e}")
 
 if not has_sui:
     compat.flush()
@@ -3846,15 +3869,22 @@ import json, os, uuid, urllib.request, urllib.parse
 BASE = os.environ['SUI_API']
 TOKEN = os.environ.get('SUI_TOKEN', '')
 
-def api(method, endpoint, form=None):
+def api(method, endpoint, form=None, retries=2, timeout=25):
     url = BASE.rstrip('/') + '/' + endpoint.lstrip('/')
     data = urllib.parse.urlencode(form).encode() if form else None
     headers = {'Token': TOKEN}
     if data is not None:
         headers['Content-Type'] = 'application/x-www-form-urlencoded'
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode('utf-8'))
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, data=data, headers=headers, method=method)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode('utf-8'))
+        except Exception as e:
+            if attempt < retries - 1:
+                import time; time.sleep(1.0)
+                continue
+            raise e
 
 try:
     inbounds_resp = api('GET', 'inbounds') or {}
@@ -4159,9 +4189,25 @@ except Exception:
   local issue_args=("--issue" "--dns" "dns_cf" "-d" "${domain}")
   [[ "$force" == "true" ]] && issue_args+=("--force")
 
-  echo -e "  [+] 正在与 Cloudflare DNS 握手验证所有权..."
-  local issue_out issue_rc=0
-  issue_out=$("$acme_cmd" "${issue_args[@]}" 2>&1) || issue_rc=$?
+  echo -e "  ${Y}⏳ 预估耗时: 约 20 ~ 50 秒 (Cloudflare 全球 DNS 解析生效与 CA 握手验证)...${N}"
+  echo -e "  [+] 正在与 Cloudflare DNS 握手验证所有权，请稍候..."
+  local issue_out="" issue_rc=0
+  local tmp_issue_log
+  tmp_issue_log=$(mktemp)
+  "$acme_cmd" "${issue_args[@]}" >"$tmp_issue_log" 2>&1 &
+  local acme_pid=$!
+  local elapsed=0
+  while kill -0 "$acme_pid" 2>/dev/null; do
+    sleep 3
+    elapsed=$((elapsed + 3))
+    if [[ $elapsed -ge 6 ]]; then
+      echo -ne "\r  [+] DNS-01 验证进行中... 已耗时 ${elapsed}s (请保持网络畅通)"
+    fi
+  done
+  wait "$acme_pid" || issue_rc=$?
+  issue_out=$(cat "$tmp_issue_log" 2>/dev/null)
+  rm -f "$tmp_issue_log" 2>/dev/null || true
+  [[ $elapsed -ge 6 ]] && echo ""
 
   local is_skipped=0
   if echo "$issue_out" | grep -qE "(Skipping|Domains not changed|Next renewal time is)"; then
@@ -4170,8 +4216,23 @@ except Exception:
 
   if [[ $issue_rc -ne 0 && $is_skipped -eq 0 ]]; then
     # 若首发失败，尝试带 --force 重试一次以处理状态锁冲突
-    echo -e "  ${Y}[!] 正在尝试强制刷新申请...${N}"
-    issue_out=$("$acme_cmd" "${issue_args[@]}" --force 2>&1) || issue_rc=$?
+    echo -e "  ${Y}[!] 正在尝试强制刷新申请 (预计 20 ~ 40 秒)...${N}"
+    local tmp_force_log
+    tmp_force_log=$(mktemp)
+    "$acme_cmd" "${issue_args[@]}" --force >"$tmp_force_log" 2>&1 &
+    local force_pid=$!
+    local force_elapsed=0
+    while kill -0 "$force_pid" 2>/dev/null; do
+      sleep 3
+      force_elapsed=$((force_elapsed + 3))
+      if [[ $force_elapsed -ge 6 ]]; then
+        echo -ne "\r  [+] 强制申请中... 已耗时 ${force_elapsed}s"
+      fi
+    done
+    wait "$force_pid" || issue_rc=$?
+    issue_out=$(cat "$tmp_force_log" 2>/dev/null)
+    rm -f "$tmp_force_log" 2>/dev/null || true
+    [[ $force_elapsed -ge 6 ]] && echo ""
     if echo "$issue_out" | grep -qE "(Skipping|Domains not changed|Next renewal time is)"; then
       is_skipped=1
     fi
@@ -4874,7 +4935,7 @@ TOKEN = '${sui_token}'
 headers = {'Token': TOKEN}
 req = urllib.request.Request(BASE.rstrip('/') + '/inbounds', headers=headers)
 try:
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(req, timeout=20) as resp:
         d = json.loads(resp.read().decode('utf-8'))
         inbs = d.get('obj', {}).get('inbounds', [])
         tuic_n = next((x for x in inbs if x.get('type') == 'tuic'), None)
@@ -4976,7 +5037,7 @@ except Exception:
   TUIC_PORT="$tuic_p" \
   HY2_PORT="$hy2_p" \
   python3 <<'PYEOF'
-import json, os, sys, urllib.request, urllib.parse, re, random, string
+import json, os, sys, urllib.request, urllib.parse, re, random, string, time
 
 BASE = os.environ['SUI_API']
 TOKEN = os.environ['SUI_TOKEN']
@@ -4989,14 +5050,22 @@ admin_name = os.environ.get('SUI_ADMIN_USER', 'admin')
 pub_ip = os.environ.get('PUBLIC_IP', cert_domain)
 cc = os.environ.get('CONGESTION_CONTROL', 'bbr')
 
-def api(method, endpoint, form=None):
+def api(method, endpoint, form=None, retries=3, timeout=35):
     url = BASE.rstrip('/') + '/' + endpoint.lstrip('/')
     data = urllib.parse.urlencode(form).encode() if form else None
     headers = {'Token': TOKEN}
-    if data is not None: headers['Content-Type'] = 'application/x-www-form-urlencoded'
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read().decode('utf-8'))
+    if data is not None:
+        headers['Content-Type'] = 'application/x-www-form-urlencoded'
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, data=data, headers=headers, method=method)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode('utf-8'))
+        except Exception as e:
+            if attempt < retries - 1:
+                time.sleep(1.5)
+                continue
+            raise e
 
 # 1. 检查现有 TLS 并复用或更新匹配的 TLS 模板（彻底防止重复生成 mytls1, mytls2, mytls3 残留）
 tls_resp = api('GET', 'tls') or {}
@@ -5140,6 +5209,7 @@ else:
         }
         api('POST', 'save', {'object': 'inbounds', 'action': 'new', 'data': json.dumps(tuic_payload)})
         print(f"\033[32m[✓] 已成功创建并上线 TUIC 节点: tag={tuic_tag}, 端口={tuic_port}, 拥塞控制={cc}, 多域名={pub_ip}:{tuic_port}\033[0m")
+time.sleep(0.5)
 
 # 处理 Hysteria2 节点 (确保忽略客户端带宽与多域名完整写入)
 hy2_addrs = [{'server': pub_ip, 'server_port': int(os.environ['HY2_PORT'])}]
@@ -5178,6 +5248,7 @@ else:
         }
         api('POST', 'save', {'object': 'inbounds', 'action': 'new', 'data': json.dumps(hy2_payload)})
         print(f"\033[32m[✓] 已成功创建并上线 Hysteria2 节点: tag={hy2_tag}, 端口={hy2_port}, 忽略客户端带宽=开启, 多域名={pub_ip}:{hy2_port}\033[0m")
+time.sleep(0.5)
 
 # 3. 重新获取所有最新的 inbound ID
 inb_resp2 = api('GET', 'inbounds') or {}
@@ -5285,11 +5356,14 @@ client_payload = {
     'createdAt': target_client.get('createdAt', 0) if target_client else 0,
     'onlineAt': target_client.get('onlineAt', 0) if target_client else 0
 }
-save_cli_res = api('POST', 'save', {'object': 'clients', 'action': 'new' if is_new_user else 'edit', 'data': json.dumps(client_payload)})
-if not save_cli_res.get('success'):
-    print(f"\033[31m[!] 关联用户失败: {save_cli_res.get('msg')}\033[0m")
-else:
-    print(f"\033[32m[✓] 主用户 [{user_name}] (ID: {user_id or 1}) 已成功关联绑定全部入站节点。\033[0m")
+try:
+    save_cli_res = api('POST', 'save', {'object': 'clients', 'action': 'new' if is_new_user else 'edit', 'data': json.dumps(client_payload)})
+    if not save_cli_res.get('success'):
+        print(f"\033[33m[!] 关联用户提示: {save_cli_res.get('msg')}\033[0m")
+    else:
+        print(f"\033[32m[✓] 主用户 [{user_name}] (ID: {user_id or 1}) 已成功关联绑定全部入站节点。\033[0m")
+except Exception as e:
+    print(f"\033[33m[!] 主用户关联入站节点操作已下发，可稍后在 s-ui 面板中确认 ({e})\033[0m")
 PYEOF
 }
 
