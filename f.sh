@@ -822,6 +822,21 @@ web_basepath() {
 }
 
 public_ip() {
+  local net_mode
+  net_mode=$(cat "${WORK_DIR}/network_mode" 2>/dev/null | tr -d ' \r\n')
+  if [[ "$net_mode" == "ipv6_only" ]]; then
+    if [[ -f "${WORK_DIR}/host_ipv6" ]]; then
+      local hip6
+      hip6=$(cat "${WORK_DIR}/host_ipv6" 2>/dev/null | tr -d ' \r\n')
+      [[ -n "$hip6" ]] && echo "$hip6" && return
+    fi
+    local ip6
+    ip6=$(curl -s6m 2 https://api64.ipify.org 2>/dev/null || curl -s6m 2 https://ipv6.icanhazip.com 2>/dev/null || true)
+    [[ -n "$ip6" ]] && echo "$ip6" && return
+    echo "127.0.0.1"
+    return
+  fi
+
   # 1. 优先读取安装时持久化记录的主机公网 IP
   if [[ -f "${WORK_DIR}/host_ip" ]]; then
     local hip
@@ -838,7 +853,7 @@ public_ip() {
 
   # 2. 依次探测原生 IPv4 与 IPv6 出口
   local ip
-  ip=$(curl -s4m 3 https://checkip.amazonaws.com 2>/dev/null || curl -s4m 3 https://api.ipify.org 2>/dev/null || curl -s4m 3 https://ifconfig.me 2>/dev/null || true)
+  ip=$(curl -s4m 2 https://checkip.amazonaws.com 2>/dev/null || curl -s4m 2 https://api.ipify.org 2>/dev/null || true)
   if [[ -n "$ip" ]]; then
     echo "$ip"
     return
@@ -3028,6 +3043,21 @@ if reality_id:
             reality_port = int(r['listen_port'])
             break
 pub_host = os.environ.get('PUBLIC_IP') or domain
+v6_host = os.environ.get('HOST_PUBLIC_IPV6') or os.environ.get('PUBLIC_IPV6') or ''
+if not v6_host and os.path.exists('/var/lib/sout/host_ipv6'):
+    try:
+        with open('/var/lib/sout/host_ipv6', 'r') as vf:
+            v6_host = vf.read().strip()
+    except Exception:
+        pass
+
+reality_addrs = []
+if pub_host and pub_host != '127.0.0.1' and not pub_host.startswith('240') and ':' not in pub_host:
+    reality_addrs.append({'server': pub_host, 'server_port': reality_port})
+if v6_host and v6_host != '127.0.0.1':
+    reality_addrs.append({'server': v6_host, 'server_port': reality_port})
+if not reality_addrs:
+    reality_addrs.append({'server': pub_host or domain or '127.0.0.1', 'server_port': reality_port})
 
 print(f"  [3/4] 正在配置 vless-reality (端口: {reality_port}) 节点与密钥对...")
 sys.stdout.flush()
@@ -3038,10 +3068,7 @@ reality_payload = {
     'tls_id': reality_tid or 0,
     'listen': '::',
     'listen_port': reality_port,
-    'addrs': [{
-        'server': pub_host,
-        'server_port': reality_port
-    }]
+    'addrs': reality_addrs
 }
 api('POST', 'save', {
     'object': 'inbounds',
@@ -4621,24 +4648,49 @@ except Exception:
 
 srv_host = os.environ.get('NODE_SERVER') or os.environ.get('CERT_DOM') or ''
 cert_dom = os.environ.get('CERT_DOM', '')
+v4_host = os.environ.get('PUBLIC_IP') or ''
+v6_host = os.environ.get('HOST_PUBLIC_IPV6') or os.environ.get('PUBLIC_IPV6') or ''
+if not v6_host and os.path.exists('/var/lib/sout/host_ipv6'):
+    try:
+        with open('/var/lib/sout/host_ipv6', 'r') as vf:
+            v6_host = vf.read().strip()
+    except Exception:
+        pass
+if not v4_host and os.path.exists('/var/lib/sout/host_ipv4'):
+    try:
+        with open('/var/lib/sout/host_ipv4', 'r') as vf:
+            v4_host = vf.read().strip()
+    except Exception:
+        pass
+
+base_direct_hosts = []
+if srv_host and srv_host != v4_host and srv_host != v6_host:
+    base_direct_hosts.append(srv_host)
+if v4_host and v4_host != '127.0.0.1' and v4_host not in base_direct_hosts:
+    base_direct_hosts.append(v4_host)
+if v6_host and v6_host != '127.0.0.1' and v6_host not in base_direct_hosts:
+    base_direct_hosts.append(v6_host)
+if not base_direct_hosts:
+    base_direct_hosts = [srv_host or '127.0.0.1']
+
 addrs_data[tuic_tag] = [{
-    'server': srv_host,
+    'server': h,
     'server_port': tuic_p,
     'tls': {
         'enabled': True,
         'insecure': os.environ.get('IS_INSECURE') == 'true',
         'server_name': cert_dom
     }
-}]
+} for h in base_direct_hosts]
 addrs_data[hy2_tag] = [{
-    'server': srv_host,
+    'server': h,
     'server_port': hy2_p,
     'tls': {
         'enabled': True,
         'insecure': os.environ.get('IS_INSECURE') == 'true',
         'server_name': cert_dom
     }
-}]
+} for h in base_direct_hosts]
 
 try:
     os.makedirs(os.path.dirname(addrs_path), exist_ok=True)

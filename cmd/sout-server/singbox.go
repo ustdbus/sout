@@ -2422,6 +2422,30 @@ func (sb *SingBox) NodeDetail(id int) (*NodeDetailInfo, error) {
 				addrs = append(addrs, NodeAddrItem{Server: v6, ServerPort: port})
 			}
 		}
+	} else if port > 0 && listen != "127.0.0.1" {
+		// 存量直连公网节点：双栈环境下自动补全缺失的栈
+		mode := detectNetworkMode()
+		if mode == "dual_stack" {
+			v4 := hostPublicIP()
+			v6 := hostPublicIPv6()
+			hasV4 := false
+			hasV6 := false
+			for _, a := range addrs {
+				if ip := net.ParseIP(a.Server); ip != nil {
+					if ip.To4() != nil {
+						hasV4 = true
+					} else {
+						hasV6 = true
+					}
+				}
+			}
+			if !hasV6 && v6 != "" {
+				addrs = append(addrs, NodeAddrItem{Server: v6, ServerPort: port})
+			}
+			if !hasV4 && v4 != "" {
+				addrs = append(addrs, NodeAddrItem{Server: v4, ServerPort: port})
+			}
+		}
 	}
 
 	// 若 addrs 包含 443/8443 端口或域名，且未判定为 TLS，自动联动为开启客户端 TLS

@@ -3525,6 +3525,50 @@ func (s *SUI) NodeDetail(id int) (*NodeDetailInfo, error) {
 		}
 	}
 
+	// s-ui 直连公网节点网络模式自适应与双栈自动补全
+	if listenPort > 0 && listen != "127.0.0.1" && typ != "cloudflared" && tag != "cf-tunnel-in" {
+		mode := detectNetworkMode()
+		v4 := hostPublicIP()
+		v6 := hostPublicIPv6()
+
+		if len(allAddrs) == 0 {
+			if mode == "ipv6_only" {
+				if v6 != "" {
+					allAddrs = append(allAddrs, NodeAddrItem{Server: v6, ServerPort: listenPort})
+				}
+			} else if mode == "dual_stack" {
+				if v4 != "" {
+					allAddrs = append(allAddrs, NodeAddrItem{Server: v4, ServerPort: listenPort})
+				}
+				if v6 != "" {
+					allAddrs = append(allAddrs, NodeAddrItem{Server: v6, ServerPort: listenPort})
+				}
+			} else {
+				if v4 != "" {
+					allAddrs = append(allAddrs, NodeAddrItem{Server: v4, ServerPort: listenPort})
+				}
+			}
+		} else if mode == "dual_stack" {
+			hasV4 := false
+			hasV6 := false
+			for _, a := range allAddrs {
+				if ip := net.ParseIP(a.Server); ip != nil {
+					if ip.To4() != nil {
+						hasV4 = true
+					} else {
+						hasV6 = true
+					}
+				}
+			}
+			if !hasV6 && v6 != "" {
+				allAddrs = append(allAddrs, NodeAddrItem{Server: v6, ServerPort: listenPort})
+			}
+			if !hasV4 && v4 != "" {
+				allAddrs = append(allAddrs, NodeAddrItem{Server: v4, ServerPort: listenPort})
+			}
+		}
+	}
+
 	return &NodeDetailInfo{
 		ID:           id,
 		Name:         tag,

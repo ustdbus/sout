@@ -88,6 +88,18 @@ setup_nat64_if_pure_ipv6() {
     export HOST_PUBLIC_IPV4="$detected_v4"
   fi
 
+  mkdir -p /var/lib/sout 2>/dev/null || true
+  if [[ "$has_v4" -eq 1 && "$has_v6" -eq 1 ]]; then
+    echo "dual_stack" > /var/lib/sout/network_mode 2>/dev/null || true
+    export SOUT_NETWORK_MODE="dual_stack"
+  elif [[ "$has_v4" -eq 0 && "$has_v6" -eq 1 ]]; then
+    echo "ipv6_only" > /var/lib/sout/network_mode 2>/dev/null || true
+    export SOUT_NETWORK_MODE="ipv6_only"
+  else
+    echo "ipv4_only" > /var/lib/sout/network_mode 2>/dev/null || true
+    export SOUT_NETWORK_MODE="ipv4_only"
+  fi
+
   # 若无公网 IPv4 且有 IPv6，则判定为纯 IPv6 机器
   if [[ "$has_v4" -eq 0 && "$has_v6" -eq 1 ]]; then
     export IS_PURE_IPV6=1

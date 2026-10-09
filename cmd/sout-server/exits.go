@@ -132,7 +132,10 @@ func getBaseTag(tag string) string {
 // ExitsOf 把隧道和入站组织成以「s-ui 节点」和「出口出站」双重视图
 func (m *Manager) ExitsOf() ExitsView {
 	tunnels := m.Tunnels()
-	publicHost := hostPublicIP()
+	publicHost := hostConnectIP()
+	if publicHost == "" {
+		publicHost = hostPublicIP()
+	}
 	view := ExitsView{
 		Nodes:    make([]GroupedNode, 0),
 		Exits:    make([]Exit, 0, len(tunnels)),

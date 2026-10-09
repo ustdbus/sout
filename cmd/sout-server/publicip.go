@@ -51,6 +51,28 @@ func hasIPv6Route() bool {
 	return true
 }
 
+// detectNetworkMode 识别母机的网络栈架构：
+// "ipv6_only" (纯 IPv6) | "dual_stack" (双栈) | "ipv4_only" (纯 IPv4)
+func detectNetworkMode() string {
+	for _, p := range []string{"/var/lib/sout/network_mode", "/var/lib/sout/network_stack"} {
+		if data, err := os.ReadFile(p); err == nil {
+			m := strings.TrimSpace(string(data))
+			if m == "ipv6_only" || m == "dual_stack" || m == "ipv4_only" {
+				return m
+			}
+		}
+	}
+	v4 := hasIPv4Route()
+	v6 := hasIPv6Route()
+	if !v4 && v6 {
+		return "ipv6_only"
+	}
+	if v4 && v6 {
+		return "dual_stack"
+	}
+	return "ipv4_only"
+}
+
 // setPublicIPOverride 记录用户显式指定的母机公网地址，空值表示不覆盖。
 func setPublicIPOverride(ip string) {
 	publicIPMu.Lock()
@@ -62,6 +84,11 @@ func setPublicIPOverride(ip string) {
 // 优先用显式覆盖值；否则用缓存（未过期）；再否则对外探测一次。
 // 探测不到就返回空串，由调用方决定兜底。
 func hostPublicIP() string {
+	// 纯 IPv6 独立隔离：立即返回空串，坚决不进行任何耗时的外部 IPv4 探测
+	if detectNetworkMode() == "ipv6_only" {
+		return ""
+	}
+
 	publicIPMu.Lock()
 	if publicIPOverride != "" {
 		ip := publicIPOverride
@@ -208,6 +235,22 @@ func hostPublicIPv6() string {
 // hostConnectIP 返回母机公网直连 IP。
 // 双栈或纯 IPv4 环境返回 IPv4，纯 IPv6 环境返回 IPv6。
 func hostConnectIP() string {
+	mode := detectNetworkMode()
+	if mode == "ipv6_only" {
+		if v6 := hostPublicIPv6(); v6 != "" {
+			return v6
+		}
+		for _, p := range []string{"/var/lib/sout/host_ipv6", "/var/lib/sout/host_ip"} {
+			if data, err := os.ReadFile(p); err == nil {
+				val := strings.TrimSpace(string(data))
+				if val != "" && val != "127.0.0.1" {
+					return val
+				}
+			}
+		}
+		return ""
+	}
+
 	// 优先直接利用持久化文件中记录的地址（已校验存在），避免页面打开时做网络探测
 	for _, p := range []string{"/var/lib/sout/host_ipv4", "/var/lib/sout/host_ip", "/var/lib/sout/host_ipv6"} {
 		if data, err := os.ReadFile(p); err == nil {
