@@ -1498,7 +1498,7 @@ except Exception as e:
 uninstall_sout_only() {
   local yes
   echo
-  read -rp "  确定仅卸载 sout 插件服务吗？(保留 s-ui 面板及其节点配置) [y/N]: " yes
+  read -rp "  确定仅卸载 sout 插件服务吗？[y/N]: " yes
   [[ ${yes,,} == y ]] || { echo "  已取消"; return; }
 
   echo "  正在停止并卸载 sout 及反代服务..."
@@ -1514,6 +1514,10 @@ uninstall_sout_only() {
   rc-update del caddy default 2>/dev/null || true
   rc-service cloudflared stop 2>/dev/null || true
   rc-update del cloudflared default 2>/dev/null || true
+  pkill -9 -f "sout-server" 2>/dev/null || true
+  pkill -9 -f "fanout" 2>/dev/null || true
+  pkill -9 -x caddy 2>/dev/null || true
+  pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
 
   # 1. 彻底清理 s-ui 中由 sout 创建的出入站、分流路由、clients 与注入的 API Token
   cleanup_sui
@@ -1525,8 +1529,12 @@ uninstall_sout_only() {
   systemctl disable cloudflared 2>/dev/null || true
   rm -f /etc/systemd/system/caddy.service /etc/systemd/system/cloudflared.service 2>/dev/null || true
   rm -f /etc/init.d/caddy /etc/init.d/cloudflared 2>/dev/null || true
-  rm -rf /etc/caddy /var/lib/caddy /var/log/caddy /usr/local/bin/caddy /usr/local/bin/cloudflared /usr/local/bin/sout-quick-tunnel /var/log/cloudflared* /home/acme 2>/dev/null || true
+  rm -rf /etc/caddy /var/lib/caddy /var/log/caddy /usr/local/bin/caddy /usr/local/bin/cloudflared /usr/local/bin/sout-quick-tunnel /var/log/cloudflared* 2>/dev/null || true
   rm -rf /root/.local/share/caddy /root/.config/caddy /root/.cache/caddy /root/.cloudflared 2>/dev/null || true
+
+  # 3. 补充清理 systemd override 目录与 logrotate
+  rm -rf /etc/systemd/system/sout.service.d /etc/systemd/system/fanout.service.d /etc/systemd/system/caddy.service.d /etc/systemd/system/cloudflared.service.d 2>/dev/null || true
+  rm -f /etc/logrotate.d/sout /etc/logrotate.d/sout-services /usr/local/bin/sout-logrotate /etc/cron.d/sout-logrotate 2>/dev/null || true
 
   # 3. 恢复 s-ui 监听与配置 (优先从备份还原，若端口被占用则自动随机空闲端口)
   local public_ip
@@ -1650,9 +1658,37 @@ if not orig_spath.endswith('/'): orig_spath += '/'
     local show_web_host show_sub_host
     show_web_host="$([[ -n "$final_wdom" ]] && echo "$final_wdom" || echo "${public_ip}:${final_wp}")"
     show_sub_host="$([[ -n "$final_sdom" ]] && echo "$final_sdom" || echo "${public_ip}:${final_sp}")"
-    systemctl restart s-ui 2>/dev/null || true
+    systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || true
   fi
 
+  # 5. 若为 sing-box 原生模式，清理 cf-tunnel-in 入站并重启 sing-box (保留节点与证书配置)
+  if [[ -f /etc/sing-box/config.json ]]; then
+    python3 -c '
+import json
+try:
+    with open("/etc/sing-box/config.json", "r") as f:
+        conf = json.load(f)
+    changed = False
+    inbounds = conf.get("inbounds", [])
+    new_inbs = [ib for ib in inbounds if ib.get("tag") != "cf-tunnel-in" and ib.get("type") != "cloudflared"]
+    if len(new_inbs) != len(inbounds):
+        conf["inbounds"] = new_inbs
+        changed = True
+    rules = conf.get("route", {}).get("rules", [])
+    new_rules = [r for r in rules if not ("cf-tunnel-in" in r.get("inbound", []))]
+    if len(new_rules) != len(rules):
+        conf["route"]["rules"] = new_rules
+        changed = True
+    if changed:
+        with open("/etc/sing-box/config.json", "w") as f:
+            json.dump(conf, f, indent=2)
+except Exception:
+    pass
+' 2>/dev/null || true
+    systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true
+  fi
+
+  # 6. 清理网络命名空间与虚拟网卡
   for ns in $(ip netns list 2>/dev/null | awk '{print $1}' | grep -E '^(fo|so)[0-9]'); do
     ip netns del "$ns" 2>/dev/null || true
   done
@@ -1660,50 +1696,30 @@ if not orig_spath.endswith('/'): orig_spath += '/'
     ip link del "$l" 2>/dev/null || true
   done
 
-  # 还原内核与网络系统参数备份
-  restore_sysctl
-
-  rm -f "/etc/systemd/system/sout.service" "/etc/systemd/system/fanout.service" "/etc/init.d/sout" "/etc/init.d/fanout"
-  rm -f "$BIN" /usr/local/bin/sout /usr/local/bin/fanout /usr/local/bin/f /usr/local/bin/sout-cli
-  rm -rf "$WORK_DIR" /var/lib/sout /var/lib/fanout 2>/dev/null || true
+  # 7. 清理 sout 服务单元、二进制与工作目录
+  rm -f "/etc/systemd/system/sout.service" "/etc/systemd/system/fanout.service" "/etc/init.d/sout" "/etc/init.d/fanout" 2>/dev/null || true
+  rm -f "$BIN" /usr/local/bin/sout* /usr/local/bin/fanout /usr/local/bin/f /usr/local/bin/sout-cli 2>/dev/null || true
+  rm -rf "$WORK_DIR" /var/lib/sout /var/lib/fanout /usr/local/sout 2>/dev/null || true
+  rm -f /var/log/sout.log /var/log/sout.err /run/sout.pid /run/fanout.pid 2>/dev/null || true
 
   systemctl daemon-reload 2>/dev/null || true
   systemctl reset-failed 2>/dev/null || true
-  svc_reload
 
   echo
-  echo -e "${G}================================================================${N}"
-  echo -e "${G}  🎉 sout 插件、轻量网关及 Cloudflare 隧道已彻底清理干净！${N}"
-  echo -e "${G}  🎉 s-ui 面板已完全恢复公网 0.0.0.0 直连模式 (已还原证书与配置)${N}"
-  echo -e "${G}================================================================${N}"
-  echo -e "  [1] s-ui 管理面板:  ${B}${final_proto}://${show_web_host}${final_wpath}${N}"
-  echo -e "  [2] s-ui 唤起命令:  ${G}s-ui${N}"
-  echo -e "${G}================================================================${N}"
+  echo -e "  ${G}[✓] sout 插件及反代隧道已卸载完成，已保留节点后端与证书配置。${N}"
+  if [[ -f "$sui_db" ]]; then
+    echo -e "      • s-ui 管理面板:  ${B}${final_proto}://${show_web_host}${final_wpath}${N}"
+    echo -e "      • s-ui 订阅地址:  ${B}${final_sub_proto}://${show_sub_host}${final_spath}${N}"
+    echo -e "      • s-ui 唤起命令:  ${G}s-ui${N}"
+  fi
   echo
   exit 0
-}
-
-uninstall_sui_only() {
-  local yes
-  echo
-  read -rp "  确定仅卸载 s-ui 面板吗？(保留 sout 服务) [y/N]: " yes
-  [[ ${yes,,} == y ]] || { echo "  已取消"; return; }
-
-  echo "  正在停止并卸载 s-ui 面板..."
-  systemctl stop s-ui 2>/dev/null || true
-  systemctl disable s-ui 2>/dev/null || true
-  rm -f /etc/systemd/system/s-ui.service /etc/init.d/s-ui 2>/dev/null || true
-  systemctl daemon-reload 2>/dev/null || true
-  systemctl reset-failed 2>/dev/null || true
-  rm -rf /etc/s-ui /usr/local/s-ui 2>/dev/null || true
-  rm -f /usr/bin/s-ui /usr/local/bin/s-ui /usr/bin/sui /usr/local/bin/sui 2>/dev/null || true
-  echo -e "  ${G}[✓] s-ui 面板已卸载完成，sout 服务已保留。${N}"
 }
 
 uninstall_all() {
   local yes
   echo
-  read -rp "  ⚠️ 确定彻底卸载 sout 和 s-ui 吗？所有节点与服务将被完全清理！[y/N]: " yes
+  read -rp "  ⚠️ 确定彻底卸载所有组件吗？所有节点、配置与证书将被完全清理！[y/N]: " yes
   [[ ${yes,,} == y ]] || { echo "  已取消"; return; }
 
   echo "  正在停止并彻底清理所有服务与组件..."
@@ -1711,18 +1727,48 @@ uninstall_all() {
   svc_disable >/dev/null 2>&1 || true
   systemctl stop fanout 2>/dev/null || true
   systemctl disable fanout 2>/dev/null || true
-  rc-service sout stop 2>/dev/null || true
-  rc-update del sout default 2>/dev/null || true
-  rc-service fanout stop 2>/dev/null || true
-  rc-update del fanout default 2>/dev/null || true
-  rc-service caddy stop 2>/dev/null || true
-  rc-update del caddy default 2>/dev/null || true
-  rc-service cloudflared stop 2>/dev/null || true
-  rc-update del cloudflared default 2>/dev/null || true
-  rc-service s-ui stop 2>/dev/null || true
-  rc-update del s-ui default 2>/dev/null || true
-  rc-service sing-box stop 2>/dev/null || true
-  rc-update del sing-box default 2>/dev/null || true
+  systemctl stop s-ui 2>/dev/null || true
+  systemctl disable s-ui 2>/dev/null || true
+  systemctl stop sing-box 2>/dev/null || true
+  systemctl disable sing-box 2>/dev/null || true
+  systemctl stop cloudflared 2>/dev/null || true
+  systemctl disable cloudflared 2>/dev/null || true
+  systemctl stop caddy 2>/dev/null || true
+  systemctl disable caddy 2>/dev/null || true
+
+  for s in sout fanout s-ui sing-box cloudflared caddy; do
+    rc-service "$s" stop 2>/dev/null || true
+    rc-update del "$s" default 2>/dev/null || true
+  done
+
+  pkill -9 -f "sout-server" 2>/dev/null || true
+  pkill -9 -f "fanout" 2>/dev/null || true
+  pkill -9 -f "s-ui" 2>/dev/null || true
+  pkill -9 -f "sui" 2>/dev/null || true
+  pkill -9 -x sing-box 2>/dev/null || true
+  pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
+  pkill -9 -x caddy 2>/dev/null || true
+
+  # 1. 删除所有二进制与脚本
+  rm -f "$BIN" /usr/local/bin/sout* /usr/local/bin/fanout /usr/local/bin/sing-box /usr/bin/sing-box /usr/local/bin/sui /usr/bin/sui /usr/local/bin/s-ui /usr/bin/s-ui /usr/local/bin/caddy /usr/local/bin/cloudflared /usr/local/bin/sout-quick-tunnel /usr/local/bin/f /usr/local/bin/sout-cli 2>/dev/null || true
+
+  # 2. 删除所有服务单元文件与 init.d 脚本
+  rm -f /etc/systemd/system/sout.service /etc/systemd/system/fanout.service /etc/systemd/system/s-ui.service /etc/systemd/system/sing-box.service /etc/systemd/system/caddy.service /etc/systemd/system/cloudflared.service 2>/dev/null || true
+  rm -f /etc/init.d/sout /etc/init.d/fanout /etc/init.d/s-ui /etc/init.d/sing-box /etc/init.d/caddy /etc/init.d/cloudflared 2>/dev/null || true
+
+  # 3. 彻底清理所有配置、数据与数据库目录
+  rm -rf "$WORK_DIR" /var/lib/sout /var/lib/fanout /usr/local/sout /etc/s-ui /usr/local/s-ui /etc/sing-box /var/lib/sing-box /etc/caddy /var/lib/caddy 2>/dev/null || true
+  rm -rf /root/.local/share/caddy /root/.config/caddy /root/.cache/caddy /root/.cloudflared 2>/dev/null || true
+
+  # 4. 彻底清理证书与 acme.sh 续期任务
+  rm -rf /home/acme /root/.acme.sh 2>/dev/null || true
+  crontab -l 2>/dev/null | grep -v 'acme.sh' | crontab - 2>/dev/null || true
+
+  # 5. 彻底清理 systemd override 目录与 logrotate
+  rm -rf /etc/systemd/system/sout.service.d /etc/systemd/system/fanout.service.d /etc/systemd/system/s-ui.service.d /etc/systemd/system/sing-box.service.d /etc/systemd/system/caddy.service.d /etc/systemd/system/cloudflared.service.d 2>/dev/null || true
+  rm -f /etc/logrotate.d/sout /etc/logrotate.d/sout-services /etc/logrotate.d/s-ui /etc/logrotate.d/sing-box /etc/logrotate.d/caddy /usr/local/bin/sout-logrotate /etc/cron.d/sout-logrotate 2>/dev/null || true
+
+  # 6. 清理网络命名空间与虚拟网卡，还原内核参数配置
   for ns in $(ip netns list 2>/dev/null | awk '{print $1}' | grep -E '^(fo|so)[0-9]'); do
     ip netns del "$ns" 2>/dev/null || true
   done
@@ -1730,67 +1776,35 @@ uninstall_all() {
     ip link del "$l" 2>/dev/null || true
   done
 
-  # 彻底清理 Caddy 与 cloudflared 反代隧道组件
-  systemctl stop caddy 2>/dev/null || true
-  systemctl disable caddy 2>/dev/null || true
-  systemctl stop cloudflared 2>/dev/null || true
-  systemctl disable cloudflared 2>/dev/null || true
-  rm -f /etc/systemd/system/caddy.service /etc/systemd/system/cloudflared.service 2>/dev/null || true
-  rm -f /etc/init.d/caddy /etc/init.d/cloudflared 2>/dev/null || true
-  rm -rf /etc/caddy /var/lib/caddy /var/log/caddy /usr/local/bin/caddy /usr/local/bin/cloudflared /usr/local/bin/sout-quick-tunnel /var/log/cloudflared* /home/acme 2>/dev/null || true
-
-  # 还原内核与网络系统参数备份
   restore_sysctl
 
-  # 彻底清理 sout 二进制与工作目录
-  rm -f "/etc/systemd/system/sout.service" "/etc/systemd/system/fanout.service" "/etc/init.d/sout" "/etc/init.d/fanout"
-  rm -f "$BIN" /usr/local/bin/sout /usr/local/bin/fanout /usr/local/bin/f /usr/local/bin/sout-cli
-  rm -rf "$WORK_DIR" /var/lib/sout /var/lib/fanout 2>/dev/null || true
+  # 7. 清理运行日志与 PID 文件
+  rm -f /var/log/sout.log /var/log/sout.err /var/log/sout*.log /var/log/s-ui.log /var/log/s-ui.err /var/log/sing-box.log /var/log/sing-box.err /var/log/caddy.log /var/log/cloudflared.log /var/log/cloudflared.err /var/log/cloudflared*.log 2>/dev/null || true
+  rm -f /run/sout.pid /run/fanout.pid /run/s-ui.pid /run/sing-box.pid /run/caddy.pid /run/cloudflared.pid 2>/dev/null || true
 
-  # 彻底清理 s-ui
-  systemctl stop s-ui 2>/dev/null || true
-  systemctl disable s-ui 2>/dev/null || true
-  rm -f /etc/systemd/system/s-ui.service /etc/init.d/s-ui 2>/dev/null || true
   systemctl daemon-reload 2>/dev/null || true
   systemctl reset-failed 2>/dev/null || true
-  rm -rf /etc/s-ui /usr/local/s-ui 2>/dev/null || true
-  rm -f /usr/bin/s-ui /usr/local/bin/s-ui /usr/bin/sui /usr/local/bin/sui 2>/dev/null || true
 
-  # 彻底清理 sing-box 服务与所有配置/二进制
-  systemctl stop sing-box 2>/dev/null || rc-service sing-box stop 2>/dev/null || true
-  systemctl disable sing-box 2>/dev/null || rc-update del sing-box default 2>/dev/null || true
-  rm -f /etc/systemd/system/sing-box.service /etc/init.d/sing-box 2>/dev/null || true
-  rm -f /var/log/sing-box.log /var/log/sing-box.err /run/sing-box.pid 2>/dev/null || true
-  rm -rf /etc/sing-box /var/lib/sing-box 2>/dev/null || true
-  rm -f /usr/local/bin/sing-box /usr/bin/sing-box 2>/dev/null || true
-
-  # 清理运行日志、PID 与可能存在的旧迁移目录
-  rm -f /var/log/sout.log /var/log/sout.err /var/log/s-ui.log /var/log/caddy.log /var/log/cloudflared.log /var/log/cloudflared_quick.log 2>/dev/null || true
-  rm -f /run/sout.pid /run/fanout.pid /run/caddy.pid /run/cloudflared.pid /run/s-ui.pid 2>/dev/null || true
-  rm -rf /usr/local/sout 2>/dev/null || true
-  rm -rf /root/.local/share/caddy /root/.config/caddy /root/.cache/caddy /root/.cloudflared 2>/dev/null || true
-
-  svc_reload
-  echo -e "  ${G}[✓] 所有组件 (sout, sing-box/s-ui, cloudflared) 已彻底卸载干净，系统已完全恢复初始状态！${N}"
+  echo
+  echo -e "  ${G}[✓] 所有组件 (sout, s-ui/sing-box, 隧道反代, 配置文件与证书) 已彻底清理完毕，系统已完全恢复初始状态！${N}"
   exit 0
 }
 
 do_uninstall() {
   echo
   echo -e "${B}========================================${N}"
-  echo -e "${B}  sout / s-ui 卸载管理${N}"
+  echo -e "${B}       sout 卸载管理${N}"
   echo -e "${B}========================================${N}"
-  echo -e "   1) 仅卸载 sout (保留 s-ui 面板及其节点配置)"
-  echo -e "   2) 仅卸载 s-ui (保留 sout 插件服务与设置)"
-  echo -e "   3) 全部卸载   (同时彻底卸载 sout 与 s-ui)"
+  echo -e "   1) 仅卸载 sout"
+  echo -e "   2) 全部卸载"
   echo -e "   0) 取消并返回"
   echo -e "${D}----------------------------------------${N}"
   local opt
-  read -rp "  请选择 [0-3]: " opt
+  read -rp "  请选择 [0-2]: " opt
   case "$opt" in
     1) uninstall_sout_only ;;
-    2) uninstall_sui_only ;;
-    3) uninstall_all ;;
+    2) uninstall_all ;;
+    0) echo "  已取消并返回" ;;
     *) echo "  已取消" ;;
   esac
 }
