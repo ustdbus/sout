@@ -461,6 +461,62 @@ func (sb *SingBox) MigrateLegacyVmessArgo() error {
 	return nil
 }
 
+// ensureDirectPrivateRules 确保 sing-box 路由规则中具备指向 direct 的 localhost 域名及 ip_is_private 私网直连规则，
+// 确保全局前置链生效时，发往 localhost:8081 或 127.0.0.1 的回源请求永远走 direct 直连，绝不误入 SOCKS5 出站。
+func ensureDirectPrivateRules(rules []any) []any {
+	hasLocalhost := false
+	hasPrivateIP := false
+	for _, r := range rules {
+		m, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		ob, _ := m["outbound"].(string)
+		if ob != "direct" {
+			continue
+		}
+		if priv, ok := m["ip_is_private"].(bool); ok && priv {
+			hasPrivateIP = true
+		}
+		if doms, ok := m["domain"].([]any); ok {
+			for _, d := range doms {
+				if s, ok := d.(string); ok && s == "localhost" {
+					hasLocalhost = true
+					break
+				}
+			}
+		} else if domsStr, ok := m["domain"].([]string); ok {
+			for _, s := range domsStr {
+				if s == "localhost" {
+					hasLocalhost = true
+					break
+				}
+			}
+		} else if dom, ok := m["domain"].(string); ok && dom == "localhost" {
+			hasLocalhost = true
+		}
+	}
+
+	var toPrepend []any
+	if !hasLocalhost {
+		toPrepend = append(toPrepend, map[string]any{
+			"domain":   []any{"localhost"},
+			"outbound": "direct",
+		})
+	}
+	if !hasPrivateIP {
+		toPrepend = append(toPrepend, map[string]any{
+			"ip_is_private": true,
+			"outbound":      "direct",
+		})
+	}
+
+	if len(toPrepend) > 0 {
+		return append(toPrepend, rules...)
+	}
+	return rules
+}
+
 func initDefaultSingBoxConfig(path string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -483,7 +539,16 @@ func initDefaultSingBoxConfig(path string) error {
 			},
 		},
 		"route": map[string]any{
-			"rules":                 []any{},
+			"rules": []any{
+				map[string]any{
+					"domain":   []any{"localhost"},
+					"outbound": "direct",
+				},
+				map[string]any{
+					"ip_is_private": true,
+					"outbound":      "direct",
+				},
+			},
 			"final":                 "direct",
 			"auto_detect_interface": true,
 		},
@@ -1962,7 +2027,7 @@ func (sb *SingBox) syncOutboundsInternal(cfg map[string]any, tunnels []*Tunnel) 
 		}
 		keptRules = append(keptRules, r)
 	}
-	routeRaw["rules"] = keptRules
+	routeRaw["rules"] = ensureDirectPrivateRules(keptRules)
 
 	// 建立有效用户路由映射
 	validRoutedUsers := make(map[string]bool)

@@ -478,6 +478,7 @@ BIN="/usr/local/bin/sout-server"
 WORK_DIR="/var/lib/sout"
 [[ ! -d "$WORK_DIR" && -d "/var/lib/fanout" ]] && WORK_DIR="/var/lib/fanout"
 DEFAULT_PORT=8899
+SOUT_VERSION="4.5.0"
 
 R='\033[31m'; G='\033[32m'; Y='\033[33m'; B='\033[34m'; D='\033[90m'; N='\033[0m'
 
@@ -944,7 +945,7 @@ show_info() {
     cur_ver=$(sout-server -version 2>/dev/null | awk '{print $2}' | tr -d ' \r\n')
     [[ -n "$cur_ver" ]] && echo "$cur_ver" > "${WORK_DIR}/version" 2>/dev/null || true
   fi
-  [[ -z "$cur_ver" ]] && cur_ver="dev"
+  [[ -z "$cur_ver" ]] && cur_ver="${SOUT_VERSION:-4.5.0}"
 
   echo
   echo -e "  程序版本:    ${G}${cur_ver}${N}"
@@ -4474,6 +4475,14 @@ apply_tuic_hy2_to_singbox() {
   local node_server="$pip"
   [[ -z "$node_server" || "$node_server" == "127.0.0.1" ]] && node_server="$cert_domain"
 
+  local cur_cc
+  cur_cc=$(get_tcp_congestion || echo "cubic")
+  if [[ "$cur_cc" == "bbr" ]]; then
+    echo -e "  ${G}[✓] 拥塞控制算法: 已成功启用高性能 BBR + FQ${N}"
+  else
+    echo -e "  ${Y}[i] 拥塞控制算法: 当前内核/环境未支持 BBR，自动平滑适配 ${cur_cc}${N}"
+  fi
+
   # 自动探测已有的 TUIC 与 Hysteria2 端口与凭据（若已存在则严格继承；不存在则自动分配随机高位端口，免除询问）
   local exist_tuic_p exist_hy2_p exist_tuic_uuid exist_tuic_pwd exist_hy2_pwd
   if [[ -f "$sb_conf" ]]; then
@@ -4544,6 +4553,7 @@ except Exception:
   HY2_PASS="$hy2_pass" \
   NODE_SERVER="$node_server" \
   IS_INSECURE="$is_insecure" \
+  CONGESTION_CTRL="$cur_cc" \
   python3 <<'PYEOF'
 import json, os, random, string
 
@@ -4611,7 +4621,7 @@ cleaned.append({
             "password": tuic_pass
         }
     ],
-    "congestion_control": "bbr",
+    "congestion_control": os.environ.get('CONGESTION_CTRL', 'cubic'),
     "tls": {
         "enabled": True,
         "server_name": os.environ['CERT_DOM'],
@@ -4714,7 +4724,7 @@ PYEOF
     link_server="[${link_server}]"
   fi
 
-  local tuic_link="tuic://${tuic_uuid}:${tuic_pass}@${link_server}:${tuic_port}?sni=${cert_domain}&alpn=h3&congestion_control=bbr&allow_insecure=${insec_flag}#TUIC-${cert_domain}"
+  local tuic_link="tuic://${tuic_uuid}:${tuic_pass}@${link_server}:${tuic_port}?sni=${cert_domain}&alpn=h3&congestion_control=${cur_cc}&allow_insecure=${insec_flag}#TUIC-${cert_domain}"
   local hy2_link="hysteria2://${hy2_pass}@${link_server}:${hy2_port}?sni=${cert_domain}&insecure=${insec_flag}#Hy2-${cert_domain}"
 
   mkdir -p "$WORK_DIR"

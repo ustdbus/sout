@@ -1156,6 +1156,7 @@ func (s *SUI) BindUserRoute(userName string, hostname string, tunnels []*Tunnel)
 		})
 	}
 
+	newRules = ensureDirectPrivateRules(newRules)
 	route["rules"] = newRules
 	rawConfig["route"] = route
 
@@ -1180,6 +1181,61 @@ func (s *SUI) restartSingBox() {
 	_, _ = s.callAPI(http.MethodPost, "restartSb", nil)
 }
 
+// ensureDirectPrivateRules 确保 sing-box 路由规则中具备指向 direct 的 localhost 域名及 ip_is_private 私网直连规则，
+// 杜绝本地回环回源（如 cloudflared 回源 127.0.0.1:8081）误入上游代理/SOCKS5 前置链出站导致 502 Bad Gateway。
+func ensureDirectPrivateRules(rules []any) []any {
+	hasLocalhost := false
+	hasPrivateIP := false
+	for _, r := range rules {
+		m, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		ob, _ := m["outbound"].(string)
+		if ob != "direct" {
+			continue
+		}
+		if priv, ok := m["ip_is_private"].(bool); ok && priv {
+			hasPrivateIP = true
+		}
+		if doms, ok := m["domain"].([]any); ok {
+			for _, d := range doms {
+				if s, ok := d.(string); ok && s == "localhost" {
+					hasLocalhost = true
+					break
+				}
+			}
+		} else if domsStr, ok := m["domain"].([]string); ok {
+			for _, s := range domsStr {
+				if s == "localhost" {
+					hasLocalhost = true
+					break
+				}
+			}
+		} else if dom, ok := m["domain"].(string); ok && dom == "localhost" {
+			hasLocalhost = true
+		}
+	}
+
+	var toPrepend []any
+	if !hasLocalhost {
+		toPrepend = append(toPrepend, map[string]any{
+			"domain":   []any{"localhost"},
+			"outbound": "direct",
+		})
+	}
+	if !hasPrivateIP {
+		toPrepend = append(toPrepend, map[string]any{
+			"ip_is_private": true,
+			"outbound":      "direct",
+		})
+	}
+
+	if len(toPrepend) > 0 {
+		return append(toPrepend, rules...)
+	}
+	return rules
+}
 
 func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {
 	outboundsObj, err := s.callAPI(http.MethodGet, "outbounds", nil)
@@ -1279,14 +1335,23 @@ func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {
 		var cfg map[string]any
 		if err := json.Unmarshal(configObj, &cfg); err == nil {
 			rawConfig, _ := cfg["config"].(map[string]any)
+			if rawConfig == nil {
+				rawConfig = cfg
+			}
 			if rawConfig != nil {
 				route, _ := rawConfig["route"].(map[string]any)
 				if route == nil {
 					route = make(map[string]any)
 				}
+				rules, _ := route["rules"].([]any)
+				ensuredRules := ensureDirectPrivateRules(rules)
+				rulesChanged := len(ensuredRules) != len(rules)
 				curFinal, _ := route["final"].(string)
-				if curFinal != targetFinal {
+				finalChanged := curFinal != targetFinal
+
+				if rulesChanged || finalChanged {
 					route["final"] = targetFinal
+					route["rules"] = ensuredRules
 					rawConfig["route"] = route
 					configBytes, _ := json.Marshal(rawConfig)
 					form := url.Values{
