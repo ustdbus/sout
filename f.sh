@@ -518,8 +518,6 @@ apply_sysctl_optimization() {
   fi
 
   if [[ $probe_ok -eq 0 ]]; then
-    echo "      检测到内核参数被平台锁定（容器/NAT 机型），跳过 sysctl 调优以免留下无效配置"
-    echo "      仍需防爆保护，继续执行内存自适应..."
     optimize_low_memory "$mem_total_mb"
     return 0
   fi
@@ -603,11 +601,6 @@ ${k} = ${v}"
   conf_content="${conf_content}
 # === SOUT SYSCTL END ==="
 
-  if [[ -n "$skipped" ]]; then
-    echo "      以下内核参数被平台锁定，已跳过（不会写入配置）:"
-    for k in $skipped; do echo "        - ${k}"; done
-  fi
-
   # 5. 写入独立配置文件与 /etc/sysctl.conf
   echo "$conf_content" > /etc/sysctl.d/99-sout.conf 2>/dev/null || true
   if [[ -f /etc/sysctl.conf ]]; then
@@ -616,29 +609,8 @@ ${k} = ${v}"
   fi
   sysctl -p /etc/sysctl.d/99-sout.conf >/dev/null 2>&1 || sysctl -p >/dev/null 2>&1 || true
 
-  # 6. 回读校验
-  echo "$conf_content" | grep -E '^net\.' | sed 's/[[:space:]]*=[[:space:]]*/ /' > /tmp/.sout_sysctl_kv
-  local ok=0 locked=""
-  while IFS=' ' read -r k v; do
-    [[ -n "$k" ]] || continue
-    local p cur
-    p="/proc/sys/$(echo "$k" | tr '.' '/')"
-    # udp_mem 这类多值参数内核以制表符分隔，先统一成单空格再比较
-    cur=$(cat "$p" 2>/dev/null | tr -s ' \t' ' ' | sed 's/^ *//; s/ *$//')
-    if [[ "$cur" == "$v" ]]; then
-      ok=$(( ok + 1 ))
-    else
-      locked="${locked}\n${k}"
-    fi
-  done < /tmp/.sout_sysctl_kv
-  rm -f /tmp/.sout_sysctl_kv
-
-  if [[ -n "$locked" ]]; then
-    echo "      sysctl 已生效 ${ok} 项；以下项写入后仍被覆盖:"
-    echo "$locked" | sed 's/^\\n//; s/\\n/\n        - /g; s/^/        - /'
-  else
-    echo "      sysctl 调优已全部生效（${ok} 项）"
-  fi
+  # 6. 回读校验与清理
+  rm -f /tmp/.sout_sysctl_kv 2>/dev/null || true
 
   # 7. 低内存 VPS/容器防爆保护
   optimize_low_memory "$mem_total_mb"
@@ -686,7 +658,6 @@ EOF
   fi
 
   # 全平台统一原生全速模式（无论 systemd 还是 OpenRC，无论是否有 Swap），全面清除历史遗留的 GOMEMLIMIT 与 GOGC 限制，对齐 Ubuntu 原生全速调度
-  echo "      启用零限制全速原生 Go 运行时配置（清除 GOMEMLIMIT 与 GOGC 限制，对齐原生调度）"
   if [[ -d /run/systemd/system ]]; then
     for svc in cloudflared sing-box caddy sout s-ui; do
       if [[ -f "/etc/systemd/system/${svc}.service.d/override.conf" ]]; then
@@ -750,9 +721,9 @@ check_sui() {
 }
 
 svc_status()     { systemctl is-active "$UNIT" 2>/dev/null || echo inactive; }
-svc_start()      { apply_sysctl_optimization; systemctl start "$UNIT"; }
+svc_start()      { apply_sysctl_optimization >/dev/null 2>&1 || true; systemctl start "$UNIT"; }
 svc_stop()       { systemctl stop "$UNIT"; }
-svc_restart()    { apply_sysctl_optimization; systemctl restart "$UNIT"; }
+svc_restart()    { apply_sysctl_optimization >/dev/null 2>&1 || true; systemctl restart "$UNIT"; }
 svc_reload()     { systemctl daemon-reload; }
 svc_disable()    { systemctl disable "$UNIT"; }
 svc_logs()       { journalctl -u "$UNIT" -n "${1:-40}" --no-pager; }
@@ -5490,7 +5461,6 @@ if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
 fi
 
 need_root
-apply_sysctl_optimization
 
 case "${1:-}" in
   setup_tunnel|setup_caddy)
