@@ -2481,6 +2481,15 @@ except Exception:
     fi
   fi
 
+  local is_pure_v6="${IS_PURE_IPV6:-0}"
+  if [[ "$is_pure_v6" == "0" ]]; then
+    if ! curl -s4m 3 https://api.ipify.org >/dev/null 2>&1 && ! curl -s4m 3 http://v4.ident.me >/dev/null 2>&1; then
+      if curl -s6m 3 https://api64.ipify.org >/dev/null 2>&1 || curl -s6m 3 https://ipv6.icanhazip.com >/dev/null 2>&1; then
+        is_pure_v6="1"
+      fi
+    fi
+  fi
+
   echo -e "  [+] 正在自动配置基础节点 (vless-argo 路径分流与 vless-reality)..."
   if ! SUI_API="http://127.0.0.1:${sui_port}/${sui_path}/apiv2" \
   SUI_TOKEN="$sui_token" \
@@ -2502,6 +2511,7 @@ except Exception:
   CONGESTION_CONTROL="$cur_cc" \
   TUNNEL_TOKEN="$tunnel_token" \
   TUNNEL_PROTOCOL="$protocol" \
+  IS_PURE_IPV6="$is_pure_v6" \
   python3 <<'PYEOF'
 import json, os, uuid, urllib.request, urllib.parse, string, random, base64
 
@@ -2625,7 +2635,7 @@ else:
                 if not tag or not proto or tag in seen_tags: continue
                 seen_tags.add(tag)
 
-                # 特殊处理 cloudflared 原生隧道入站：保留 token/protocol，绝不添加 users 字段
+                # 特殊处理 cloudflared 原生隧道入站：保留 token/protocol/edge_ip_version，绝不添加 users 字段
                 if proto == 'cloudflared':
                     cf_ib = {
                         'type': 'cloudflared',
@@ -2637,6 +2647,14 @@ else:
                     proto_val = ib.get('protocol') or ib.get('raw', {}).get('protocol', 'quic')
                     if proto_val:
                         cf_ib['protocol'] = proto_val
+                    edge_ip_ver = ib.get('edge_ip_version') or ib.get('raw', {}).get('edge_ip_version')
+                    if not edge_ip_ver and os.environ.get('IS_PURE_IPV6') == '1':
+                        edge_ip_ver = 6
+                    if edge_ip_ver:
+                        try:
+                            cf_ib['edge_ip_version'] = int(edge_ip_ver)
+                        except Exception:
+                            pass
                     final_inbs.append(cf_ib)
                     continue
 
@@ -3034,6 +3052,8 @@ if tunnel_token:
         'token': tunnel_token,
         'protocol': tunnel_proto
     }
+    if os.environ.get('IS_PURE_IPV6') == '1':
+        cf_payload['edge_ip_version'] = 6
     api('POST', 'save', {
         'object': 'inbounds',
         'action': 'edit' if existing_cf else 'new',

@@ -39,6 +39,63 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
+# ==============================================================================
+# 纯 IPv6 环境自动配置公共 DNS64 + NAT64 服务与环境还原机制
+# ==============================================================================
+SOUT_NAT64_BACKUP="/etc/resolv.conf.sout.orig"
+
+setup_nat64_if_pure_ipv6() {
+  local has_v4=0
+  local has_v6=0
+
+  # 优先检测原生 IPv4 出口连通性
+  if curl -s4m 3 https://api.ipify.org >/dev/null 2>&1 || \
+     curl -s4m 3 https://checkip.amazonaws.com >/dev/null 2>&1 || \
+     curl -s4m 3 http://v4.ident.me >/dev/null 2>&1; then
+    has_v4=1
+  fi
+
+  # 检测 IPv6 出口连通性
+  if curl -s6m 3 https://api64.ipify.org >/dev/null 2>&1 || \
+     curl -s6m 3 https://ipv6.icanhazip.com >/dev/null 2>&1; then
+    has_v6=1
+  fi
+
+  # 若无公网 IPv4 且有 IPv6，则判定为纯 IPv6 机器
+  if [[ "$has_v4" -eq 0 && "$has_v6" -eq 1 ]]; then
+    export IS_PURE_IPV6=1
+    # 检查是否已包含主流 NAT64 / DNS64 前缀
+    if ! grep -qE '(2001:67c:2b0|2a00:1098:2b|2a01:4f8|2a01:4f9|2606:4700:4700::64|2001:4860:4860::64)' /etc/resolv.conf 2>/dev/null; then
+      echo "  [+] 检测到当前服务器为纯 IPv6 环境 (无原生公网 IPv4)"
+      echo "      正在自动配置公共 DNS64 + NAT64 服务以保障安装全流程与网络互联..."
+      if [[ ! -f "$SOUT_NAT64_BACKUP" ]]; then
+        cp /etc/resolv.conf "$SOUT_NAT64_BACKUP" 2>/dev/null || true
+      fi
+      cat << 'EOF' > /etc/resolv.conf
+nameserver 2a01:4f8:c2c:123f::1
+nameserver 2a00:1098:2c::1
+nameserver 2a00:1098:2b::1
+EOF
+      export SOUT_CONFIGURED_NAT64=1
+      echo "  [✓] 已配置公共 DNS64 + NAT64 服务"
+    fi
+  else
+    export IS_PURE_IPV6=0
+  fi
+}
+
+restore_nat64_if_temporary() {
+  if [[ "${SOUT_CONFIGURED_NAT64:-0}" == "1" && -f "$SOUT_NAT64_BACKUP" ]]; then
+    echo
+    echo "  [+] 安装与配置流程已全部就绪，正在安全还原安装前备份的 DNS 配置..."
+    cp "$SOUT_NAT64_BACKUP" /etc/resolv.conf 2>/dev/null || true
+    rm -f "$SOUT_NAT64_BACKUP" 2>/dev/null || true
+    echo "  [✓] 临时 DNS64 + NAT64 服务已安全清理并恢复原始网络配置"
+  fi
+}
+
+setup_nat64_if_pure_ipv6
+
 # 自动平滑迁移旧工作目录
 if [[ -d "/var/lib/fanout" && ! -d "/var/lib/sout" ]]; then
   mv /var/lib/fanout /var/lib/sout 2>/dev/null || true
@@ -1461,19 +1518,6 @@ if [[ "$is_pure_ipv6" -eq 1 ]]; then
   else
     echo "      WARP 注册请求跳过或暂不可用"
   fi
-
-  # 4. 检查 NAT64 / DNS64 并恢复为常规公共 DNS
-  if grep -qE '(2001:67c:2b0|2a00:1098:2b|2a01:4f8|2a01:4f9|2606:4700:4700::64|2001:4860:4860::64)' /etc/resolv.conf 2>/dev/null; then
-    echo "      检测到安装前配置了 NAT64 / DNS64，正在恢复为常规公共 DNS..."
-    cp /etc/resolv.conf /etc/resolv.conf.bak.sout 2>/dev/null || true
-    cat << 'EOF' > /etc/resolv.conf
-nameserver 2606:4700:4700::1111
-nameserver 2001:4860:4860::8888
-nameserver 1.1.1.1
-nameserver 8.8.8.8
-EOF
-    echo "      已恢复 /etc/resolv.conf 为官方常规公共 DNS (Cloudflare & Google)"
-  fi
 fi
 
 # 如果用户选择开启隧道（无论是自定义域名+Token，还是直接回车开启免费临时隧道）
@@ -1487,6 +1531,8 @@ if [[ "$WANT_TUNNEL" == "y" ]]; then
   if [[ -x /usr/local/bin/sout ]]; then
     /usr/local/bin/sout setup_tunnel "$TUNNEL_DOMAIN" "$TUNNEL_TOKEN" "$TUNNEL_PORT" "${APPLY_CERT:-n}" "${CF_DNS_KEY:-}" "$SUI_ADMIN_PASS" "$SUI_PASS_IS_RANDOM"
   fi
+  # 全部流程彻底完成后，安全恢复临时配置的 DNS64 / NAT64
+  restore_nat64_if_temporary
   # setup_tunnel 已完整打印包含全部隧道、面板与订阅的部署完成日志，直接退出避免重复打印
   exit 0
 fi
@@ -1613,3 +1659,6 @@ else
   echo "================================================================"
   echo
 fi
+
+# 安装全流程结束，安全还原临时配置的 DNS64 / NAT64
+restore_nat64_if_temporary
