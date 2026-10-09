@@ -1500,17 +1500,20 @@ if [[ "$is_pure_ipv6" -eq 1 ]]; then
   sout_pw=$(cat "${WORK_DIR}/password" 2>/dev/null | tr -d ' \r\n')
   cur_port=$(json_get "${WORK_DIR}/settings.json" port)
   cur_port="${cur_port:-8899}"
+  sout_bp=$(cat "${WORK_DIR}/basepath" 2>/dev/null | tr -d ' \r\n')
+  sout_bp="/${sout_bp#/}"
+  sout_bp="${sout_bp%/}/"
 
   # 1. 注册 WARP
-  warp_gen_res=$(curl -s -X POST -H "X-Sout-Password: ${sout_pw}" "http://127.0.0.1:${cur_port}/api/custom/warp/generate" 2>/dev/null || true)
+  warp_gen_res=$(curl -s -X POST -H "X-Sout-Password: ${sout_pw}" "http://127.0.0.1:${cur_port}${sout_bp}api/custom/warp/generate" 2>/dev/null || true)
   if echo "$warp_gen_res" | grep -q '"ok":true'; then
     echo "      WARP 节点账号申请成功，正在挂载为出口隧道..."
     # 2. 导入为出口
-    import_res=$(curl -s -X POST -H "X-Sout-Password: ${sout_pw}" "http://127.0.0.1:${cur_port}/api/custom/source/import?id=preset-warp" 2>/dev/null || true)
+    import_res=$(curl -s -X POST -H "X-Sout-Password: ${sout_pw}" "http://127.0.0.1:${cur_port}${sout_bp}api/custom/source/import?id=preset-warp" 2>/dev/null || true)
     slot_num=$(echo "$import_res" | grep -o '"slot":[0-9]*' | cut -d: -f2)
     if [[ -n "$slot_num" ]]; then
       # 3. 设为全局前置链式出站
-      toggle_res=$(curl -s -X POST -H "X-Sout-Password: ${sout_pw}" "http://127.0.0.1:${cur_port}/api/exit/chain_toggle?slot=${slot_num}" 2>/dev/null || true)
+      toggle_res=$(curl -s -X POST -H "X-Sout-Password: ${sout_pw}" "http://127.0.0.1:${cur_port}${sout_bp}api/exit/chain_toggle?slot=${slot_num}" 2>/dev/null || true)
       if echo "$toggle_res" | grep -q '"active":true'; then
         echo "      已成功将 WARP 出口 (槽位 ${slot_num}) 设为全局前置链式出站，赋予全系统 IPv4 出口互联能力！"
       fi
