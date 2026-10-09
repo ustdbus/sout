@@ -1763,6 +1763,7 @@ uninstall_all() {
   # 4. 彻底清理证书与 acme.sh 续期任务
   rm -rf /home/acme /root/.acme.sh 2>/dev/null || true
   crontab -l 2>/dev/null | grep -v 'acme.sh' | crontab - 2>/dev/null || true
+  sed -i '/acme\.sh/d' /root/.bashrc /root/.zshrc /root/.bash_profile /root/.profile 2>/dev/null || true
 
   # 5. 彻底清理 systemd override 目录与 logrotate
   rm -rf /etc/systemd/system/sout.service.d /etc/systemd/system/fanout.service.d /etc/systemd/system/s-ui.service.d /etc/systemd/system/sing-box.service.d /etc/systemd/system/caddy.service.d /etc/systemd/system/cloudflared.service.d 2>/dev/null || true
