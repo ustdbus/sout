@@ -994,14 +994,11 @@ ask_tunnel_setup() {
     else
       echo "  [✓] 隧道参数已保存！"
       echo
-      echo "  [Cloudflare SSL 证书 (acme.sh DNS-01)]"
-      echo "  • 令牌需含「区域.DNS / 编辑」权限，用于自动签发证书并开启 TUIC / Hysteria2 节点"
-      echo "  • 直接按回车将跳过申请，自动配置常规节点 (vless-argo / vless-reality)"
       if [[ -t 0 ]]; then
-        read -rp "  4. 请输入 Cloudflare API 令牌 (直接回车跳过): " CF_DNS_KEY
+        read -rp "  4. 请输入 Cloudflare API 令牌 [需含 Zone.DNS:Edit 权限，回车跳过]: " CF_DNS_KEY
       else
         if [[ -c /dev/tty ]]; then
-          read -rp "  4. 请输入 Cloudflare API 令牌 (直接回车跳过): " CF_DNS_KEY < /dev/tty || CF_DNS_KEY=""
+          read -rp "  4. 请输入 Cloudflare API 令牌 [需含 Zone.DNS:Edit 权限，回车跳过]: " CF_DNS_KEY < /dev/tty || CF_DNS_KEY=""
         fi
       fi
       CF_DNS_KEY=$(echo "$CF_DNS_KEY" | tr -d ' \r\n')
@@ -1078,6 +1075,15 @@ ensure_backend() {
         echo "  [✓] 检测到已存在 s-ui 面板，直接对接当前 s-ui 面板！"
         mkdir -p "$WORK_DIR"
         echo "s-ui" > "${WORK_DIR}/panel_mode"
+        if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+          systemctl daemon-reload >/dev/null 2>&1 || true
+          systemctl enable s-ui >/dev/null 2>&1 || true
+          systemctl restart s-ui >/dev/null 2>&1 || true
+        elif command -v rc-service >/dev/null 2>&1; then
+          rc-update add s-ui default >/dev/null 2>&1 || true
+          rc-service s-ui restart >/dev/null 2>&1 || true
+        fi
+        sleep 1.5
         return 0
       fi
       echo
@@ -1113,6 +1119,16 @@ ensure_backend() {
         ensure_sui_log_redirect
         # 轻量内核宿主机：把日志轮转一并注册
         install_log_rotation
+
+        if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+          systemctl daemon-reload >/dev/null 2>&1 || true
+          systemctl enable s-ui >/dev/null 2>&1 || true
+          systemctl restart s-ui >/dev/null 2>&1 || true
+        elif command -v rc-service >/dev/null 2>&1; then
+          rc-update add s-ui default >/dev/null 2>&1 || true
+          rc-service s-ui restart >/dev/null 2>&1 || true
+        fi
+        sleep 1.5
 
         echo
         echo "================================================================"
@@ -1359,14 +1375,14 @@ else
   rm -rf "$TMP"
 fi
 
-echo "[3/6] 检测节点管理后端..."
+echo "[3/6] 准备节点管理后端..."
 backend_kind=$(cat "${WORK_DIR}/panel_mode" 2>/dev/null || echo "")
-if [[ "$backend_kind" == "sing-box" ]] || (! check_sui && check_singbox); then
-  echo "      检测到 sing-box 原生内核后端（将以原生内核模式接管分流）"
-elif check_sui; then
-  echo "      检测到已安装 s-ui 面板（将自动以 s-ui 模式接管分流）"
+if [[ "$backend_kind" == "s-ui" ]] || check_sui; then
+  echo "      已就绪: s-ui 面板接管模式"
+elif [[ "$backend_kind" == "sing-box" ]] || check_singbox; then
+  echo "      已就绪: sing-box 原生内核接管模式"
 else
-  echo "      提示：未检测到后端，可在安装后配置 sing-box 或 s-ui 以启用分流联动。"
+  echo "      提示: 未检测到后端，可在安装后配置 sing-box 或 s-ui 以启用分流联动"
 fi
 
 echo "[4/6] 准备网络运行环境并优化内核套接字/UDP缓冲区..."
@@ -1578,7 +1594,6 @@ if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$
   c_sui_w=$(json_get "$CADDY_META" sui_pass)
   c_sub_p=$(json_get "$CADDY_META" sub_path)
   if [[ "$WANT_TUNNEL" != "y" && -x /usr/local/bin/sout ]]; then
-    local tun_eng
     tun_eng=$(json_get "$CADDY_META" tunnel_engine)
     if [[ "$tun_eng" != "sing-box" ]]; then
       systemctl restart cloudflared 2>/dev/null || rc-service cloudflared restart 2>/dev/null || service cloudflared restart 2>/dev/null || true
@@ -1608,12 +1623,12 @@ if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$
     if [[ -n "$SUI_ADMIN_PASS" && "$SUI_PASS_IS_RANDOM" == "1" ]]; then
       echo "  s-ui 密  码:   ${SUI_ADMIN_PASS}"
       echo "  ⚠️ 安全提示:   该随机密码仅在安装完成时显示一次，请务必妥善保存！"
-      echo "                 (若遗忘密码，可随时在终端输入 s-ui 进行重置修改)"
     elif [[ -n "$SUI_ADMIN_PASS" && "$SUI_PASS_IS_RANDOM" != "1" ]]; then
-      echo "  s-ui 密  码:   [已按您输入的自定义密码生效，若遗忘密码，可随时在终端输入 s-ui 进行重置修改]"
+      echo "  s-ui 密  码:   [已按您输入的自定义密码生效]"
     else
       echo "  s-ui 密  码:   [由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]"
     fi
+    echo "                 (若遗忘密码，可随时在终端输入 s-ui 进行重置修改)"
     echo "  s-ui 唤起命令: s-ui"
   fi
   echo
@@ -1664,12 +1679,12 @@ else
     if [[ -n "$SUI_ADMIN_PASS" && "$SUI_PASS_IS_RANDOM" == "1" ]]; then
       echo "  s-ui 密  码:   ${SUI_ADMIN_PASS}"
       echo "  ⚠️ 安全提示:   该随机密码仅在安装完成时显示一次，请务必妥善保存！"
-      echo "                 (若遗忘密码，可随时在终端输入 s-ui 进行重置修改)"
     elif [[ -n "$SUI_ADMIN_PASS" && "$SUI_PASS_IS_RANDOM" != "1" ]]; then
-      echo "  s-ui 密  码:   [已按您输入的自定义密码生效，若遗忘密码，可随时在终端输入 s-ui 进行重置修改]"
+      echo "  s-ui 密  码:   [已按您输入的自定义密码生效]"
     else
       echo "  s-ui 密  码:   [由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]"
     fi
+    echo "                 (若遗忘密码，可随时在终端输入 s-ui 进行重置修改)"
     echo "  s-ui 唤起命令: s-ui"
   fi
   echo "================================================================"

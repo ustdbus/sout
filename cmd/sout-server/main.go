@@ -21,7 +21,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v4.4.5"
+var version = "v4.4.6"
 
 func initLowMemoryProtection() {
 	// 原生全速模式 (GOGC=100，无额外内存上限)

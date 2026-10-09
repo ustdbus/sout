@@ -1985,7 +1985,7 @@ sys.exit(0 if latest > cur else 1)
   trap 'rm -rf "$tmp_dir"' RETURN
 
   # 1. 下载前执行页缓存回收，降低内存碎片和缓存占用
-  sync && echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+  (sync; echo 3 > /proc/sys/vm/drop_caches) 2>/dev/null || true
 
   # 2. 解包覆盖前停止 sout 释放其占用的常驻内存
   svc_stop
@@ -2018,8 +2018,9 @@ sys.exit(0 if latest > cur else 1)
   fi
 
   if [[ -f "$tmp_dir/f.sh" ]]; then
-    cp -f "$tmp_dir/f.sh" /usr/local/bin/sout
-    chmod +x /usr/local/bin/sout
+    cat "$tmp_dir/f.sh" > /usr/local/bin/sout.new
+    chmod +x /usr/local/bin/sout.new
+    mv -f /usr/local/bin/sout.new /usr/local/bin/sout
     rm -f /usr/local/bin/f /usr/local/bin/sout-cli 2>/dev/null || true
   fi
 
@@ -3235,7 +3236,7 @@ METAEOF
   if [[ "$apply_cert" == "y" && -n "$domain" && -n "$cf_dns_key" ]]; then
     echo
     echo -e "  ${B}[+] 基础服务与节点已就绪，正在申请 Cloudflare SSL 证书并配置 TUIC / Hysteria2...${N}"
-    if do_apply_cf_ssl_cert "$domain" "$cf_dns_key"; then
+    if do_apply_cf_ssl_cert "$domain" "$cf_dns_key" "false" "true"; then
       if [[ -s "$cert_file" && -s "$key_file" ]]; then
         echo -e "  [+] 证书就绪，正在自动创建并挂载 TUIC 与 Hysteria2 高速节点..."
         create_tuic_hy2_nodes "$domain" "$cert_file" "$key_file" "false" "true"
@@ -4040,6 +4041,7 @@ do_apply_cf_ssl_cert() {
   local domain="$1"
   local cf_token="$2"
   local force="${3:-false}"
+  local quiet="${4:-false}"
 
   domain=$(echo "$domain" | tr -d ' \r\n' | sed -e 's|^https\?://||' -e 's|/.*||')
   cf_token=$(echo "$cf_token" | tr -d ' \r\n')
@@ -4199,15 +4201,19 @@ except Exception:
   chmod 600 "${cert_dir}"/* 2>/dev/null || true
 
   if [[ -s "${cert_dir}/fullchain.pem" && -s "${cert_dir}/privkey.pem" ]]; then
-    echo -e "  ${G}🎉 恭喜！Cloudflare SSL 证书申请并部署成功！${N}"
-    echo -e "${B}========================================${N}"
-    echo -e "  托管域名:    ${B}${domain}${N}"
-    echo -e "  公钥路径:    ${G}${cert_dir}/fullchain.pem${N}"
-    echo -e "  私钥路径:    ${G}${cert_dir}/privkey.pem${N}"
-    echo -e "  备用公钥:    ${G}${cert_dir}/cert.crt${N}"
-    echo -e "  备用私钥:    ${G}${cert_dir}/private.key${N}"
-    echo -e "  自动续期:    ${G}已默认开启 (由 acme.sh 每天定时静默检查并自动续期)${N}"
-    echo -e "${B}========================================${N}"
+    if [[ "$quiet" == "true" ]]; then
+      echo -e "  ${G}[✓] Cloudflare SSL 证书已成功部署 (${domain})${N}"
+    else
+      echo -e "  ${G}🎉 恭喜！Cloudflare SSL 证书申请并部署成功！${N}"
+      echo -e "${B}========================================${N}"
+      echo -e "  托管域名:    ${B}${domain}${N}"
+      echo -e "  公钥路径:    ${G}${cert_dir}/fullchain.pem${N}"
+      echo -e "  私钥路径:    ${G}${cert_dir}/privkey.pem${N}"
+      echo -e "  备用公钥:    ${G}${cert_dir}/cert.crt${N}"
+      echo -e "  备用私钥:    ${G}${cert_dir}/private.key${N}"
+      echo -e "  自动续期:    ${G}已默认开启 (由 acme.sh 每天定时静默检查并自动续期)${N}"
+      echo -e "${B}========================================${N}"
+    fi
     return 0
   else
     echo -e "  ${R}[✗] 证书文件分发异常，请检查 ${cert_dir} 写入权限。${N}"
@@ -4632,9 +4638,7 @@ NODEOF
 
   echo
   if [[ "$quiet" == "true" ]]; then
-    # 首次安装：只报结果，不刷节点明细（链接已落盘，需要时用 sout tuic 查看）
-    echo -e "  ${G}[✓] TUIC / Hysteria2 节点已创建完成${N}"
-    echo -e "      节点链接已保存至: ${WORK_DIR}/nodes_tuic_hy2.txt"
+    echo -e "  ${G}[✓] TUIC 与 Hysteria2 高速节点已成功配置挂载${N}"
   else
     echo -e "${G}================================================================${N}"
     echo -e "${G}  🎉 TUIC / Hysteria2 节点已成功在 sing-box 原生内核中创建！${N}"
@@ -5504,6 +5508,35 @@ fi
 
 need_root
 
+do_restart_tunnel_cmd() {
+  local tun_eng svc_cmd_target
+  tun_eng=$(json_get "$CADDY_META" tunnel_engine)
+  if [[ -z "$tun_eng" ]] && grep -q '"cf-tunnel-in"' /etc/sing-box/config.json 2>/dev/null; then
+    tun_eng="sing-box"
+  fi
+  if [[ "$tun_eng" == "sing-box" ]]; then
+    svc_cmd_target="sing-box"
+    is_sui_backend && svc_cmd_target="s-ui"
+    if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+      systemctl restart "$svc_cmd_target" 2>/dev/null || true
+    elif command -v rc-service >/dev/null 2>&1; then
+      rc-service "$svc_cmd_target" restart 2>/dev/null || true
+    fi
+  else
+    if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+      systemctl restart cloudflared 2>/dev/null || true
+    elif command -v rc-service >/dev/null 2>&1; then
+      rc-service cloudflared stop >/dev/null 2>&1 || true
+      rc-service cloudflared zap >/dev/null 2>&1 || true
+      pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
+      sleep 0.5
+      rc-service cloudflared start >/dev/null 2>&1 || true
+    fi
+  fi
+  reload_caddy_proxy >/dev/null 2>&1 || true
+  echo "OK"
+}
+
 case "${1:-}" in
   setup_tunnel|setup_caddy)
     shift
@@ -5521,31 +5554,7 @@ case "${1:-}" in
   reload_caddy) reload_caddy_proxy ;;
   restart_tunnel)
     shift
-    tun_eng=$(json_get "$CADDY_META" tunnel_engine)
-    if [[ -z "$tun_eng" ]] && grep -q '"cf-tunnel-in"' /etc/sing-box/config.json 2>/dev/null; then
-      tun_eng="sing-box"
-    fi
-    if [[ "$tun_eng" == "sing-box" ]]; then
-      local svc_cmd_target="sing-box"
-      is_sui_backend && svc_cmd_target="s-ui"
-      if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
-        systemctl restart "$svc_cmd_target" 2>/dev/null || true
-      elif command -v rc-service >/dev/null 2>&1; then
-        rc-service "$svc_cmd_target" restart 2>/dev/null || true
-      fi
-    else
-      if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
-        systemctl restart cloudflared 2>/dev/null || true
-      elif command -v rc-service >/dev/null 2>&1; then
-        rc-service cloudflared stop >/dev/null 2>&1 || true
-        rc-service cloudflared zap >/dev/null 2>&1 || true
-        pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
-        sleep 0.5
-        rc-service cloudflared start >/dev/null 2>&1 || true
-      fi
-    fi
-    reload_caddy_proxy >/dev/null 2>&1 || true
-    echo "OK"
+    do_restart_tunnel_cmd
     ;;
   disable_tunnel|delete_tunnel|stop_tunnel)
     shift
