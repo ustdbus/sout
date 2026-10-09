@@ -201,16 +201,9 @@ detect_adaptive_mem_tuning() {
   AUTO_MEM_MB="$mem_mb"
   AUTO_GOMEMLIMIT=""
   AUTO_GOGC=""
-  if [[ "$HAS_SWAP" -eq 1 ]]; then
-    # 德邦模式 (有 Swap 气囊)：不施加 GOMEMLIMIT 软限制，GOGC 默认 100 释放极致吞吐
-    AUTO_GOMEMLIMIT=""
-    AUTO_GOGC=""
-  elif [[ "$mem_mb" -gt 0 && "$mem_mb" -le 180 ]]; then
-    # 阿尔法安全模式 (仅针对 128M 左右且无 Swap 的机器，预留 >=15% 物理内存防爆隔离区；GOGC 优化为 70)
-    # GOMEMLIMIT 只作用于 sout-server（含内嵌 sing-box 引擎）；系统 sing-box / cloudflared 另有各自的 35MiB
-    AUTO_GOMEMLIMIT="25MiB"
-    AUTO_GOGC="70"
-  fi
+  # 全平台统一采用与 Ubuntu 一致的原生全速调度模式（零 GOMEMLIMIT 截断，GOGC=100）
+  AUTO_GOMEMLIMIT=""
+  AUTO_GOGC=""
 }
 
 detect_pkg_mgr() {
@@ -501,21 +494,8 @@ SBCONF
   # 注册并启动系统服务
   echo "      正在注册 sing-box 服务 (${INIT_SYS})..."
   detect_adaptive_mem_tuning
-  local sb_limit="35MiB"
-  local sb_gc="70"
-  if [[ "$HAS_SWAP" -eq 1 || ( -n "$AUTO_MEM_MB" && "$AUTO_MEM_MB" -gt 180 ) ]]; then
-    # 德邦模式或内存 > 180MB：不限制 GOMEMLIMIT，使用原生默认
-    sb_limit=""
-    sb_gc="100"
-  fi
   local sb_env_systemd=""
   local sb_env_openrc=""
-  if [[ -n "$sb_limit" ]]; then
-    sb_env_systemd="Environment=\"GOMEMLIMIT=${sb_limit}\"
-Environment=\"GOGC=${sb_gc}\""
-    sb_env_openrc="export GOMEMLIMIT=\"${sb_limit}\"
-export GOGC=\"${sb_gc}\""
-  fi
 
   if [[ "$INIT_SYS" == "systemd" ]]; then
     cat > /etc/systemd/system/sing-box.service <<SBEU
@@ -809,92 +789,28 @@ EOF
     systemctl restart systemd-journald >/dev/null 2>&1 || true
   fi
 
-  # 分支 A：若存在有效 Swap (has_swap=1，德邦模式)
-  if [[ "$has_swap" -eq 1 ]]; then
-    echo "      检测到有效 Swap 缓冲，启用零限制全速原生 Go 运行时配置"
-    if [[ -d /run/systemd/system ]]; then
-      for svc in cloudflared sing-box caddy sout s-ui; do
-        if [[ -f "/etc/systemd/system/${svc}.service.d/override.conf" ]]; then
-          sed -i '/GOMEMLIMIT/d' "/etc/systemd/system/${svc}.service.d/override.conf" 2>/dev/null || true
-          sed -i '/GOGC/d' "/etc/systemd/system/${svc}.service.d/override.conf" 2>/dev/null || true
-          if ! grep -qE 'Environment|Exec|Limit' "/etc/systemd/system/${svc}.service.d/override.conf" 2>/dev/null; then
-            rm -f "/etc/systemd/system/${svc}.service.d/override.conf" 2>/dev/null || true
-          fi
+  # 全平台统一原生全速模式（无论 systemd 还是 OpenRC，无论是否有 Swap），全面清除历史遗留的 GOMEMLIMIT 与 GOGC 限制，对齐 Ubuntu 原生全速调度
+  echo "      启用零限制全速原生 Go 运行时配置（清除 GOMEMLIMIT 与 GOGC 限制，对齐原生调度）"
+  if [[ -d /run/systemd/system ]]; then
+    for svc in cloudflared sing-box caddy sout s-ui; do
+      if [[ -f "/etc/systemd/system/${svc}.service.d/override.conf" ]]; then
+        sed -i '/GOMEMLIMIT/d' "/etc/systemd/system/${svc}.service.d/override.conf" 2>/dev/null || true
+        sed -i '/GOGC/d' "/etc/systemd/system/${svc}.service.d/override.conf" 2>/dev/null || true
+        if ! grep -qE 'Environment|Exec|Limit' "/etc/systemd/system/${svc}.service.d/override.conf" 2>/dev/null; then
+          rm -f "/etc/systemd/system/${svc}.service.d/override.conf" 2>/dev/null || true
         fi
-      done
-      systemctl daemon-reload >/dev/null 2>&1 || true
-    fi
-
-    if [[ -f /etc/alpine-release ]] || command -v rc-service >/dev/null 2>&1; then
-      for svc in cloudflared sing-box caddy sout s-ui; do
-        if [[ -f "/etc/conf.d/${svc}" ]]; then
-          sed -i '/GOMEMLIMIT/d' "/etc/conf.d/${svc}" 2>/dev/null || true
-          sed -i '/GOGC/d' "/etc/conf.d/${svc}" 2>/dev/null || true
-        fi
-      done
-    fi
-    return 0
+      fi
+    done
+    systemctl daemon-reload >/dev/null 2>&1 || true
   fi
 
-  # 分支 B：若不存在有效 Swap (has_swap=0，阿尔法安全模式，仅针对 128M 左右即 <=180MB 机型，预留 >=15% 物理内存防爆隔离区；GOGC 优化为 70；>180MB 则保持原生默认不设限)
-  if [[ $mem_mb -le 180 ]]; then
-    echo "      检测到无 Swap 极小内存环境 (${mem_mb} MB <= 180 MB)，为确保留足 15% 系统安全防爆余量，启用精细分层内存防护"
-
-    local cf_memlimit="35MiB"
-    local cf_gogc="70"
-    local sb_memlimit="35MiB"
-    local sb_gogc="70"
-    local aux_memlimit="25MiB"
-    local aux_gogc="70"
-
-    # 1. systemd 环境注入
-    if [[ -d /run/systemd/system ]]; then
-      mkdir -p /etc/systemd/system/sing-box.service.d 2>/dev/null || true
-      cat > /etc/systemd/system/sing-box.service.d/override.conf <<EOF
-[Service]
-Environment="GOMEMLIMIT=${sb_memlimit}"
-Environment="GOGC=${sb_gogc}"
-EOF
-
-      mkdir -p /etc/systemd/system/cloudflared.service.d 2>/dev/null || true
-      cat > /etc/systemd/system/cloudflared.service.d/override.conf <<EOF
-[Service]
-Environment="GOMEMLIMIT=${cf_memlimit}"
-Environment="GOGC=${cf_gogc}"
-EOF
-
-      rm -rf /etc/systemd/system/caddy.service.d 2>/dev/null || true
-
-      for svc in sout s-ui; do
-        mkdir -p "/etc/systemd/system/${svc}.service.d" 2>/dev/null || true
-        cat > "/etc/systemd/system/${svc}.service.d/override.conf" <<EOF
-[Service]
-Environment="GOMEMLIMIT=${aux_memlimit}"
-Environment="GOGC=${aux_gogc}"
-EOF
-      done
-      systemctl daemon-reload >/dev/null 2>&1 || true
-    fi
-
-    # 2. OpenRC 环境注入
-    if [[ -f /etc/alpine-release ]] || command -v rc-service >/dev/null 2>&1; then
-      rm -f /etc/conf.d/caddy 2>/dev/null || true
-      for svc in sing-box cloudflared sout s-ui; do
-        local cur_limit="$aux_memlimit"
-        local cur_gc="$aux_gogc"
-        if [[ "$svc" == "sing-box" ]]; then
-          cur_limit="$sb_memlimit"; cur_gc="$sb_gogc"
-        elif [[ "$svc" == "cloudflared" ]]; then
-          cur_limit="$cf_memlimit"; cur_gc="$cf_gogc"
-        fi
-
-        mkdir -p /etc/conf.d 2>/dev/null || true
-        cat > "/etc/conf.d/${svc}" <<EOF
-export GOMEMLIMIT="${cur_limit}"
-export GOGC="${cur_gc}"
-EOF
-      done
-    fi
+  if [[ -f /etc/alpine-release ]] || command -v rc-service >/dev/null 2>&1; then
+    for svc in cloudflared sing-box caddy sout s-ui; do
+      if [[ -f "/etc/conf.d/${svc}" ]]; then
+        sed -i '/GOMEMLIMIT/d' "/etc/conf.d/${svc}" 2>/dev/null || true
+        sed -i '/GOGC/d' "/etc/conf.d/${svc}" 2>/dev/null || true
+      fi
+    done
   fi
 }
 
@@ -1403,21 +1319,8 @@ chmod 700 "$WORK_DIR"
 if [[ "$backend_kind" == "sing-box" ]] || (! check_sui && check_singbox); then
   echo -n "sing-box" > "${WORK_DIR}/panel_mode"
   detect_adaptive_mem_tuning
-  sb_limit="35MiB"
-  sb_gc="70"
-  if [[ "$HAS_SWAP" -eq 1 || ( -n "$AUTO_MEM_MB" && "$AUTO_MEM_MB" -gt 180 ) ]]; then
-    # 德邦模式或内存 > 180MB：不限制 GOMEMLIMIT，使用原生默认
-    sb_limit=""
-    sb_gc="100"
-  fi
   sb_env_systemd=""
   sb_env_openrc=""
-  if [[ -n "$sb_limit" ]]; then
-    sb_env_systemd="Environment=\"GOMEMLIMIT=${sb_limit}\"
-Environment=\"GOGC=${sb_gc}\""
-    sb_env_openrc="export GOMEMLIMIT=\"${sb_limit}\"
-export GOGC=\"${sb_gc}\""
-  fi
 
   if [[ "$INIT_SYS" == "systemd" ]]; then
     if [[ ! -f /etc/systemd/system/sing-box.service ]]; then
@@ -1506,9 +1409,7 @@ fi
 seed_settings
 svc_install
 svc_enable_start
-# 带上 keep_env：此时本脚本已按自适应结果写好各服务的 GOMEMLIMIT/GOGC，
-# 不能再用"清理历史遗留"的逻辑把它们删掉（否则低内存护栏会丢失）
-optimize_low_memory "" keep_env
+optimize_low_memory
 
 echo "[6/6] 检查运行状态..."
 sleep 3

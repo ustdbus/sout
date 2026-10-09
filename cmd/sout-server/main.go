@@ -13,7 +13,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,105 +21,11 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v4.3.11"
+var version = "v4.4.0"
 
 func initLowMemoryProtection() {
-	var memTotalKB int64
-	var swapTotalKB int64
-	// 1. 读取 /proc/meminfo
-	if data, err := os.ReadFile("/proc/meminfo"); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			if strings.HasPrefix(line, "MemTotal:") {
-				fields := strings.Fields(line)
-				if len(fields) >= 2 {
-					if kb, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
-						memTotalKB = kb
-					}
-				}
-			} else if strings.HasPrefix(line, "SwapTotal:") {
-				fields := strings.Fields(line)
-				if len(fields) >= 2 {
-					if kb, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
-						swapTotalKB = kb
-					}
-				}
-			}
-		}
-	}
-
-	// 2. 读取 cgroup v1 / v2 物理限额
-	var cgroupLimitBytes int64
-	cgroupPaths := []string{
-		"/sys/fs/cgroup/memory.max",                   // cgroup v2
-		"/sys/fs/cgroup/memory/memory.limit_in_bytes", // cgroup v1
-		"/sys/fs/cgroup/memory.limit_in_bytes",        // cgroup v1 alternate
-	}
-	for _, p := range cgroupPaths {
-		if data, err := os.ReadFile(p); err == nil {
-			valStr := strings.TrimSpace(string(data))
-			if valStr != "" && valStr != "max" {
-				if val, err := strconv.ParseInt(valStr, 10, 64); err == nil {
-					// 过滤未限制时的极大值 (例如 0x7FFFFFFFFFFFF000 / > 1TB)
-					if val > 0 && val < (1<<40) {
-						cgroupLimitBytes = val
-						break
-					}
-				}
-			}
-		}
-	}
-
-	// 3. 计算有效真实可用物理内存 (MB)
-	var effectiveMB int64
-	var meminfoMB int64
-	if memTotalKB > 0 {
-		meminfoMB = memTotalKB / 1024
-	}
-	var cgroupMB int64
-	if cgroupLimitBytes > 0 {
-		cgroupMB = cgroupLimitBytes / (1024 * 1024)
-	}
-
-	if meminfoMB > 0 && cgroupMB > 0 {
-		if meminfoMB < cgroupMB {
-			effectiveMB = meminfoMB
-		} else {
-			effectiveMB = cgroupMB
-		}
-	} else if meminfoMB > 0 {
-		effectiveMB = meminfoMB
-	} else if cgroupMB > 0 {
-		effectiveMB = cgroupMB
-	}
-
-	if effectiveMB <= 0 {
-		return
-	}
-
-	hasSwap := swapTotalKB >= 32768
-	if hasSwap {
-		log.Printf("检测到有效 Swap 缓冲 (SwapTotal: %d KB)，启用零限制全速原生 Go 运行时配置", swapTotalKB)
-		return
-	}
-
-	// 4. 自适应 CPU + 内存调优 (仅针对 128M 左右且无 Swap 的机器，确保留足 15% 系统安全防爆余量；>180MB 则保持默认原生调度)
-	if effectiveMB <= 180 {
-		// 128M 左右极小内存环境 (如 122MB~128MB Alpine/Debian 极限环境)
-		if os.Getenv("GOMEMLIMIT") == "" {
-			debug.SetMemoryLimit(25 * 1024 * 1024)
-		}
-		if os.Getenv("GOGC") == "" {
-			debug.SetGCPercent(70)
-		}
-		log.Printf("检测到无 Swap 极小内存环境 (有效物理内存 %d MB <= 180MB)，为确保留足 15%% 系统安全防爆余量，启用精细分层内存防护 (sout-server 堆限制 25MB，GOGC=70)", effectiveMB)
-		go func() {
-			ticker := time.NewTicker(60 * time.Second)
-			defer ticker.Stop()
-			for range ticker.C {
-				debug.FreeOSMemory()
-			}
-		}()
-	}
+	// 全面采用与 Ubuntu 一致的原生全速模式（GOGC=100，零内存上限截断），彻底移除所有人为限制
+	log.Println("运行于原生官方全速调度模式 (GOGC=100，零内存上限截断)")
 }
 
 func main() {
