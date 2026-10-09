@@ -1756,11 +1756,13 @@ uninstall_all() {
   rm -rf /etc/s-ui /usr/local/s-ui 2>/dev/null || true
   rm -f /usr/bin/s-ui /usr/local/bin/s-ui /usr/bin/sui /usr/local/bin/sui 2>/dev/null || true
 
-  # 彻底清理 sing-box 服务
+  # 彻底清理 sing-box 服务与所有配置/二进制
   systemctl stop sing-box 2>/dev/null || rc-service sing-box stop 2>/dev/null || true
   systemctl disable sing-box 2>/dev/null || rc-update del sing-box default 2>/dev/null || true
   rm -f /etc/systemd/system/sing-box.service /etc/init.d/sing-box 2>/dev/null || true
   rm -f /var/log/sing-box.log /var/log/sing-box.err /run/sing-box.pid 2>/dev/null || true
+  rm -rf /etc/sing-box /var/lib/sing-box 2>/dev/null || true
+  rm -f /usr/local/bin/sing-box /usr/bin/sing-box 2>/dev/null || true
 
   # 清理运行日志、PID 与可能存在的旧迁移目录
   rm -f /var/log/sout.log /var/log/sout.err /var/log/s-ui.log /var/log/caddy.log /var/log/cloudflared.log /var/log/cloudflared_quick.log 2>/dev/null || true
@@ -4141,16 +4143,56 @@ except Exception:
   [[ "$force" == "true" ]] && issue_args+=("--force")
 
   echo -e "  [+] 正在与 Cloudflare DNS 握手验证所有权..."
-  if ! "$acme_cmd" "${issue_args[@]}"; then
+  local issue_out issue_rc=0
+  issue_out=$("$acme_cmd" "${issue_args[@]}" 2>&1) || issue_rc=$?
+
+  local is_skipped=0
+  if echo "$issue_out" | grep -qE "(Skipping|Domains not changed|Next renewal time is)"; then
+    is_skipped=1
+  fi
+
+  if [[ $issue_rc -ne 0 && $is_skipped -eq 0 ]]; then
+    # 若首发失败，尝试带 --force 重试一次以处理状态锁冲突
+    echo -e "  ${Y}[!] 正在尝试强制刷新申请...${N}"
+    issue_out=$("$acme_cmd" "${issue_args[@]}" --force 2>&1) || issue_rc=$?
+    if echo "$issue_out" | grep -qE "(Skipping|Domains not changed|Next renewal time is)"; then
+      is_skipped=1
+    fi
+  fi
+
+  if [[ $issue_rc -ne 0 && $is_skipped -eq 0 ]]; then
     echo -e "  ${R}[✗] 证书签发失败，请检查 Cloudflare API Token 权限是否包含 Zone.DNS:Edit。${N}"
+    echo "$issue_out" | grep -E "\[.*\]" | tail -5
     return 1
   fi
 
+  if [[ $is_skipped -eq 1 ]]; then
+    echo -e "  ${G}[✓] 检测到 acme.sh 证书库已有该域名的有效证书，直接分发安装！${N}"
+  fi
+
   echo -e "  ${B}[4/4] 正在分发并安装证书到目标路径 (/home/acme/${domain})...${N}"
-  "$acme_cmd" --install-cert -d "${domain}" \
+  # 同时尝试 ECC 模式与常规模式安装，确保兼容
+  "$acme_cmd" --install-cert -d "${domain}" --ecc \
     --key-file "${cert_dir}/privkey.pem" \
     --fullchain-file "${cert_dir}/fullchain.pem" \
     --reloadcmd "systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true" >/dev/null 2>&1 || true
+
+  if [[ ! -s "${cert_dir}/fullchain.pem" ]]; then
+    "$acme_cmd" --install-cert -d "${domain}" \
+      --key-file "${cert_dir}/privkey.pem" \
+      --fullchain-file "${cert_dir}/fullchain.pem" \
+      --reloadcmd "systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true" >/dev/null 2>&1 || true
+  fi
+
+  # 若通过 acme.sh 自身安装仍然为空，直接从 /root/.acme.sh/${domain}* 目录兜底拷贝
+  if [[ ! -s "${cert_dir}/fullchain.pem" || ! -s "${cert_dir}/privkey.pem" ]]; then
+    for c_cand in "/root/.acme.sh/${domain}_ecc" "/root/.acme.sh/${domain}"; do
+      if [[ -d "$c_cand" ]]; then
+        [[ -s "${c_cand}/fullchain.cer" ]] && cp -f "${c_cand}/fullchain.cer" "${cert_dir}/fullchain.pem" 2>/dev/null || true
+        [[ -s "${c_cand}/${domain}.key" ]] && cp -f "${c_cand}/${domain}.key" "${cert_dir}/privkey.pem" 2>/dev/null || true
+      fi
+    done
+  fi
 
   cp -f "${cert_dir}/fullchain.pem" "${cert_dir}/cert.crt" 2>/dev/null || true
   cp -f "${cert_dir}/privkey.pem" "${cert_dir}/private.key" 2>/dev/null || true

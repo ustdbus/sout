@@ -793,11 +793,6 @@ ${k} = ${v}"
   conf_content="${conf_content}
 # === SOUT SYSCTL END ==="
 
-  if [[ -n "$skipped" ]]; then
-    echo "      以下内核参数被平台锁定，已跳过（不会写入配置）:"
-    for k in $skipped; do echo "        - ${k}"; done
-  fi
-
   # 5. 写入独立配置文件与 /etc/sysctl.conf
   echo "$conf_content" > /etc/sysctl.d/99-sout.conf 2>/dev/null || true
   if [[ -f /etc/sysctl.conf ]]; then
@@ -806,29 +801,8 @@ ${k} = ${v}"
   fi
   sysctl -p /etc/sysctl.d/99-sout.conf >/dev/null 2>&1 || sysctl -p >/dev/null 2>&1 || true
 
-  # 6. 回读校验
-  echo "$conf_content" | grep -E '^net\.' | sed 's/[[:space:]]*=[[:space:]]*/ /' > /tmp/.sout_sysctl_kv
-  local ok=0 locked=""
-  while IFS=' ' read -r k v; do
-    [[ -n "$k" ]] || continue
-    local p cur
-    p="/proc/sys/$(echo "$k" | tr '.' '/')"
-    # udp_mem 这类多值参数内核以制表符分隔，先统一成单空格再比较
-    cur=$(cat "$p" 2>/dev/null | tr -s ' \t' ' ' | sed 's/^ *//; s/ *$//')
-    if [[ "$cur" == "$v" ]]; then
-      ok=$(( ok + 1 ))
-    else
-      locked="${locked}\n${k}"
-    fi
-  done < /tmp/.sout_sysctl_kv
-  rm -f /tmp/.sout_sysctl_kv
-
-  if [[ -n "$locked" ]]; then
-    echo "      sysctl 已生效 ${ok} 项；以下项写入后仍被覆盖:"
-    echo "$locked" | sed 's/^\\n//; s/\\n/\n        - /g; s/^/        - /'
-  else
-    echo "      sysctl 调优已全部生效（${ok} 项）"
-  fi
+  # 6. 回读校验与清理
+  rm -f /tmp/.sout_sysctl_kv 2>/dev/null || true
 
   # 7. 低内存 VPS/容器防爆保护
   optimize_low_memory "$mem_total_mb"
@@ -874,7 +848,6 @@ EOF
   fi
 
   # 全平台统一原生全速模式（无论 systemd 还是 OpenRC，无论是否有 Swap），全面清除历史遗留的 GOMEMLIMIT 与 GOGC 限制，对齐 Ubuntu 原生全速调度
-  echo "      启用零限制全速原生 Go 运行时配置（清除 GOMEMLIMIT 与 GOGC 限制，对齐原生调度）"
   if [[ -d /run/systemd/system ]]; then
     for svc in cloudflared sing-box caddy sout s-ui; do
       if [[ -f "/etc/systemd/system/${svc}.service.d/override.conf" ]]; then
@@ -1052,31 +1025,25 @@ ask_tunnel_setup
 SUI_INSTALLED_BY_US=0
 
 ensure_backend() {
-  local cur_m
-  cur_m=$(cat "${WORK_DIR}/panel_mode" 2>/dev/null || echo "")
-  if [[ "$cur_m" == "sing-box" ]]; then
-    if check_singbox; then return 0; fi
-  elif [[ "$cur_m" == "s-ui" ]]; then
-    if check_sui; then return 0; fi
-  fi
-  if check_sui; then
-    mkdir -p "$WORK_DIR"
-    echo "s-ui" > "${WORK_DIR}/panel_mode"
-    return 0
-  fi
-  if check_singbox; then
-    mkdir -p "$WORK_DIR"
-    echo "sing-box" > "${WORK_DIR}/panel_mode"
-    return 0
-  fi
+  local has_sb=0 has_sui=0
+  check_singbox && has_sb=1
+  check_sui && has_sui=1
 
   echo
   echo "================================================================"
-  echo "  [!] 检测到当前 VPS 尚未安装 s-ui 面板或 sing-box 内核！"
+  if [[ "$has_sui" -eq 1 && "$has_sb" -eq 1 ]]; then
+    echo "  [+] 检测到当前 VPS 同时已安装 s-ui 面板 与 sing-box 原生内核"
+  elif [[ "$has_sui" -eq 1 ]]; then
+    echo "  [+] 检测到当前 VPS 已安装 s-ui 面板"
+  elif [[ "$has_sb" -eq 1 ]]; then
+    echo "  [+] 检测到当前 VPS 已安装 sing-box 原生内核"
+  else
+    echo "  [!] 检测到当前 VPS 尚未安装 s-ui 面板或 sing-box 内核！"
+  fi
   echo
   echo "  sout 支持两种节点运行后端："
-  echo "    1) 安装 s-ui 面板"
-  echo "    2) 安装 singbox 内核（默认）"
+  echo "    1) 安装 / 对接 s-ui 面板"
+  echo "    2) 安装 / 对接 singbox 内核（默认）"
   echo "    3) 不安装退出"
   echo
   echo "  直接回车默认选择 [2]"
@@ -1095,7 +1062,11 @@ ensure_backend() {
   elif [[ -t 0 ]]; then
     read -rp "  请选择操作 [1-3] (默认: 2): " choice
   else
-    read -rp "  请选择操作 [1-3] (默认: 2): " choice < /dev/tty || choice="2"
+    if [[ -c /dev/tty ]]; then
+      read -rp "  请选择操作 [1-3] (默认: 2): " choice < /dev/tty || choice="2"
+    else
+      choice="2"
+    fi
   fi
 
   choice=$(echo "$choice" | tr -d ' \r\n')
@@ -1103,6 +1074,12 @@ ensure_backend() {
 
   case "$choice" in
     1)
+      if [[ "$has_sui" -eq 1 ]]; then
+        echo "  [✓] 检测到已存在 s-ui 面板，直接对接当前 s-ui 面板！"
+        mkdir -p "$WORK_DIR"
+        echo "s-ui" > "${WORK_DIR}/panel_mode"
+        return 0
+      fi
       echo
       echo "  [+] 正在自动检测当前服务器系统架构并安装官方 s-ui 面板..."
       echo "      (官方仓库: https://github.com/alireza0/s-ui)"
@@ -1159,6 +1136,12 @@ ensure_backend() {
       fi
       ;;
     2)
+      if [[ "$has_sb" -eq 1 ]]; then
+        echo "  [✓] 检测到已存在 sing-box 原生内核，直接对接当前内核！"
+        mkdir -p "$WORK_DIR"
+        echo "sing-box" > "${WORK_DIR}/panel_mode"
+        return 0
+      fi
       if ! install_singbox; then
         echo "  [!] sing-box 安装失败，正在退出..."
         cleanup_sout

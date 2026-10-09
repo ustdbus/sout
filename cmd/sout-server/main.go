@@ -21,11 +21,10 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v4.4.4"
+var version = "v4.4.5"
 
 func initLowMemoryProtection() {
-	// 全面采用与 Ubuntu 一致的原生全速模式（GOGC=100，零内存上限截断），彻底移除所有人为限制
-	log.Println("运行于原生官方全速调度模式 (GOGC=100，零内存上限截断)")
+	// 原生全速模式 (GOGC=100，无额外内存上限)
 }
 
 func main() {
