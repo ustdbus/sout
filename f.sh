@@ -685,6 +685,16 @@ get_tcp_congestion() {
   local cc
   cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || cat /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null || echo "cubic")
   cc=$(echo "$cc" | tr -d ' \r\n')
+
+  # 若当前不是 bbr，优先尝试主动加载并开启 BBR + FQ
+  if [[ "$cc" != "bbr" ]]; then
+    modprobe tcp_bbr 2>/dev/null || true
+    sysctl -w net.core.default_qdisc=fq >/dev/null 2>&1 || true
+    sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1 || true
+    cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || cat /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null || echo "$cc")
+    cc=$(echo "$cc" | tr -d ' \r\n')
+  fi
+
   [[ -z "$cc" ]] && cc="cubic"
   echo "$cc"
 }
@@ -2470,6 +2480,11 @@ except Exception:
   public_ip=$(public_ip)
   [[ "$public_ip" == "127.0.0.1" ]] && public_ip="$domain"
   cur_cc=$(get_tcp_congestion)
+  if [[ "$cur_cc" == "bbr" ]]; then
+    echo -e "  ${G}[✓] 拥塞控制算法: 已成功启用高性能 BBR + FQ${N}"
+  else
+    echo -e "  ${Y}[i] 拥塞控制算法: 当前内核/环境未支持 BBR，自动平滑适配 ${cur_cc}${N}"
+  fi
 
   if [[ "$is_quick" == "true" ]]; then
     echo -e "  [+] 正在启动 Cloudflare 免费临时隧道服务 (${protocol})..."

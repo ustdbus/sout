@@ -1258,6 +1258,50 @@ func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {
 		}
 	}
 
+	// 全局前置链式出站自适应 (route.final)：
+	// 与原生 sing-box 行为 100% 对齐：若存在已激活且运行中的全局前置链隧道 (例如 WARP)，
+	// 基础直连默认路由 (route.final) 自动重定向至该前置链 SOCKS5 出站 (vps→warp→目标网站)；
+	// 若未开启前置链或已取消，恢复默认 "direct" 直连原生出站。
+	var chainTunnel *Tunnel
+	for _, t := range tunnels {
+		if t.IsChainUpstream && t.Status == "up" {
+			chainTunnel = t
+			break
+		}
+	}
+
+	targetFinal := "direct"
+	if chainTunnel != nil {
+		targetFinal = suiTagPrefix + sanitizeTag(chainTunnel.Node.HostName)
+	}
+
+	if configObj, err := s.callAPI(http.MethodGet, "config", nil); err == nil {
+		var cfg map[string]any
+		if err := json.Unmarshal(configObj, &cfg); err == nil {
+			rawConfig, _ := cfg["config"].(map[string]any)
+			if rawConfig != nil {
+				route, _ := rawConfig["route"].(map[string]any)
+				if route == nil {
+					route = make(map[string]any)
+				}
+				curFinal, _ := route["final"].(string)
+				if curFinal != targetFinal {
+					route["final"] = targetFinal
+					rawConfig["route"] = route
+					configBytes, _ := json.Marshal(rawConfig)
+					form := url.Values{
+						"object": {"config"},
+						"action": {"edit"},
+						"data":   {string(configBytes)},
+					}
+					if _, err := s.callAPI(http.MethodPost, "save", form); err == nil {
+						s.restartSingBox()
+					}
+				}
+			}
+		}
+	}
+
 	return nil
 }
 

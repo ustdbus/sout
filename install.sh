@@ -105,6 +105,9 @@ nameserver 2a00:1098:2b::1
 EOF
       export SOUT_CONFIGURED_NAT64=1
       echo "  [✓] 已配置公共 DNS64 + NAT64 服务"
+    else
+      echo "  [✓] 检测到当前服务器为纯 IPv6 环境 (无原生公网 IPv4)"
+      echo "      公共 DNS64 + NAT64 服务已在运行中 (保障 IPv4 互联互通)"
     fi
   else
     export IS_PURE_IPV6=0
