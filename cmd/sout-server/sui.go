@@ -3548,24 +3548,6 @@ func (s *SUI) NodeDetail(id int) (*NodeDetailInfo, error) {
 					allAddrs = append(allAddrs, NodeAddrItem{Server: v4, ServerPort: listenPort})
 				}
 			}
-		} else if mode == "dual_stack" {
-			hasV4 := false
-			hasV6 := false
-			for _, a := range allAddrs {
-				if ip := net.ParseIP(a.Server); ip != nil {
-					if ip.To4() != nil {
-						hasV4 = true
-					} else {
-						hasV6 = true
-					}
-				}
-			}
-			if !hasV6 && v6 != "" {
-				allAddrs = append(allAddrs, NodeAddrItem{Server: v6, ServerPort: listenPort})
-			}
-			if !hasV4 && v4 != "" {
-				allAddrs = append(allAddrs, NodeAddrItem{Server: v4, ServerPort: listenPort})
-			}
 		}
 	}
 

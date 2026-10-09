@@ -2409,41 +2409,28 @@ func (sb *SingBox) NodeDetail(id int) (*NodeDetailInfo, error) {
 				ServerPort: 443,
 			})
 		} else if port > 0 {
-			// 直连公网节点（TUIC、Hysteria2、Reality 等）：自动识别母机公网地址并回显
+			// 直连公网节点（TUIC、Hysteria2、Reality 等）：仅在无任何记录时根据网络模式提供初始默认回显
+			mode := detectNetworkMode()
 			v4 := hostPublicIP()
 			v6 := hostPublicIPv6()
 			if v4 == "" && v6 == "" && sni != "" && net.ParseIP(sni) == nil {
 				v4 = sni
 			}
-			if v4 != "" {
-				addrs = append(addrs, NodeAddrItem{Server: v4, ServerPort: port})
-			}
-			if v6 != "" {
-				addrs = append(addrs, NodeAddrItem{Server: v6, ServerPort: port})
-			}
-		}
-	} else if port > 0 && listen != "127.0.0.1" {
-		// 存量直连公网节点：双栈环境下自动补全缺失的栈
-		mode := detectNetworkMode()
-		if mode == "dual_stack" {
-			v4 := hostPublicIP()
-			v6 := hostPublicIPv6()
-			hasV4 := false
-			hasV6 := false
-			for _, a := range addrs {
-				if ip := net.ParseIP(a.Server); ip != nil {
-					if ip.To4() != nil {
-						hasV4 = true
-					} else {
-						hasV6 = true
-					}
+			if mode == "ipv6_only" {
+				if v6 != "" {
+					addrs = append(addrs, NodeAddrItem{Server: v6, ServerPort: port})
 				}
-			}
-			if !hasV6 && v6 != "" {
-				addrs = append(addrs, NodeAddrItem{Server: v6, ServerPort: port})
-			}
-			if !hasV4 && v4 != "" {
-				addrs = append(addrs, NodeAddrItem{Server: v4, ServerPort: port})
+			} else if mode == "dual_stack" {
+				if v4 != "" {
+					addrs = append(addrs, NodeAddrItem{Server: v4, ServerPort: port})
+				}
+				if v6 != "" {
+					addrs = append(addrs, NodeAddrItem{Server: v6, ServerPort: port})
+				}
+			} else {
+				if v4 != "" {
+					addrs = append(addrs, NodeAddrItem{Server: v4, ServerPort: port})
+				}
 			}
 		}
 	}
