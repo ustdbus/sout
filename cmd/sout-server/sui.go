@@ -133,6 +133,9 @@ func DetectSUI(workDir string) (*SUI, error) {
 		return res
 	}
 
+	// 自动自愈与校准 outbounds.options 的数据类型为 BLOB，彻底杜绝任何原因导致的类型为 text 触发 Go SQLite 驱动 Scan 错误
+	_, _ = runSQLite(dbPath, "UPDATE outbounds SET options = CAST(options AS BLOB) WHERE typeof(options) != 'blob';")
+
 	portStr := sqliteExec("SELECT value FROM settings WHERE key='webPort';")
 	port := 2095
 	if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
@@ -1312,6 +1315,10 @@ func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {
 			}
 			_, _ = s.callAPI(http.MethodPost, "save", form)
 		}
+	}
+
+	if s.dbPath != "" {
+		_, _ = runSQLite(s.dbPath, "UPDATE outbounds SET options = CAST(options AS BLOB) WHERE typeof(options) != 'blob';")
 	}
 
 	// 全局前置链式出站自适应 (route.final)：

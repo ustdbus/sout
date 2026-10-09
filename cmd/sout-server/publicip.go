@@ -19,13 +19,37 @@ var publicIPSources = []string{
 }
 
 var (
-	publicIPMu       sync.Mutex
-	publicIPOverride string    // 由 -ip / FANOUT_PUBLIC_IP 显式指定，优先级最高
-	publicIPCache    string    // 上一次探测成功的结果
-	publicIPAt       time.Time // 上次探测时间，用于 TTL
+	publicIPMu         sync.Mutex
+	publicIPOverride   string    // 由 -ip / FANOUT_PUBLIC_IP 显式指定，优先级最高
+	publicIPCache      string    // 上一次探测成功的结果
+	publicIPAt         time.Time // 上次探测时间，用于 TTL
+	publicIPNegativeAt time.Time // 上次探测失败时间，用于负缓存 TTL
 )
 
-const publicIPTTL = 30 * time.Minute
+const (
+	publicIPTTL         = 30 * time.Minute
+	publicIPNegativeTTL = 5 * time.Minute
+)
+
+// hasIPv4Route 探测本机是否存在到公网 IPv4 的有效路由（Linux 内核 FIB 毫秒级返回）
+func hasIPv4Route() bool {
+	conn, err := net.DialTimeout("udp4", "8.8.8.8:53", 50*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// hasIPv6Route 探测本机是否存在到公网 IPv6 的有效路由
+func hasIPv6Route() bool {
+	conn, err := net.DialTimeout("udp6", "[2001:4860:4860::8888]:53", 50*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
 
 // setPublicIPOverride 记录用户显式指定的母机公网地址，空值表示不覆盖。
 func setPublicIPOverride(ip string) {
@@ -49,6 +73,10 @@ func hostPublicIP() string {
 		publicIPMu.Unlock()
 		return ip
 	}
+	if publicIPCache == "" && time.Since(publicIPNegativeAt) < publicIPNegativeTTL {
+		publicIPMu.Unlock()
+		return ""
+	}
 	publicIPMu.Unlock()
 
 	// 优先从安装时记录的持久化文件读取
@@ -65,18 +93,23 @@ func hostPublicIP() string {
 		}
 	}
 
-	ip := probePublicIP()
-	if ip == "" {
-		// 探测失败时退回上一次的结果，比直接空着强
+	// 毫秒级网络栈预检：无 IPv4 路由直接判定为无 IPv4，绝不触发外部 curl -4 耗时超时
+	if !hasIPv4Route() {
 		publicIPMu.Lock()
-		ip = publicIPCache
+		publicIPNegativeAt = time.Now()
 		publicIPMu.Unlock()
-		return ip
+		return ""
 	}
 
+	ip := probePublicIP()
 	publicIPMu.Lock()
-	publicIPCache = ip
-	publicIPAt = time.Now()
+	if ip == "" {
+		publicIPNegativeAt = time.Now()
+		ip = publicIPCache
+	} else {
+		publicIPCache = ip
+		publicIPAt = time.Now()
+	}
 	publicIPMu.Unlock()
 	return ip
 }
@@ -84,7 +117,7 @@ func hostPublicIP() string {
 // probePublicIP 逐个问外部接口，拿到第一个合法的 IPv4 就返回。
 func probePublicIP() string {
 	for _, url := range publicIPSources {
-		out, err := exec.Command("curl", "-4", "-s", "--max-time", "5", url).Output()
+		out, err := exec.Command("curl", "-4", "-s", "--max-time", "2", url).Output()
 		if err != nil {
 			continue
 		}
@@ -105,10 +138,11 @@ var publicIPv6Sources = []string{
 }
 
 var (
-	publicIPv6Mu       sync.Mutex
-	publicIPv6Override string
-	publicIPv6Cache    string
-	publicIPv6At       time.Time
+	publicIPv6Mu         sync.Mutex
+	publicIPv6Override   string
+	publicIPv6Cache      string
+	publicIPv6At         time.Time
+	publicIPv6NegativeAt time.Time
 )
 
 // setPublicIPv6Override 记录用户显式指定的母机公网 IPv6，空值表示不覆盖。
@@ -126,10 +160,14 @@ func hostPublicIPv6() string {
 		publicIPv6Mu.Unlock()
 		return ip
 	}
-	if publicIPv6Cache != "" {
+	if publicIPv6Cache != "" && time.Since(publicIPv6At) < publicIPTTL {
 		cached := publicIPv6Cache
 		publicIPv6Mu.Unlock()
 		return cached
+	}
+	if publicIPv6Cache == "" && time.Since(publicIPv6NegativeAt) < publicIPNegativeTTL {
+		publicIPv6Mu.Unlock()
+		return ""
 	}
 	publicIPv6Mu.Unlock()
 
@@ -147,26 +185,48 @@ func hostPublicIPv6() string {
 		}
 	}
 
-	ip := probePublicIPv6()
-	if ip != "" {
+	if !hasIPv6Route() {
 		publicIPv6Mu.Lock()
+		publicIPv6NegativeAt = time.Now()
+		publicIPv6Mu.Unlock()
+		return ""
+	}
+
+	ip := probePublicIPv6()
+	publicIPv6Mu.Lock()
+	if ip == "" {
+		publicIPv6NegativeAt = time.Now()
+		ip = publicIPv6Cache
+	} else {
 		publicIPv6Cache = ip
 		publicIPv6At = time.Now()
-		publicIPv6Mu.Unlock()
 	}
+	publicIPv6Mu.Unlock()
 	return ip
 }
 
 // hostConnectIP 返回母机公网直连 IP。
 // 双栈或纯 IPv4 环境返回 IPv4，纯 IPv6 环境返回 IPv6。
 func hostConnectIP() string {
+	// 优先直接利用持久化文件中记录的地址（已校验存在），避免页面打开时做网络探测
+	for _, p := range []string{"/var/lib/sout/host_ipv4", "/var/lib/sout/host_ip", "/var/lib/sout/host_ipv6"} {
+		if data, err := os.ReadFile(p); err == nil {
+			val := strings.TrimSpace(string(data))
+			if parsed := net.ParseIP(val); parsed != nil && !parsed.IsLoopback() {
+				if parsed.To4() != nil {
+					return parsed.String()
+				}
+			}
+		}
+	}
+
 	if ip := hostPublicIP(); ip != "" && ip != "127.0.0.1" {
 		return ip
 	}
 	if v6 := hostPublicIPv6(); v6 != "" {
 		return v6
 	}
-	// 尝试从持久化文件兜底
+	// 尝试从持久化文件兜底（包括 IPv6）
 	for _, p := range []string{"/var/lib/sout/host_ip", "/var/lib/sout/host_ipv6"} {
 		if data, err := os.ReadFile(p); err == nil {
 			val := strings.TrimSpace(string(data))
@@ -182,7 +242,7 @@ func hostConnectIP() string {
 // 无 IPv6 出口时 curl 会超时/报错，这里直接跳过，不影响 IPv4 流程。
 func probePublicIPv6() string {
 	for _, url := range publicIPv6Sources {
-		out, err := exec.Command("curl", "-6", "-s", "--max-time", "5", url).Output()
+		out, err := exec.Command("curl", "-6", "-s", "--max-time", "2", url).Output()
 		if err != nil {
 			continue
 		}
