@@ -478,7 +478,7 @@ BIN="/usr/local/bin/sout-server"
 WORK_DIR="/var/lib/sout"
 [[ ! -d "$WORK_DIR" && -d "/var/lib/fanout" ]] && WORK_DIR="/var/lib/fanout"
 DEFAULT_PORT=8899
-SOUT_VERSION="4.5.0"
+SOUT_VERSION="4.5.1"
 
 R='\033[31m'; G='\033[32m'; Y='\033[33m'; B='\033[34m'; D='\033[90m'; N='\033[0m'
 
@@ -2349,18 +2349,8 @@ setup_caddy_proxy() {
     pkill -9 -x caddy 2>/dev/null || true
   fi
 
-  # 彻底停止并注销现有独立的 cloudflared 服务与守护进程
-  systemctl stop cloudflared 2>/dev/null || true
-  systemctl disable cloudflared 2>/dev/null || true
-  rc-service cloudflared stop 2>/dev/null || true
-  rc-update del cloudflared default 2>/dev/null || true
-  pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
-  rm -f /etc/systemd/system/cloudflared.service /etc/init.d/cloudflared 2>/dev/null || true
-
-  # 仅在非固定 Token 且需要临时隧道时按需拉取，常规命名隧道无需安装独立进程
-  if [[ "$is_quick" == "true" ]]; then
-    install_cloudflared_bin || { echo -e "  ${R}安装 cloudflared 失败${N}"; return 1; }
-  fi
+  # 确保已安装官方独立的 cloudflared 二进制，保障隧道常驻后台、零断网与零 1033 错误
+  install_cloudflared_bin || { echo -e "  ${R}安装 cloudflared 失败${N}"; return 1; }
 
   # 2. 检查后端类型并分配本地端口与安全路径
   local has_sui=false
@@ -2489,16 +2479,10 @@ except Exception:
 
   if [[ "$is_quick" == "true" ]]; then
     echo -e "  [+] 正在启动 Cloudflare 免费临时隧道服务 (${protocol})..."
-    setup_cloudflared_service "$tunnel_token" "$tunnel_port" "$protocol"
   else
-    echo -e "  [+] Cloudflare 原生隧道将由 sing-box 内嵌驱动 (${protocol})..."
-    systemctl stop cloudflared 2>/dev/null || true
-    systemctl disable cloudflared 2>/dev/null || true
-    rc-service cloudflared stop 2>/dev/null || true
-    rc-update del cloudflared default 2>/dev/null || true
-    pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
-    rm -f /etc/systemd/system/cloudflared.service /etc/init.d/cloudflared 2>/dev/null || true
+    echo -e "  [+] 正在启动 Cloudflare 官方独立守护隧道服务 (${protocol})..."
   fi
+  setup_cloudflared_service "$tunnel_token" "$tunnel_port" "$protocol"
 
   if [[ "$is_quick" == "true" ]]; then
     echo -e "  [+] 正在等待 Cloudflare 分配免费临时域名..."
@@ -2672,27 +2656,8 @@ else:
                 if not tag or not proto or tag in seen_tags: continue
                 seen_tags.add(tag)
 
-                # 特殊处理 cloudflared 原生隧道入站：保留 token/protocol/edge_ip_version，绝不添加 users 字段
-                if proto == 'cloudflared':
-                    cf_ib = {
-                        'type': 'cloudflared',
-                        'tag': tag,
-                    }
-                    token_val = ib.get('token') or ib.get('raw', {}).get('token', '')
-                    if token_val:
-                        cf_ib['token'] = token_val
-                    proto_val = ib.get('protocol') or ib.get('raw', {}).get('protocol', 'quic')
-                    if proto_val:
-                        cf_ib['protocol'] = proto_val
-                    edge_ip_ver = ib.get('edge_ip_version') or ib.get('raw', {}).get('edge_ip_version')
-                    if not edge_ip_ver and os.environ.get('IS_PURE_IPV6') == '1':
-                        edge_ip_ver = 6
-                    if edge_ip_ver:
-                        try:
-                            cf_ib['edge_ip_version'] = int(edge_ip_ver)
-                        except Exception:
-                            pass
-                    final_inbs.append(cf_ib)
+                # cloudflared 隧道已由宿主机独立守护进程驱动，过滤并清理内嵌入站，确保 sing-box 重启时零断连
+                if proto == 'cloudflared' or tag == 'cf-tunnel-in':
                     continue
 
                 if ib.get('addrs'): addrs_store[tag] = ib['addrs']
@@ -3086,26 +3051,17 @@ api('POST', 'save', {
 created_inbound_tags.append(reality_tag)
 time.sleep(0.4)
 
-# 若存在 TUNNEL_TOKEN，不论是 s-ui 还是原生 sing-box，均添加/更新 cf-tunnel-in 原生内置入站
-tunnel_token = os.environ.get('TUNNEL_TOKEN', '').strip()
-tunnel_proto = os.environ.get('TUNNEL_PROTOCOL', 'quic').strip() or 'quic'
-if tunnel_token:
-    cf_tag = 'cf-tunnel-in'
-    existing_cf = next((r for r in inbound_rows if r.get('tag') == cf_tag or r.get('type') == 'cloudflared'), None)
-    cf_payload = {
-        'id': existing_cf.get('id') if existing_cf else 0,
-        'type': 'cloudflared',
-        'tag': cf_tag,
-        'token': tunnel_token,
-        'protocol': tunnel_proto
-    }
-    if os.environ.get('IS_PURE_IPV6') == '1':
-        cf_payload['edge_ip_version'] = 6
-    api('POST', 'save', {
-        'object': 'inbounds',
-        'action': 'edit' if existing_cf else 'new',
-        'data': json.dumps(cf_payload)
-    })
+# 清理存量内嵌 cf-tunnel-in 入站（由独立 cloudflared 守护进程接管，彻底避免重启 sing-box/s-ui 时导致 1033 断网）
+existing_cf = next((r for r in inbound_rows if r.get('tag') == 'cf-tunnel-in' or r.get('type') == 'cloudflared'), None)
+if existing_cf and existing_cf.get('id'):
+    try:
+        api('POST', 'save', {
+            'object': 'inbounds',
+            'action': 'del',
+            'data': json.dumps(existing_cf.get('id'))
+        })
+    except Exception:
+        pass
 
 # 3. 重新查询最新所有入站 ID (100% 原生 API)
 inbounds_resp = api('GET', 'inbounds') or {}
