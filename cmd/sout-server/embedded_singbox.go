@@ -501,8 +501,20 @@ func (e *embeddedEngine) rebuildBoxLocked() error {
 		}
 	}
 
-	if err := newBox.Start(); err != nil {
-		return fmt.Errorf("启动内嵌 sing-box 失败: %w", err)
+	var startErr error
+	for attempt := 0; attempt < 6; attempt++ {
+		startErr = newBox.Start()
+		if startErr == nil {
+			break
+		}
+		if strings.Contains(startErr.Error(), "address already in use") {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		break
+	}
+	if startErr != nil {
+		return fmt.Errorf("启动内嵌 sing-box 失败: %w", startErr)
 	}
 
 	e.box = newBox

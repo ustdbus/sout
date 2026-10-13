@@ -1954,7 +1954,11 @@ check_and_update() {
   echo -e "   2) 检查/更新 sing-box 原生内核到官方最新稳定版"
   echo -e "   0) 返回上级菜单"
   echo -e "${D}----------------------------------------${N}"
-  read -rp "  请选择 [0-2] (默认 1): " up_choice
+  if [[ ! -t 0 ]]; then
+    up_choice="1"
+  else
+    read -rp "  请选择 [0-2] (默认 1): " up_choice
+  fi
   up_choice=$(echo "$up_choice" | tr -d ' \r\n')
   [[ -z "$up_choice" ]] && up_choice="1"
 
@@ -2006,11 +2010,19 @@ sys.exit(0 if latest > cur else 1)
 
   if [[ "$is_newer" -eq 1 ]]; then
     echo -e "  ${G}发现新版本 ${tag_name}！${N}"
-    read -rp "  是否立即更新到最新版本？[Y/n]: " do_up
+    if [[ ! -t 0 ]]; then
+      do_up="y"
+    else
+      read -rp "  是否立即更新到最新版本？[Y/n]: " do_up
+    fi
     [[ ${do_up,,} == n ]] && return
   else
     echo -e "  ${G}当前已是最新版本 (${cur_ver})！${N}"
-    read -rp "  是否仍要重新下载并覆盖安装 ${tag_name}？[y/N]: " force_up
+    if [[ ! -t 0 ]]; then
+      force_up="y"
+    else
+      read -rp "  是否仍要重新下载并覆盖安装 ${tag_name}？[y/N]: " force_up
+    fi
     [[ ${force_up,,} == y ]] || return
   fi
 

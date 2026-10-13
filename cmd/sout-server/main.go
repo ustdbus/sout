@@ -70,15 +70,15 @@ func main() {
 	setPublicIPOverride(*publicIP)
 	go hostPublicIP() // 预热探测，别让首个请求阻塞
 
+	// 立即拉起内置反代网关，接管隧道回源端口
+	InitGateway(*workDir)
+
 	configurePanel(*workDir)
 	if p, err := openPanel(); err != nil {
 		log.Printf("节点链接后端暂不可用（可在 Web 界面查看原因）: %v", err)
 	} else {
 		log.Printf("节点链接后端: %s", p.Describe())
 	}
-
-	// 立即拉起内置反代网关，接管隧道回源端口
-	InitGateway(*workDir)
 
 	mgr := NewManager(*maxSlots, *workDir)
 	log.Printf("正在拉取节点列表...")
