@@ -3,8 +3,8 @@
 package main
 
 import (
-	"github.com/sagernet/sing-box/adapter"
+	sbinbound "github.com/sagernet/sing-box/adapter/inbound"
 )
 
-func registerCloudflaredInbound(registry adapter.InboundRegistry) {
+func registerCloudflaredInbound(registry *sbinbound.Registry) {
 }

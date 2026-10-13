@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 const (
@@ -700,9 +699,7 @@ func (sb *SingBox) syncToEmbedded(cfg map[string]any) error {
 			continue
 		}
 		if !desiredTags[tag] {
-			if eng.box != nil {
-				_ = eng.box.Inbound().Remove(tag)
-			}
+			closeInbound(eng.box, tag)
 			delete(eng.inbounds, tag)
 		}
 	}

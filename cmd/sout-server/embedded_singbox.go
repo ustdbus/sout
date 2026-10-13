@@ -319,7 +319,7 @@ func (e *embeddedEngine) addInboundLocked(rawConfig map[string]any) error {
 	}
 
 	if _, found := e.box.Inbound().Get(tag); found {
-		_ = e.box.Inbound().Remove(tag)
+		closeInbound(e.box, tag)
 	}
 
 	options, err := decodeSingBoxOptions[option.Inbound](e.ctx, rawConfig)
@@ -355,10 +355,8 @@ func (e *embeddedEngine) RemoveInbound(tag string) error {
 	if e.box == nil {
 		return nil
 	}
-	if _, found := e.box.Inbound().Get(tag); !found {
-		return nil
-	}
-	return e.box.Inbound().Remove(tag)
+	closeInbound(e.box, tag)
+	return nil
 }
 
 // HasInbound 检查入站是否处于运行状态
@@ -576,8 +574,8 @@ func (e *embeddedEngine) addTunnelLocked(tunnel *Tunnel) error {
 		nextRoutes := cloneEmbeddedRoutes(e.routes)
 		delete(nextRoutes, previous.socksTag)
 		e.routes = nextRoutes
-		_ = e.box.Inbound().Remove(previous.socksTag)
-		_ = e.box.Endpoint().Remove(previous.endpointTag)
+		closeInbound(e.box, previous.socksTag)
+		closeEndpoint(e.box, previous.endpointTag)
 		delete(e.tunnels, tunnel.Slot)
 	}
 
@@ -648,9 +646,9 @@ func (e *embeddedEngine) removeTunnel(tunnel *Tunnel) {
 	delete(nextRoutes, state.socksTag)
 	e.routes = nextRoutes
 	if state.socksTag != "" {
-		_ = e.box.Inbound().Remove(state.socksTag)
+		closeInbound(e.box, state.socksTag)
 	}
-	_ = e.box.Endpoint().Remove(state.endpointTag)
+	closeEndpoint(e.box, state.endpointTag)
 	delete(e.tunnels, tunnel.Slot)
 }
 
@@ -698,4 +696,22 @@ func decodeSingBoxOptions[T any](ctx context.Context, raw map[string]any) (T, er
 		return out, err
 	}
 	return out, nil
+}
+
+func closeInbound(box *sbox.Box, tag string) {
+	if box == nil || tag == "" {
+		return
+	}
+	if ib, found := box.Inbound().Get(tag); found {
+		_ = ib.Close()
+	}
+}
+
+func closeEndpoint(box *sbox.Box, tag string) {
+	if box == nil || tag == "" {
+		return
+	}
+	if ep, found := box.Endpoint().Get(tag); found {
+		_ = ep.Close()
+	}
 }
