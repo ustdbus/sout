@@ -33,6 +33,7 @@ import (
 	"github.com/sagernet/sing-box/protocol/vless"
 	"github.com/sagernet/sing-box/protocol/vmess"
 	"github.com/sagernet/sing-box/protocol/wireguard"
+	"github.com/sagernet/sing/common"
 	SBJSON "github.com/sagernet/sing/common/json"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -703,8 +704,9 @@ func closeInbound(box *sbox.Box, tag string) {
 		return
 	}
 	if ib, found := box.Inbound().Get(tag); found {
-		_ = ib.Close()
+		_ = common.Close(ib)
 	}
+	_ = box.Inbound().Remove(tag)
 }
 
 func closeEndpoint(box *sbox.Box, tag string) {
@@ -712,6 +714,8 @@ func closeEndpoint(box *sbox.Box, tag string) {
 		return
 	}
 	if ep, found := box.Endpoint().Get(tag); found {
-		_ = ep.Close()
+		_ = common.Close(ep)
 	}
+	_ = box.Endpoint().Remove(tag)
 }
+
