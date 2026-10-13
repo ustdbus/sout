@@ -180,6 +180,11 @@ func DetectSingBox(workDir string) (*SingBox, error) {
 		}
 	}
 
+	if hasCmd("systemctl") && dirExists("/run/systemd/system") {
+		_ = exec.Command("systemctl", "stop", "sing-box").Run()
+		_ = exec.Command("systemctl", "disable", "sing-box").Run()
+	}
+
 	eng := getEmbeddedEngine()
 	if eng == nil {
 		var err error

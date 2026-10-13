@@ -142,7 +142,6 @@ func newEmbeddedEngine(listenIP string) (*embeddedEngine, error) {
 		return nil, fmt.Errorf("创建内嵌 sing-box 初始实例失败: %w", err)
 	}
 
-	setGlobalEmbeddedEngine(engine)
 	return engine, nil
 }
 
