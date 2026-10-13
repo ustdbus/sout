@@ -474,10 +474,25 @@ func (e *embeddedEngine) rebuildBoxLocked() error {
 		Options: &soutDynamicOutboundOptions{},
 	}}
 
+	dnsConfig := map[string]any{
+		"strategy": "prefer_ipv6",
+		"servers": []any{
+			map[string]any{
+				"tag":  "default-dns",
+				"type": "local",
+			},
+		},
+	}
+	dnsOpt, err := decodeSingBoxOptions[*option.DNSOptions](e.ctx, dnsConfig)
+	if err != nil {
+		return fmt.Errorf("解析 DNS 配置失败: %w", err)
+	}
+
 	newBox, err := sbox.New(sbox.Options{
 		Context: e.ctx,
 		Options: option.Options{
 			Log:       &option.LogOptions{Level: "warn", Timestamp: true},
+			DNS:       dnsOpt,
 			Inbounds:  inbounds,
 			Endpoints: endpoints,
 			Outbounds: outbounds,
