@@ -1065,14 +1065,16 @@ show_info() {
         fi
       else
         local sb_active_tun=false
-        if [[ "$INIT_SYS" == "systemd" ]]; then
-          [[ $(systemctl is-active sing-box 2>/dev/null || echo "") == "active" ]] && sb_active_tun=true
-        else
-          if rc-service sing-box status >/dev/null 2>&1 || pgrep -f "sing-box" >/dev/null 2>&1; then
-            sb_active_tun=true
-          fi
+        if [[ $(systemctl is-active sout 2>/dev/null || echo "") == "active" ]] || pgrep -f "sout-server" >/dev/null 2>&1; then
+          sb_active_tun=true
+        elif [[ $(systemctl is-active sing-box 2>/dev/null || echo "") == "active" ]]; then
+          sb_active_tun=true
+        elif rc-service sing-box status >/dev/null 2>&1 || pgrep -f "sing-box" >/dev/null 2>&1; then
+          sb_active_tun=true
         fi
-        if $sb_active_tun && [[ -f /etc/sing-box/config.json ]] && grep -q '"cf-tunnel-in"' /etc/sing-box/config.json 2>/dev/null; then
+        local sb_cfg="${WORK_DIR}/singbox_config.json"
+        [[ ! -f "$sb_cfg" ]] && sb_cfg="/etc/sing-box/config.json"
+        if $sb_active_tun && [[ -f "$sb_cfg" ]] && grep -q '"cf-tunnel-in"' "$sb_cfg" 2>/dev/null; then
           tun_active=true
         elif [[ $(systemctl is-active cloudflared 2>/dev/null || echo "") == "active" ]] || pgrep -f "/usr/local/bin/cloudflared" >/dev/null 2>&1; then
           tun_active=true
