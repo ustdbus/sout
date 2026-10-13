@@ -1,10 +1,11 @@
 package main
 
-// Build with: -tags "with_gvisor with_quic netgo osusergo".
+// Build with: -tags "with_gvisor with_quic with_utls with_wireguard with_cloudflared netgo osusergo".
 // OpenVPN system:false requires gVisor; QUIC is supported for extensions.
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -24,8 +25,13 @@ import (
 	"github.com/sagernet/sing-box/dns/transport/local"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/hysteria2"
 	"github.com/sagernet/sing-box/protocol/openvpn"
 	"github.com/sagernet/sing-box/protocol/socks"
+	"github.com/sagernet/sing-box/protocol/trojan"
+	"github.com/sagernet/sing-box/protocol/tuic"
+	"github.com/sagernet/sing-box/protocol/vless"
+	"github.com/sagernet/sing-box/protocol/vmess"
 	"github.com/sagernet/sing-box/protocol/wireguard"
 	SBJSON "github.com/sagernet/sing/common/json"
 	M "github.com/sagernet/sing/common/metadata"
@@ -34,8 +40,38 @@ import (
 
 const soutDynamicOutboundType = "sout-dynamic"
 
+var (
+	globalEngineMu sync.Mutex
+	globalEngine   *embeddedEngine
+)
+
+func getEmbeddedEngine() *embeddedEngine {
+	globalEngineMu.Lock()
+	defer globalEngineMu.Unlock()
+	return globalEngine
+}
+
+func setGlobalEmbeddedEngine(e *embeddedEngine) {
+	globalEngineMu.Lock()
+	defer globalEngineMu.Unlock()
+	globalEngine = e
+}
+
+func getOrInitEmbeddedEngine(listenIP string) (*embeddedEngine, error) {
+	globalEngineMu.Lock()
+	defer globalEngineMu.Unlock()
+	if globalEngine != nil {
+		return globalEngine, nil
+	}
+	engine, err := newEmbeddedEngine(listenIP)
+	if err != nil {
+		return nil, err
+	}
+	globalEngine = engine
+	return engine, nil
+}
+
 // embeddedEngine 管理唯一的 sing-box 用户态实例。
-// 每个 VPN Gate 出口以 userspace OpenVPN endpoint + 本地认证 SOCKS5 形式动态注册。
 type embeddedEngine struct {
 	mu sync.Mutex
 
@@ -43,6 +79,8 @@ type embeddedEngine struct {
 	box *sbox.Box
 
 	routes           map[string]embeddedRoute
+	userRoutes       map[string]embeddedRoute
+	inbounds         map[string]embeddedInboundState
 	tunnels          map[int]embeddedTunnelState
 	activeTunnels    map[int]*Tunnel
 	chainUpstreamTag string
@@ -53,6 +91,12 @@ type embeddedRoute struct {
 	endpoint string
 	direct   bool
 	block    bool
+}
+
+type embeddedInboundState struct {
+	tag  string
+	typ  string
+	hash [sha256.Size]byte
 }
 
 type embeddedTunnelState struct {
@@ -73,6 +117,8 @@ func newEmbeddedEngine(listenIP string) (*embeddedEngine, error) {
 	}
 	engine := &embeddedEngine{
 		routes:        make(map[string]embeddedRoute),
+		userRoutes:    make(map[string]embeddedRoute),
+		inbounds:      make(map[string]embeddedInboundState),
 		tunnels:       make(map[int]embeddedTunnelState),
 		activeTunnels: make(map[int]*Tunnel),
 		listenIP:      listenIP,
@@ -83,6 +129,13 @@ func newEmbeddedEngine(listenIP string) (*embeddedEngine, error) {
 	endpointRegistry := sbendpoint.NewRegistry()
 
 	socks.RegisterInbound(inboundRegistry)
+	vless.RegisterInbound(inboundRegistry)
+	vmess.RegisterInbound(inboundRegistry)
+	trojan.RegisterInbound(inboundRegistry)
+	hysteria2.RegisterInbound(inboundRegistry)
+	tuic.RegisterInbound(inboundRegistry)
+	registerCloudflaredInbound(inboundRegistry)
+
 	openvpn.RegisterEndpoint(endpointRegistry)
 	wireguard.RegisterEndpoint(endpointRegistry)
 
@@ -103,7 +156,7 @@ func newEmbeddedEngine(listenIP string) (*embeddedEngine, error) {
 	box, err := sbox.New(sbox.Options{
 		Context: ctx,
 		Options: option.Options{
-			Log: &option.LogOptions{Level: "fatal", Timestamp: true},
+			Log: &option.LogOptions{Level: "warn", Timestamp: true},
 			Outbounds: []option.Outbound{{
 				Type:    soutDynamicOutboundType,
 				Tag:     soutDynamicOutboundType,
@@ -119,6 +172,7 @@ func newEmbeddedEngine(listenIP string) (*embeddedEngine, error) {
 		return nil, fmt.Errorf("启动内嵌 sing-box 失败: %w", err)
 	}
 	engine.box = box
+	setGlobalEmbeddedEngine(engine)
 	return engine, nil
 }
 
@@ -146,19 +200,32 @@ func (o *soutDynamicOutbound) endpointFor(ctx context.Context, destination M.Soc
 	if isEmbeddedEndpointInbound(metadata.Inbound) {
 		return N.SystemDialer, destination, nil
 	}
+
 	o.engine.mu.Lock()
-	route, found := o.engine.routes[metadata.Inbound]
+	var route embeddedRoute
+	var found bool
+
+	// 1. 优先匹配认证用户级路由（分流用户 soutu...）
+	if metadata.User != "" && o.engine.userRoutes != nil {
+		route, found = o.engine.userRoutes[metadata.User]
+	}
+	// 2. 若未匹配到用户路由，使用入站级路由
+	if !found && o.engine.routes != nil {
+		route, found = o.engine.routes[metadata.Inbound]
+	}
 	box := o.engine.box
 	o.engine.mu.Unlock()
+
 	if !found {
-		return nil, destination, fmt.Errorf("入站 %s 没有可用出口", metadata.Inbound)
+		return N.SystemDialer, destination, nil
 	}
 	if route.block {
 		return nil, destination, fmt.Errorf("入站 %s 绑定的出口当前不可用", metadata.Inbound)
 	}
-	if route.direct {
+	if route.direct || route.endpoint == "" || route.endpoint == "direct" {
 		return N.SystemDialer, destination, nil
 	}
+
 	isWG := strings.HasPrefix(route.endpoint, "soutwireguard")
 	if !isWG && destination.IsIPv6() {
 		return nil, destination, fmt.Errorf("当前出口不支持 IPv6，已安全阻断以防真实 IPv6 泄露")
@@ -219,6 +286,113 @@ func (e *embeddedEngine) portAvailable(port int) bool {
 	}
 	_ = listener.Close()
 	return true
+}
+
+// AddInbound 在内存态下发与热加载入站
+func (e *embeddedEngine) AddInbound(rawConfig map[string]any) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.addInboundLocked(rawConfig)
+}
+
+func (e *embeddedEngine) addInboundLocked(rawConfig map[string]any) error {
+	if e.box == nil {
+		return fmt.Errorf("内嵌 sing-box 已关闭")
+	}
+
+	tag, _ := rawConfig["tag"].(string)
+	typ, _ := rawConfig["type"].(string)
+	if tag == "" || typ == "" {
+		return fmt.Errorf("入站缺少 tag 或 type")
+	}
+
+	blob, err := json.Marshal(rawConfig)
+	if err != nil {
+		return fmt.Errorf("序列化入站配置失败: %w", err)
+	}
+	h := sha256.Sum256(blob)
+
+	if cur, exists := e.inbounds[tag]; exists && cur.hash == h {
+		if _, found := e.box.Inbound().Get(tag); found {
+			return nil
+		}
+	}
+
+	if _, found := e.box.Inbound().Get(tag); found {
+		_ = e.box.Inbound().Remove(tag)
+	}
+
+	options, err := decodeSingBoxOptions[option.Inbound](e.ctx, rawConfig)
+	if err != nil {
+		return fmt.Errorf("解析入站 %s 配置失败: %w", tag, err)
+	}
+
+	loggerName := typ
+	if loggerName == "" {
+		loggerName = "inbound"
+	}
+
+	if err := e.box.Inbound().Create(e.ctx, e.box.Router(), e.box.LogFactory().NewLogger(loggerName), options.Tag, options.Type, options.Options); err != nil {
+		return fmt.Errorf("启动入站 %s (%s) 失败: %w", tag, typ, err)
+	}
+
+	e.inbounds[tag] = embeddedInboundState{
+		tag:  tag,
+		typ:  typ,
+		hash: h,
+	}
+	return nil
+}
+
+// RemoveInbound 在内存态安全注销并停止指定的入站
+func (e *embeddedEngine) RemoveInbound(tag string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	delete(e.inbounds, tag)
+	delete(e.routes, tag)
+
+	if e.box == nil {
+		return nil
+	}
+	if _, found := e.box.Inbound().Get(tag); !found {
+		return nil
+	}
+	return e.box.Inbound().Remove(tag)
+}
+
+// HasInbound 检查入站是否处于运行状态
+func (e *embeddedEngine) HasInbound(tag string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.box == nil {
+		return false
+	}
+	_, found := e.box.Inbound().Get(tag)
+	return found
+}
+
+// SyncRoutes 热同步入站路由与用户级分流路由表
+func (e *embeddedEngine) SyncRoutes(routes map[string]embeddedRoute, userRoutes map[string]embeddedRoute) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	nextRoutes := make(map[string]embeddedRoute, len(routes)+len(e.tunnels))
+	for k, v := range routes {
+		nextRoutes[k] = v
+	}
+	for _, t := range e.tunnels {
+		if t.socksTag != "" {
+			nextRoutes[t.socksTag] = embeddedRoute{endpoint: t.endpointTag}
+		}
+	}
+	e.routes = nextRoutes
+
+	nextUsers := make(map[string]embeddedRoute, len(userRoutes))
+	for k, v := range userRoutes {
+		nextUsers[k] = v
+	}
+	e.userRoutes = nextUsers
 }
 
 // wireguardEndpoint 将 WireGuard 配置转换为 sing-box 1.14 用户态 endpoint 配置格式
@@ -315,7 +489,6 @@ func wireguardEndpoint(configJSON, tag string) (map[string]any, error) {
 	if net.ParseIP(server) == nil {
 		if server == "engage.cloudflareclient.com" {
 			if systemSupportsIPv6() {
-				// 双栈/纯 IPv6 环境下优先使用官方 IPv6 端点，避免 NAT 母机 IPv4 UDP 丢包阻断
 				peerAddress = "2606:4700:d0::a29f:c001"
 			} else {
 				peerAddress = "162.159.192.1"
@@ -332,7 +505,6 @@ func wireguardEndpoint(configJSON, tag string) (map[string]any, error) {
 			}
 		}
 	} else if systemSupportsIPv6() {
-		// 若已指定为 Cloudflare IPv4 官方端点，但在支持 IPv6 的母机上，自适应切换为官方 IPv6 端点，避免 NAT 母机 UDP 黑洞导致的卡死
 		if server == "162.159.192.1" || server == "162.159.193.1" || server == "162.159.195.1" {
 			peerAddress = "2606:4700:d0::a29f:c001"
 		}
@@ -428,7 +600,6 @@ func (e *embeddedEngine) addTunnelLocked(tunnel *Tunnel) error {
 		endpointConfig = cfg
 	}
 
-	// 链式出站：若不是前置链自身且存在活跃的 chainUpstreamTag，自动注入 detour
 	if endpointTag != e.chainUpstreamTag && !tunnel.IsChainUpstream && e.chainUpstreamTag != "" {
 		endpointConfig["detour"] = e.chainUpstreamTag
 	}
@@ -441,30 +612,23 @@ func (e *embeddedEngine) addTunnelLocked(tunnel *Tunnel) error {
 		return fmt.Errorf("启动 %s endpoint 失败: %w", endpointLoggerName, err)
 	}
 
-	socksConfig := map[string]any{
-		"type": "socks", "tag": socksTag,
-		"listen": e.listenIP, "listen_port": tunnel.Port,
-	}
-	cred := tunnel.Cred
-	if cred.User != "" && cred.Pass != "" {
-		socksConfig["users"] = []any{map[string]any{"username": cred.User, "password": cred.Pass}}
-	}
-	socksOptions, err := decodeSingBoxOptions[option.Inbound](e.ctx, socksConfig)
-	if err != nil {
-		_ = e.box.Endpoint().Remove(endpointTag)
-		return fmt.Errorf("解析本地 SOCKS5 配置失败: %w", err)
-	}
-
-	nextRoutes := cloneEmbeddedRoutes(e.routes)
-	nextRoutes[socksTag] = embeddedRoute{endpoint: endpointTag}
-	e.routes = nextRoutes
-
-	if err := e.box.Inbound().Create(e.ctx, e.box.Router(), e.box.LogFactory().NewLogger("socks"), socksOptions.Tag, socksOptions.Type, socksOptions.Options); err != nil {
-		nextRoutes = cloneEmbeddedRoutes(e.routes)
-		delete(nextRoutes, socksTag)
-		e.routes = nextRoutes
-		_ = e.box.Endpoint().Remove(endpointTag)
-		return fmt.Errorf("启动本地 SOCKS5 失败: %w", err)
+	// 为 s-ui 模式及本地端口保留 SOCKS5 监听
+	if tunnel.Port > 0 {
+		socksConfig := map[string]any{
+			"type": "socks", "tag": socksTag,
+			"listen": e.listenIP, "listen_port": tunnel.Port,
+		}
+		cred := tunnel.Cred
+		if cred.User != "" && cred.Pass != "" {
+			socksConfig["users"] = []any{map[string]any{"username": cred.User, "password": cred.Pass}}
+		}
+		socksOptions, err := decodeSingBoxOptions[option.Inbound](e.ctx, socksConfig)
+		if err == nil {
+			nextRoutes := cloneEmbeddedRoutes(e.routes)
+			nextRoutes[socksTag] = embeddedRoute{endpoint: endpointTag}
+			e.routes = nextRoutes
+			_ = e.box.Inbound().Create(e.ctx, e.box.Router(), e.box.LogFactory().NewLogger("socks"), socksOptions.Tag, socksOptions.Type, socksOptions.Options)
+		}
 	}
 
 	e.tunnels[tunnel.Slot] = embeddedTunnelState{endpointTag: endpointTag, socksTag: socksTag}
@@ -483,7 +647,9 @@ func (e *embeddedEngine) removeTunnel(tunnel *Tunnel) {
 	nextRoutes := cloneEmbeddedRoutes(e.routes)
 	delete(nextRoutes, state.socksTag)
 	e.routes = nextRoutes
-	_ = e.box.Inbound().Remove(state.socksTag)
+	if state.socksTag != "" {
+		_ = e.box.Inbound().Remove(state.socksTag)
+	}
 	_ = e.box.Endpoint().Remove(state.endpointTag)
 	delete(e.tunnels, tunnel.Slot)
 }

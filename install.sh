@@ -1413,92 +1413,16 @@ rm -f /usr/local/bin/f /usr/local/bin/sout-cli 2>/dev/null || true
 mkdir -p "$WORK_DIR"
 chmod 700 "$WORK_DIR"
 
-# 若为 sing-box 后端，确保持久化 panel_mode 并确保守护进程服务存在
+# 若为 sing-box 后端，确保持久化 panel_mode，由 sout-server 唯一内嵌内核接管
 if [[ "$backend_kind" == "sing-box" ]] || (! check_sui && check_singbox); then
   echo -n "sing-box" > "${WORK_DIR}/panel_mode"
   detect_adaptive_mem_tuning
-  sb_env_systemd=""
-  sb_env_openrc=""
-
   if [[ "$INIT_SYS" == "systemd" ]]; then
-    if [[ ! -f /etc/systemd/system/sing-box.service ]]; then
-      cat > /etc/systemd/system/sing-box.service <<SBEU
-[Unit]
-Description=sing-box service
-Documentation=https://sing-box.sagernet.org
-After=network.target nss-lookup.target network-online.target
-
-[Service]
-${sb_env_systemd}
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
-ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
-Restart=on-failure
-RestartSec=3s
-LimitNOFILE=65535
-
-[Install]
-WantedBy=multi-user.target
-SBEU
-      systemctl daemon-reload
-    fi
-    systemctl enable sing-box >/dev/null 2>&1 || true
-    systemctl restart sing-box >/dev/null 2>&1 || true
+    systemctl stop sing-box >/dev/null 2>&1 || true
+    systemctl disable sing-box >/dev/null 2>&1 || true
   else
-    supervisor_line="command_background=\"yes\"\npidfile=\"/run/sing-box.pid\""
-    if command -v supervise-daemon >/dev/null 2>&1; then
-      supervisor_line="supervisor=\"supervise-daemon\""
-    fi
-    cat > /etc/init.d/sing-box <<SBRC
-#!/sbin/openrc-run
-name="sing-box"
-description="sing-box service"
-${sb_env_openrc}
-${supervisor_line}
-command="/usr/local/bin/sing-box"
-command_args="run -c /etc/sing-box/config.json"
-output_log="/var/log/sing-box.log"
-error_log="/var/log/sing-box.err"
-respawn_delay=2
-respawn_max=0
-
-depend() {
-  need net
-  after firewall
-}
-
-start_pre() {
-  pkill -9 -f "supervise-daemon.*sing-box" 2>/dev/null || true
-  if [ -n "\$command" ]; then
-    local bin_name
-    bin_name="\$(basename "\$command")"
-    pkill -9 -x "\$bin_name" 2>/dev/null || true
-  fi
-  if [ -f "/etc/sing-box/config.json" ]; then
-    for p in \$(grep -oE '"listen_port"[[:space:]]*:[[:space:]]*[0-9]+' /etc/sing-box/config.json 2>/dev/null | grep -oE '[0-9]+'); do
-      fuser -k -n tcp "\$p" 2>/dev/null || true
-    done
-  fi
-  if [ -f "\$pidfile" ]; then
-    local p
-    p=\$(cat "\$pidfile" 2>/dev/null)
-    if [ -n "\$p" ] && ! kill -0 "\$p" 2>/dev/null; then
-      rm -f "\$pidfile"
-    fi
-  fi
-}
-
-stop_post() {
-  rm -f "\$pidfile"
-  pkill -9 -f "supervise-daemon.*sing-box" 2>/dev/null || true
-  if [ -n "\$command" ]; then
-    pkill -9 -x "\$(basename "\$command")" 2>/dev/null || true
-  fi
-}
-SBRC
-    chmod +x /etc/init.d/sing-box
-    rc-update add sing-box default >/dev/null 2>&1 || true
-    rc-service sing-box restart >/dev/null 2>&1 || true
+    rc-service sing-box stop >/dev/null 2>&1 || true
+    rc-update del sing-box default >/dev/null 2>&1 || true
   fi
 elif [[ "$backend_kind" == "s-ui" ]] || check_sui; then
   echo -n "s-ui" > "${WORK_DIR}/panel_mode"
@@ -1684,9 +1608,9 @@ else
   echo
 
   if [[ "$backend_mode" == "sing-box" ]] || (! check_sui && check_singbox) || (! check_sui && [[ "$backend_mode" != "s-ui" ]]); then
-    echo "  [sing-box 原生内核]"
-    echo "  运行后端:      sing-box 原生内核"
-    echo "  核心配置:      /etc/sing-box/config.json"
+    echo "  [内嵌 sing-box 内核]"
+    echo "  运行后端:      内嵌 sing-box v1.14.3"
+    echo "  核心配置:      ${WORK_DIR}/singbox_config.json"
   elif [[ "$backend_mode" == "s-ui" ]] || check_sui; then
     echo "  [s-ui (Sing-Box) 节点面板]"
     echo "  s-ui 面板:     http://${IP}:${sui_port}${sui_path}"

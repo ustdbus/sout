@@ -344,8 +344,11 @@ func GetGatewayStatus(workDir string) map[string]any {
 		}
 	}
 
-	// 检查 sing-box 原生内置隧道识别与运行状态（涵盖原生 sing-box 与 s-ui 驱动内核）
-	sbConfigPath := "/etc/sing-box/config.json"
+	// 检查 sing-box 原生内置隧道识别与运行状态（涵盖内嵌 sing-box 与 s-ui 驱动内核）
+	sbConfigPath := filepath.Join(workDir, "singbox_config.json")
+	if !fileExists(sbConfigPath) {
+		sbConfigPath = "/etc/sing-box/config.json"
+	}
 	hasNativeTunnel := false
 	if sbData, err := os.ReadFile(sbConfigPath); err == nil {
 		sbContent := string(sbData)
@@ -366,28 +369,37 @@ func GetGatewayStatus(workDir string) map[string]any {
 	}
 
 	cfRunning := false
+	if eng := getEmbeddedEngine(); eng != nil && eng.HasInbound("cf-tunnel-in") {
+		hasNativeTunnel = true
+		cfRunning = true
+	}
+
 	if hasNativeTunnel {
 		st["tunnel_engine"] = "sing-box"
-		checkProc := "sing-box"
-		serviceName := "sing-box"
-		if isSUI {
-			checkProc = "sui"
-			serviceName = "s-ui"
-		}
-		if exec.Command("pgrep", "-f", checkProc).Run() == nil {
-			cfRunning = true
+		if !cfRunning {
+			if isSUI {
+				if exec.Command("pgrep", "-f", "sui").Run() == nil {
+					cfRunning = true
+				}
+			} else {
+				if exec.Command("pgrep", "-f", "sout-server").Run() == nil {
+					cfRunning = true
+				}
+			}
 		}
 		st["cloudflared_running"] = cfRunning
 
-		// 若配置了原生隧道但对应服务未运行，后台自愈拉起对应服务
-		if enabled, _ := st["enabled"].(bool); enabled && !cfRunning {
-			go func() {
-				if _, err := exec.LookPath("systemctl"); err == nil {
-					_ = exec.Command("systemctl", "start", serviceName).Run()
-				} else if _, err := exec.LookPath("rc-service"); err == nil {
-					_ = exec.Command("rc-service", serviceName, "start").Run()
-				}
-			}()
+		// 若为 s-ui 且配置了原生隧道但对应服务未运行，后台自愈拉起
+		if isSUI {
+			if enabled, _ := st["enabled"].(bool); enabled && !cfRunning {
+				go func() {
+					if _, err := exec.LookPath("systemctl"); err == nil {
+						_ = exec.Command("systemctl", "start", "s-ui").Run()
+					} else if _, err := exec.LookPath("rc-service"); err == nil {
+						_ = exec.Command("rc-service", "s-ui", "start").Run()
+					}
+				}()
+			}
 		}
 	} else {
 		// 独立 cloudflared 进程运行状态检查

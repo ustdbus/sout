@@ -24,12 +24,14 @@ const (
 	singboxBinaryDefault = "/usr/local/bin/sing-box"
 )
 
-// SingBox 结构体，直接管理并接管本机 sing-box 原生内核配置文件
+// SingBox 结构体，直接通过单内嵌 sing-box 内核在内存态管理入站与出站路由
 type SingBox struct {
-	configPath string
-	workDir    string
-	mu         sync.Mutex
-	restartMu  sync.Mutex
+	configPath  string
+	workDir     string
+	engine      *embeddedEngine
+	mu          sync.Mutex
+	restartMu   sync.Mutex
+	lastTunnels []*Tunnel
 }
 
 var _ Panel = (*SingBox)(nil)
@@ -37,7 +39,15 @@ var _ Panel = (*SingBox)(nil)
 func (sb *SingBox) Kind() string { return "sing-box" }
 
 func (sb *SingBox) Describe() string {
-	return fmt.Sprintf("接管本机 sing-box 原生内核 (%s)", sb.configPath)
+	return "内嵌 sing-box v1.14.3"
+}
+
+func (sb *SingBox) getEngine() *embeddedEngine {
+	if sb.engine != nil {
+		return sb.engine
+	}
+	sb.engine = getEmbeddedEngine()
+	return sb.engine
 }
 
 func (sb *SingBox) addrsFilePath() string {
@@ -141,10 +151,14 @@ func (sb *SingBox) removeBranchBinding(templateID int, hostTag string) {
 	sb.saveAllBranchBindings(updated)
 }
 
-// DetectSingBox 探测本机是否安装 sing-box 或存在配置文件
+// DetectSingBox 探测并初始化单内嵌 sing-box 接管后端
 func DetectSingBox(workDir string) (*SingBox, error) {
+	if workDir == "" {
+		workDir = "/var/lib/sout"
+	}
 	// 检查常用路径
 	candidates := []string{
+		filepath.Join(workDir, "singbox_config.json"),
 		singboxConfigDefault,
 		"/usr/local/etc/sing-box/config.json",
 		filepath.Join(workDir, "sing-box", "config.json"),
@@ -159,25 +173,32 @@ func DetectSingBox(workDir string) (*SingBox, error) {
 		}
 	}
 
-	// 如果配置文件未找到，但系统已安装 sing-box 命令，则初始化默认配置文件
+	targetPath := filepath.Join(workDir, "singbox_config.json")
 	if foundPath == "" {
-		if hasCmd("sing-box") || fileExists(singboxBinaryDefault) || fileExists("/usr/bin/sing-box") {
-			foundPath = singboxConfigDefault
-			if err := initDefaultSingBoxConfig(foundPath); err != nil {
-				return nil, fmt.Errorf("初始化 sing-box 配置文件失败: %w", err)
-			}
+		foundPath = targetPath
+		if err := initDefaultSingBoxConfig(foundPath); err != nil {
+			return nil, fmt.Errorf("初始化 sing-box 配置文件失败: %w", err)
 		}
 	}
 
-	if foundPath == "" {
-		return nil, fmt.Errorf("未检测到 sing-box 内核或配置文件")
+	eng := getEmbeddedEngine()
+	if eng == nil {
+		var err error
+		eng, err = getOrInitEmbeddedEngine("127.0.0.1")
+		if err != nil {
+			return nil, fmt.Errorf("初始化内嵌 sing-box 引擎失败: %w", err)
+		}
 	}
 
 	sb := &SingBox{
 		configPath: foundPath,
 		workDir:    workDir,
+		engine:     eng,
 	}
 	_ = sb.MigrateLegacyVmessArgo()
+	if cfg, err := sb.loadConfig(); err == nil {
+		_ = sb.syncToEmbedded(cfg)
+	}
 	return sb, nil
 }
 
@@ -567,6 +588,14 @@ func (sb *SingBox) healCloudflareQuickTunnel(cfg map[string]any) bool {
 func (sb *SingBox) loadConfig() (map[string]any, error) {
 	data, err := os.ReadFile(sb.configPath)
 	if err != nil {
+		// 若工作目录中的主配置尚未生成，平滑读取旧的 /etc/sing-box/config.json
+		if oldData, err2 := os.ReadFile("/etc/sing-box/config.json"); err2 == nil {
+			var cfg map[string]any
+			if json.Unmarshal(oldData, &cfg) == nil {
+				_ = sb.saveConfig(cfg)
+				return cfg, nil
+			}
+		}
 		return nil, fmt.Errorf("读取 sing-box 配置失败: %w", err)
 	}
 	var cfg map[string]any
@@ -585,52 +614,110 @@ func (sb *SingBox) saveConfig(cfg map[string]any) error {
 		return fmt.Errorf("序列化配置失败: %w", err)
 	}
 
-	// 1. 若配置与现有主配置文件内容一致，直接跳过语法检查和重启
-	if oldData, err := os.ReadFile(sb.configPath); err == nil {
-		if bytes.Equal(bytes.TrimSpace(oldData), bytes.TrimSpace(data)) {
-			return nil
+	_ = os.MkdirAll(filepath.Dir(sb.configPath), 0755)
+	if err := os.WriteFile(sb.configPath, data, 0644); err != nil {
+		return fmt.Errorf("保存 sing-box 配置文件失败: %w", err)
+	}
+
+	// 单内嵌内核架构：直接在内存态热同步入站与分流路由，零重启、不断流
+	return sb.syncToEmbedded(cfg)
+}
+
+func (sb *SingBox) syncToEmbedded(cfg map[string]any) error {
+	eng := sb.getEngine()
+	if eng == nil {
+		return fmt.Errorf("内嵌 sing-box 未就绪")
+	}
+
+	inboundsRaw, _ := cfg["inbounds"].([]any)
+	desiredTags := make(map[string]bool)
+	routes := make(map[string]embeddedRoute)
+	userRoutes := make(map[string]embeddedRoute)
+
+	for _, item := range inboundsRaw {
+		ibMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		tag, _ := ibMap["tag"].(string)
+		typ, _ := ibMap["type"].(string)
+		if tag == "" || typ == "" {
+			continue
+		}
+		desiredTags[tag] = true
+		if err := eng.AddInbound(ibMap); err != nil {
+			log.Printf("[sing-box] 内嵌加载入站 %s 警告: %v", tag, err)
+		}
+		routes[tag] = embeddedRoute{direct: true}
+	}
+
+	// 映射分流规则
+	routeRaw, _ := cfg["route"].(map[string]any)
+	if routeRaw != nil {
+		rulesRaw, _ := routeRaw["rules"].([]any)
+		for _, rItem := range rulesRaw {
+			rMap, ok := rItem.(map[string]any)
+			if !ok {
+				continue
+			}
+			outbound, _ := rMap["outbound"].(string)
+			authUsers, _ := rMap["auth_user"].([]any)
+			for _, u := range authUsers {
+				uStr, ok := u.(string)
+				if !ok || uStr == "" {
+					continue
+				}
+				if outbound == "direct" || outbound == "" {
+					userRoutes[uStr] = embeddedRoute{direct: true}
+				} else if outbound == "block" {
+					userRoutes[uStr] = embeddedRoute{block: true}
+				} else {
+					var epTag string
+					for _, t := range sb.lastTunnels {
+						hTag := "sout" + sanitizeTag(t.Node.HostName)
+						if hTag == outbound || ("sout"+t.Node.HostName) == outbound {
+							if t.CustomProto == "wireguard" || t.Node.Protocol == "wireguard" {
+								epTag = fmt.Sprintf("soutwireguard%d", t.Slot)
+							} else {
+								epTag = fmt.Sprintf("soutopenvpn%d", t.Slot)
+							}
+							break
+						}
+					}
+					if epTag != "" {
+						userRoutes[uStr] = embeddedRoute{endpoint: epTag}
+					} else {
+						userRoutes[uStr] = embeddedRoute{block: true}
+					}
+				}
+			}
 		}
 	}
 
-	// 临时写入以验证
-	tmpFile := sb.configPath + ".tmp"
-	if err := os.WriteFile(tmpFile, data, 0644); err != nil {
-		return fmt.Errorf("写入临时配置失败: %w", err)
-	}
-
-	// 若系统安装了 sing-box，则进行语法检查
-	if hasCmd("sing-box") {
-		out, checkErr := exec.Command("sing-box", "check", "-c", tmpFile).CombinedOutput()
-		if checkErr != nil {
-			_ = os.Remove(tmpFile)
-			return fmt.Errorf("sing-box 配置校验未通过: %s (%w)", strings.TrimSpace(string(out)), checkErr)
+	eng.mu.Lock()
+	for tag := range eng.inbounds {
+		if strings.HasPrefix(tag, "soutsocks") || tag == "cf-tunnel-in" {
+			continue
+		}
+		if !desiredTags[tag] {
+			if eng.box != nil {
+				_ = eng.box.Inbound().Remove(tag)
+			}
+			delete(eng.inbounds, tag)
 		}
 	}
+	eng.mu.Unlock()
 
-	if err := os.Rename(tmpFile, sb.configPath); err != nil {
-		return fmt.Errorf("替换主配置文件失败: %w", err)
-	}
-
-	// 异步触发重启，防止在主互斥锁内长时间阻塞所有 HTTP 请求
-	go sb.restartService()
+	eng.SyncRoutes(routes, userRoutes)
 	return nil
 }
 
 func (sb *SingBox) restartService() {
 	sb.restartMu.Lock()
 	defer sb.restartMu.Unlock()
-
-	if hasCmd("systemctl") && dirExists("/run/systemd/system") {
-		_ = exec.Command("systemctl", "restart", "sing-box").Run()
-	} else if hasCmd("rc-service") {
-		// 严禁使用 zap！zap 仅重置状态却不清理 supervise-daemon，会导致孤儿守护进程死循环 respawn。
-		if err := exec.Command("rc-service", "sing-box", "restart").Run(); err != nil {
-			_ = exec.Command("rc-service", "sing-box", "stop").Run()
-			time.Sleep(500 * time.Millisecond)
-			_ = exec.Command("rc-service", "sing-box", "start").Run()
-		}
-	} else if hasCmd("service") {
-		_ = exec.Command("service", "sing-box", "restart").Run()
+	// 单内嵌内核模式下热同步，不再调用外部 systemctl
+	if cfg, err := sb.loadConfig(); err == nil {
+		_ = sb.syncToEmbedded(cfg)
 	}
 }
 
@@ -2587,6 +2674,7 @@ func (sb *SingBox) ResetClient(id int, email string, tunnels []*Tunnel) error  {
 func (sb *SingBox) OnTunnelsChanged(tunnels []*Tunnel) error {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
+	sb.lastTunnels = tunnels
 
 	cfg, err := sb.loadConfig()
 	if err != nil {

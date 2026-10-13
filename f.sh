@@ -989,15 +989,12 @@ show_info() {
       sb_ver=$(/usr/local/bin/sing-box version 2>/dev/null | head -1 | awk '{print $3}' || echo "")
       [[ -n "$sb_ver" ]] && echo "$sb_ver" > "${WORK_DIR}/singbox_version" 2>/dev/null || true
     fi
-    local sb_tag="sing-box"
-    if [[ -n "$sb_ver" && "$sb_ver" != "原生内核" ]]; then
-      sb_tag="sing-box-v${sb_ver#v}"
-    fi
+    local sb_tag="内嵌 sing-box v1.14.3"
     local sb_active=false
     if [[ "$INIT_SYS" == "systemd" ]]; then
-      [[ $(systemctl is-active sing-box 2>/dev/null || echo "") == "active" ]] && sb_active=true
+      [[ $(systemctl is-active sout 2>/dev/null || echo "") == "active" ]] && sb_active=true
     else
-      if rc-service sing-box status >/dev/null 2>&1 || pgrep -f "sing-box" >/dev/null 2>&1; then
+      if rc-service sout status >/dev/null 2>&1 || pgrep -f "sout-server" >/dev/null 2>&1; then
         sb_active=true
       fi
     fi
@@ -1115,7 +1112,9 @@ show_info() {
       echo -e "  s-ui 用户名: ${Y}${sui_u}${N}"
       echo -e "  s-ui 密  码: ${D}[由您在 s-ui 中设置，若未进行设置，可在终端唤起 s-ui 进行配置]${N}"
     else
-      echo -e "  核心配置:    ${B}/etc/sing-box/config.json${N}"
+      local sb_cfg="${WORK_DIR}/singbox_config.json"
+      [[ ! -f "$sb_cfg" ]] && sb_cfg="/etc/sing-box/config.json"
+      echo -e "  核心配置:    ${B}${sb_cfg}${N}"
     fi
     echo -e "  订阅链接:    ${B}https://${c_dom}/${c_sout_p}/sub=${pw}${N}"
   else
@@ -1165,7 +1164,9 @@ show_info() {
     echo -e "  访问口令:    ${Y}${pw}${N}"
 
     if ! is_sui_backend; then
-      echo -e "  核心配置:    ${B}/etc/sing-box/config.json${N}"
+      local sb_cfg="${WORK_DIR}/singbox_config.json"
+      [[ ! -f "$sb_cfg" ]] && sb_cfg="/etc/sing-box/config.json"
+      echo -e "  核心配置:    ${B}${sb_cfg}${N}"
     else
       local sui_db="/usr/local/s-ui/db/s-ui.db"
       if [[ -f "$sui_db" || -x /usr/local/s-ui/sui ]]; then
