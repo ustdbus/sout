@@ -184,6 +184,13 @@ func DetectSingBox(workDir string) (*SingBox, error) {
 		_ = exec.Command("systemctl", "stop", "sing-box").Run()
 		_ = exec.Command("systemctl", "disable", "sing-box").Run()
 	}
+	if hasCmd("rc-service") {
+		_ = exec.Command("rc-service", "sing-box", "stop").Run()
+		_ = exec.Command("rc-update", "del", "sing-box", "default").Run()
+	}
+	// 彻底杀死任何残留的独立外部 sing-box 进程，避免占用端口
+	_ = exec.Command("pkill", "-9", "-f", "supervise-daemon.*sing-box").Run()
+	_ = exec.Command("pkill", "-9", "-f", "sing-box run").Run()
 
 	eng := getEmbeddedEngine()
 	if eng == nil {

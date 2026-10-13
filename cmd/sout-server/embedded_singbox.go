@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"time"
 
 	sbox "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
@@ -241,7 +242,16 @@ func (e *embeddedEngine) close() error {
 	if box == nil {
 		return nil
 	}
-	return box.Close()
+	closeDone := make(chan struct{})
+	go func() {
+		_ = box.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+	case <-time.After(2 * time.Second):
+	}
+	return nil
 }
 
 func (e *embeddedEngine) hasTunnel(slot int) bool {
@@ -479,7 +489,16 @@ func (e *embeddedEngine) rebuildBoxLocked() error {
 	}
 
 	if e.box != nil {
-		_ = e.box.Close()
+		oldBox := e.box
+		closeDone := make(chan struct{})
+		go func() {
+			_ = oldBox.Close()
+			close(closeDone)
+		}()
+		select {
+		case <-closeDone:
+		case <-time.After(1 * time.Second):
+		}
 	}
 
 	if err := newBox.Start(); err != nil {

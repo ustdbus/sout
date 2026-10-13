@@ -2083,6 +2083,10 @@ sys.exit(0 if latest > cur else 1)
   else
     systemctl stop sing-box 2>/dev/null || true
     systemctl disable sing-box 2>/dev/null || true
+    rc-service sing-box stop 2>/dev/null || true
+    rc-update del sing-box default 2>/dev/null || true
+    pkill -9 -f "supervise-daemon.*sing-box" 2>/dev/null || true
+    pkill -9 -f "sing-box run" 2>/dev/null || true
   fi
 
   # 7. 若开启了 Cloudflare 隧道，联动重启隧道并执行内置轻量反代网关重新探测分流
