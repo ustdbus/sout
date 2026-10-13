@@ -509,18 +509,19 @@ func wireguardEndpoint(configJSON, tag string) (map[string]any, error) {
 	}
 
 	peer := map[string]any{
-		"server":      server,
-		"server_port": int(serverPort),
+		"address":     server,
+		"port":        int(serverPort),
 		"public_key":  pubKey,
+		"allowed_ips": []string{"0.0.0.0/0", "::/0"},
 	}
 	if preSharedKey != "" {
 		peer["pre_shared_key"] = preSharedKey
 	}
 	if len(reservedRaw) > 0 {
-		var reserved []int
+		var reserved []uint8
 		for _, v := range reservedRaw {
 			if num, ok := v.(float64); ok {
-				reserved = append(reserved, int(num))
+				reserved = append(reserved, uint8(num))
 			}
 		}
 		if len(reserved) > 0 {
