@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -33,7 +32,6 @@ import (
 	"github.com/sagernet/sing-box/protocol/vless"
 	"github.com/sagernet/sing-box/protocol/vmess"
 	"github.com/sagernet/sing-box/protocol/wireguard"
-	"github.com/sagernet/sing/common"
 	SBJSON "github.com/sagernet/sing/common/json"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -72,7 +70,7 @@ func getOrInitEmbeddedEngine(listenIP string) (*embeddedEngine, error) {
 	return engine, nil
 }
 
-// embeddedEngine 管理唯一的 sing-box 用户态实例。
+// embeddedEngine 管理唯一的 sing-box 用户态实例，接管所有入站与出口。
 type embeddedEngine struct {
 	mu sync.Mutex
 
@@ -81,8 +79,7 @@ type embeddedEngine struct {
 
 	routes           map[string]embeddedRoute
 	userRoutes       map[string]embeddedRoute
-	inbounds         map[string]embeddedInboundState
-	tunnels          map[int]embeddedTunnelState
+	inboundConfigs   map[string]map[string]any
 	activeTunnels    map[int]*Tunnel
 	chainUpstreamTag string
 	listenIP         string
@@ -92,17 +89,6 @@ type embeddedRoute struct {
 	endpoint string
 	direct   bool
 	block    bool
-}
-
-type embeddedInboundState struct {
-	tag  string
-	typ  string
-	hash [sha256.Size]byte
-}
-
-type embeddedTunnelState struct {
-	endpointTag string
-	socksTag    string
 }
 
 type soutDynamicOutboundOptions struct{}
@@ -117,12 +103,11 @@ func newEmbeddedEngine(listenIP string) (*embeddedEngine, error) {
 		listenIP = "127.0.0.1"
 	}
 	engine := &embeddedEngine{
-		routes:        make(map[string]embeddedRoute),
-		userRoutes:    make(map[string]embeddedRoute),
-		inbounds:      make(map[string]embeddedInboundState),
-		tunnels:       make(map[int]embeddedTunnelState),
-		activeTunnels: make(map[int]*Tunnel),
-		listenIP:      listenIP,
+		routes:         make(map[string]embeddedRoute),
+		userRoutes:     make(map[string]embeddedRoute),
+		inboundConfigs: make(map[string]map[string]any),
+		activeTunnels:  make(map[int]*Tunnel),
+		listenIP:       listenIP,
 	}
 
 	inboundRegistry := sbinbound.NewRegistry()
@@ -154,25 +139,10 @@ func newEmbeddedEngine(listenIP string) (*embeddedEngine, error) {
 		dnsRegistry, sbservice.NewRegistry(), sbcertificate.NewRegistry())
 	engine.ctx = ctx
 
-	box, err := sbox.New(sbox.Options{
-		Context: ctx,
-		Options: option.Options{
-			Log: &option.LogOptions{Level: "warn", Timestamp: true},
-			Outbounds: []option.Outbound{{
-				Type:    soutDynamicOutboundType,
-				Tag:     soutDynamicOutboundType,
-				Options: &soutDynamicOutboundOptions{},
-			}},
-			Route: &option.RouteOptions{Final: soutDynamicOutboundType},
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("创建内嵌 sing-box 失败: %w", err)
+	if err := engine.rebuildBoxLocked(); err != nil {
+		return nil, fmt.Errorf("创建内嵌 sing-box 初始实例失败: %w", err)
 	}
-	if err := box.Start(); err != nil {
-		return nil, fmt.Errorf("启动内嵌 sing-box 失败: %w", err)
-	}
-	engine.box = box
+
 	setGlobalEmbeddedEngine(engine)
 	return engine, nil
 }
@@ -251,6 +221,9 @@ func (o *soutDynamicOutbound) endpointFor(ctx context.Context, destination M.Soc
 			return nil, destination, fmt.Errorf("域名 %s 仅解析到 IPv6 且当前出口不支持 IPv6，已安全阻断以防真实 IPv6 泄露", destination.Fqdn)
 		}
 	}
+	if box == nil {
+		return nil, destination, fmt.Errorf("内嵌 sing-box 已关闭")
+	}
 	endpoint, found := box.Endpoint().Get(route.endpoint)
 	if !found {
 		return nil, destination, fmt.Errorf("入站 %s 的出口已移除", metadata.Inbound)
@@ -276,7 +249,7 @@ func (e *embeddedEngine) close() error {
 func (e *embeddedEngine) hasTunnel(slot int) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	_, found := e.tunnels[slot]
+	_, found := e.activeTunnels[slot]
 	return found && e.box != nil
 }
 
@@ -289,17 +262,10 @@ func (e *embeddedEngine) portAvailable(port int) bool {
 	return true
 }
 
-// AddInbound 在内存态下发与热加载入站
+// AddInbound 在内存态下发与热加载单个入站
 func (e *embeddedEngine) AddInbound(rawConfig map[string]any) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.addInboundLocked(rawConfig)
-}
-
-func (e *embeddedEngine) addInboundLocked(rawConfig map[string]any) error {
-	if e.box == nil {
-		return fmt.Errorf("内嵌 sing-box 已关闭")
-	}
 
 	tag, _ := rawConfig["tag"].(string)
 	typ, _ := rawConfig["type"].(string)
@@ -307,57 +273,36 @@ func (e *embeddedEngine) addInboundLocked(rawConfig map[string]any) error {
 		return fmt.Errorf("入站缺少 tag 或 type")
 	}
 
-	blob, err := json.Marshal(rawConfig)
-	if err != nil {
-		return fmt.Errorf("序列化入站配置失败: %w", err)
-	}
-	h := sha256.Sum256(blob)
-
-	if cur, exists := e.inbounds[tag]; exists && cur.hash == h {
-		if _, found := e.box.Inbound().Get(tag); found {
-			return nil
-		}
-	}
-
-	if _, found := e.box.Inbound().Get(tag); found {
-		closeInbound(e.box, tag)
-	}
-
-	options, err := decodeSingBoxOptions[option.Inbound](e.ctx, rawConfig)
-	if err != nil {
-		return fmt.Errorf("解析入站 %s 配置失败: %w", tag, err)
-	}
-
-	loggerName := typ
-	if loggerName == "" {
-		loggerName = "inbound"
-	}
-
-	if err := e.box.Inbound().Create(e.ctx, e.box.Router(), e.box.LogFactory().NewLogger(loggerName), options.Tag, options.Type, options.Options); err != nil {
-		return fmt.Errorf("启动入站 %s (%s) 失败: %w", tag, typ, err)
-	}
-
-	e.inbounds[tag] = embeddedInboundState{
-		tag:  tag,
-		typ:  typ,
-		hash: h,
-	}
-	return nil
+	e.inboundConfigs[tag] = rawConfig
+	return e.rebuildBoxLocked()
 }
 
-// RemoveInbound 在内存态安全注销并停止指定的入站
+// SyncInbounds 批量原子热同步所有配置的入站
+func (e *embeddedEngine) SyncInbounds(inbounds []map[string]any) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	nextConfigs := make(map[string]map[string]any, len(inbounds))
+	for _, raw := range inbounds {
+		tag, _ := raw["tag"].(string)
+		typ, _ := raw["type"].(string)
+		if tag == "" || typ == "" {
+			continue
+		}
+		nextConfigs[tag] = raw
+	}
+	e.inboundConfigs = nextConfigs
+	return e.rebuildBoxLocked()
+}
+
+// RemoveInbound 在内存态注销指定的入站
 func (e *embeddedEngine) RemoveInbound(tag string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	delete(e.inbounds, tag)
+	delete(e.inboundConfigs, tag)
 	delete(e.routes, tag)
-
-	if e.box == nil {
-		return nil
-	}
-	closeInbound(e.box, tag)
-	return nil
+	return e.rebuildBoxLocked()
 }
 
 // HasInbound 检查入站是否处于运行状态
@@ -367,7 +312,7 @@ func (e *embeddedEngine) HasInbound(tag string) bool {
 	if e.box == nil {
 		return false
 	}
-	_, found := e.box.Inbound().Get(tag)
+	_, found := e.inboundConfigs[tag]
 	return found
 }
 
@@ -376,13 +321,18 @@ func (e *embeddedEngine) SyncRoutes(routes map[string]embeddedRoute, userRoutes 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	nextRoutes := make(map[string]embeddedRoute, len(routes)+len(e.tunnels))
+	nextRoutes := make(map[string]embeddedRoute, len(routes)+len(e.activeTunnels))
 	for k, v := range routes {
 		nextRoutes[k] = v
 	}
-	for _, t := range e.tunnels {
-		if t.socksTag != "" {
-			nextRoutes[t.socksTag] = embeddedRoute{endpoint: t.endpointTag}
+	for slot, t := range e.activeTunnels {
+		if t.Port > 0 {
+			socksTag := fmt.Sprintf("soutsocks%d", slot)
+			endpointTag := fmt.Sprintf("soutopenvpn%d", slot)
+			if t.CustomProto == "wireguard" || t.Node.Protocol == "wireguard" {
+				endpointTag = fmt.Sprintf("soutwireguard%d", slot)
+			}
+			nextRoutes[socksTag] = embeddedRoute{endpoint: endpointTag}
 		}
 	}
 	e.routes = nextRoutes
@@ -394,144 +344,6 @@ func (e *embeddedEngine) SyncRoutes(routes map[string]embeddedRoute, userRoutes 
 	e.userRoutes = nextUsers
 }
 
-// wireguardEndpoint 将 WireGuard 配置转换为 sing-box 1.14 用户态 endpoint 配置格式
-func wireguardEndpoint(configJSON, tag string) (map[string]any, error) {
-	var raw map[string]any
-	if err := json.Unmarshal([]byte(configJSON), &raw); err != nil {
-		return nil, fmt.Errorf("解析 WireGuard 配置 JSON 失败: %w", err)
-	}
-
-	if _, hasPeers := raw["peers"]; hasPeers {
-		raw["type"] = "wireguard"
-		raw["tag"] = tag
-		raw["system"] = false
-		return raw, nil
-	}
-
-	server, _ := raw["server"].(string)
-	if server == "" {
-		server = "engage.cloudflareclient.com"
-	}
-	var serverPort uint16 = 2408
-	if p, ok := raw["server_port"].(float64); ok && p > 0 {
-		serverPort = uint16(p)
-	} else if p, ok := raw["server_port"].(int); ok && p > 0 {
-		serverPort = uint16(p)
-	} else if pStr, ok := raw["server_port"].(string); ok {
-		if p, err := strconv.Atoi(pStr); err == nil && p > 0 {
-			serverPort = uint16(p)
-		}
-	}
-
-	privKey, _ := raw["private_key"].(string)
-	peerPub, _ := raw["peer_public_key"].(string)
-	if peerPub == "" {
-		peerPub, _ = raw["public_key"].(string)
-	}
-	if peerPub == "" {
-		peerPub = "bmXOC+F1FxEMF9dyiK2H5/1SUtzHZsVoW++jnWgmtEs="
-	}
-
-	var addresses []string
-	if addrs, ok := raw["local_address"].([]any); ok {
-		for _, a := range addrs {
-			if aStr, ok := a.(string); ok && aStr != "" {
-				addresses = append(addresses, aStr)
-			}
-		}
-	} else if addrs, ok := raw["address"].([]any); ok {
-		for _, a := range addrs {
-			if aStr, ok := a.(string); ok && aStr != "" {
-				addresses = append(addresses, aStr)
-			}
-		}
-	} else if aStr, ok := raw["address"].(string); ok && aStr != "" {
-		for _, part := range strings.Split(aStr, ",") {
-			part = strings.TrimSpace(part)
-			if part != "" {
-				addresses = append(addresses, part)
-			}
-		}
-	}
-
-	if len(addresses) == 0 {
-		addresses = []string{"172.16.0.2/32"}
-	}
-
-	for i, a := range addresses {
-		if !strings.Contains(a, "/") {
-			if strings.Contains(a, ":") {
-				addresses[i] = a + "/128"
-			} else {
-				addresses[i] = a + "/32"
-			}
-		}
-	}
-
-	var reserved []int
-	if res, ok := raw["reserved"].([]any); ok {
-		for _, item := range res {
-			if n, ok := item.(float64); ok {
-				reserved = append(reserved, int(n))
-			} else if n, ok := item.(int); ok {
-				reserved = append(reserved, n)
-			}
-		}
-	}
-
-	mtu := 1280
-	if m, ok := raw["mtu"].(float64); ok && m > 0 {
-		mtu = int(m)
-	}
-
-	peerAddress := server
-	if net.ParseIP(server) == nil {
-		if server == "engage.cloudflareclient.com" {
-			if systemSupportsIPv6() {
-				peerAddress = "2606:4700:d0::a29f:c001"
-			} else {
-				peerAddress = "162.159.192.1"
-			}
-		} else {
-			targetProto := "ip4"
-			if systemSupportsIPv6() && hostPublicIP() == "" {
-				targetProto = "ip6"
-			}
-			if addrs, err := net.DefaultResolver.LookupNetIP(context.Background(), targetProto, server); err == nil && len(addrs) > 0 {
-				peerAddress = addrs[0].String()
-			} else if addrs, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip", server); err == nil && len(addrs) > 0 {
-				peerAddress = addrs[0].String()
-			}
-		}
-	} else if systemSupportsIPv6() {
-		if server == "162.159.192.1" || server == "162.159.193.1" || server == "162.159.195.1" {
-			peerAddress = "2606:4700:d0::a29f:c001"
-		}
-	}
-
-	peer := map[string]any{
-		"address":                       peerAddress,
-		"port":                          serverPort,
-		"public_key":                    peerPub,
-		"allowed_ips":                   []string{"0.0.0.0/0", "::/0"},
-		"persistent_keepalive_interval": 25,
-	}
-	if len(reserved) > 0 {
-		peer["reserved"] = reserved
-	}
-
-	endpoint := map[string]any{
-		"type":        "wireguard",
-		"tag":         tag,
-		"system":      false,
-		"address":     addresses,
-		"private_key": privKey,
-		"mtu":         mtu,
-		"peers":       []any{peer},
-	}
-	return endpoint, nil
-}
-
 func (e *embeddedEngine) setChainUpstream(tag string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -539,131 +351,41 @@ func (e *embeddedEngine) setChainUpstream(tag string) {
 		return
 	}
 	e.chainUpstreamTag = tag
-	if e.box == nil {
-		return
-	}
-
-	for slot, tunnel := range e.activeTunnels {
-		state, found := e.tunnels[slot]
-		if !found {
-			continue
-		}
-		if state.endpointTag == tag || tunnel.IsChainUpstream {
-			continue
-		}
-		_ = e.addTunnelLocked(tunnel)
-	}
+	_ = e.rebuildBoxLocked()
 }
 
 func (e *embeddedEngine) addTunnel(tunnel *Tunnel) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.addTunnelLocked(tunnel)
-}
-
-func (e *embeddedEngine) addTunnelLocked(tunnel *Tunnel) error {
-	if e.box == nil {
-		return fmt.Errorf("内嵌 sing-box 已关闭")
-	}
-
-	var endpointTag string
-	var endpointConfig map[string]any
-	var endpointLoggerName string
-	socksTag := fmt.Sprintf("soutsocks%d", tunnel.Slot)
-
-	if previous, exists := e.tunnels[tunnel.Slot]; exists {
-		nextRoutes := cloneEmbeddedRoutes(e.routes)
-		delete(nextRoutes, previous.socksTag)
-		e.routes = nextRoutes
-		closeInbound(e.box, previous.socksTag)
-		closeEndpoint(e.box, previous.endpointTag)
-		delete(e.tunnels, tunnel.Slot)
-	}
-
-	isWG := tunnel.CustomProto == "wireguard" || tunnel.Node.Protocol == "wireguard"
-	if isWG {
-		endpointTag = fmt.Sprintf("soutwireguard%d", tunnel.Slot)
-		endpointLoggerName = "wireguard"
-		cfg, err := wireguardEndpoint(tunnel.Node.Config, endpointTag)
-		if err != nil {
-			return fmt.Errorf("转换 WireGuard 配置失败: %w", err)
-		}
-		endpointConfig = cfg
-	} else {
-		endpointTag = fmt.Sprintf("soutopenvpn%d", tunnel.Slot)
-		endpointLoggerName = "openvpn"
-		cfg, err := openVPNEndpoint(tunnel.Node.Config, endpointTag)
-		if err != nil {
-			return fmt.Errorf("转换 VPN Gate 配置失败: %w", err)
-		}
-		endpointConfig = cfg
-	}
-
-	if endpointTag != e.chainUpstreamTag && !tunnel.IsChainUpstream && e.chainUpstreamTag != "" {
-		endpointConfig["detour"] = e.chainUpstreamTag
-	}
-
-	endpointOptions, err := decodeSingBoxOptions[option.Endpoint](e.ctx, endpointConfig)
-	if err != nil {
-		return fmt.Errorf("解析 %s endpoint 配置失败: %w", endpointLoggerName, err)
-	}
-	if err := e.box.Endpoint().Create(e.ctx, e.box.Router(), e.box.LogFactory().NewLogger(endpointLoggerName), endpointOptions.Tag, endpointOptions.Type, endpointOptions.Options); err != nil {
-		return fmt.Errorf("启动 %s endpoint 失败: %w", endpointLoggerName, err)
-	}
-
-	// 为 s-ui 模式及本地端口保留 SOCKS5 监听
-	if tunnel.Port > 0 {
-		socksConfig := map[string]any{
-			"type": "socks", "tag": socksTag,
-			"listen": e.listenIP, "listen_port": tunnel.Port,
-		}
-		cred := tunnel.Cred
-		if cred.User != "" && cred.Pass != "" {
-			socksConfig["users"] = []any{map[string]any{"username": cred.User, "password": cred.Pass}}
-		}
-		socksOptions, err := decodeSingBoxOptions[option.Inbound](e.ctx, socksConfig)
-		if err == nil {
-			nextRoutes := cloneEmbeddedRoutes(e.routes)
-			nextRoutes[socksTag] = embeddedRoute{endpoint: endpointTag}
-			e.routes = nextRoutes
-			_ = e.box.Inbound().Create(e.ctx, e.box.Router(), e.box.LogFactory().NewLogger("socks"), socksOptions.Tag, socksOptions.Type, socksOptions.Options)
-		}
-	}
-
-	e.tunnels[tunnel.Slot] = embeddedTunnelState{endpointTag: endpointTag, socksTag: socksTag}
 	e.activeTunnels[tunnel.Slot] = tunnel
-	return nil
+	return e.rebuildBoxLocked()
 }
 
 func (e *embeddedEngine) removeTunnel(tunnel *Tunnel) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	delete(e.activeTunnels, tunnel.Slot)
-	state, found := e.tunnels[tunnel.Slot]
-	if !found || e.box == nil {
-		return
-	}
-	nextRoutes := cloneEmbeddedRoutes(e.routes)
-	delete(nextRoutes, state.socksTag)
-	e.routes = nextRoutes
-	if state.socksTag != "" {
-		closeInbound(e.box, state.socksTag)
-	}
-	closeEndpoint(e.box, state.endpointTag)
-	delete(e.tunnels, tunnel.Slot)
+	socksTag := fmt.Sprintf("soutsocks%d", tunnel.Slot)
+	delete(e.routes, socksTag)
+	_ = e.rebuildBoxLocked()
 }
 
 func (e *embeddedEngine) dialTunnel(ctx context.Context, tunnel *Tunnel, network, address string) (net.Conn, error) {
 	e.mu.Lock()
-	state, found := e.tunnels[tunnel.Slot]
 	box := e.box
-	e.mu.Unlock()
-	if !found || box == nil {
-		return nil, fmt.Errorf("出口 endpoint 未运行")
+	slot := tunnel.Slot
+	endpointTag := fmt.Sprintf("soutopenvpn%d", slot)
+	if tunnel.CustomProto == "wireguard" || tunnel.Node.Protocol == "wireguard" {
+		endpointTag = fmt.Sprintf("soutwireguard%d", slot)
 	}
-	endpoint, found := box.Endpoint().Get(state.endpointTag)
+	e.mu.Unlock()
+
+	if box == nil {
+		return nil, fmt.Errorf("内嵌 sing-box 已关闭")
+	}
+	endpoint, found := box.Endpoint().Get(endpointTag)
 	if !found {
-		return nil, fmt.Errorf("出口 endpoint 未运行")
+		return nil, fmt.Errorf("出口 endpoint %s 未运行", endpointTag)
 	}
 	destination := M.ParseSocksaddr(address)
 	if !destination.IsValid() {
@@ -677,6 +399,206 @@ func (e *embeddedEngine) dialTunnel(ctx context.Context, tunnel *Tunnel, network
 		destination = M.SocksaddrFrom(addresses[0], destination.Port)
 	}
 	return endpoint.DialContext(ctx, network, destination)
+}
+
+func (e *embeddedEngine) rebuildBoxLocked() error {
+	var inbounds []option.Inbound
+	for tag, raw := range e.inboundConfigs {
+		opt, err := decodeSingBoxOptions[option.Inbound](e.ctx, raw)
+		if err != nil {
+			return fmt.Errorf("解析入站 %s 配置失败: %w", tag, err)
+		}
+		inbounds = append(inbounds, opt)
+	}
+
+	var endpoints []option.Endpoint
+	nextRoutes := cloneEmbeddedRoutes(e.routes)
+
+	for slot, tunnel := range e.activeTunnels {
+		var endpointTag string
+		var endpointConfig map[string]any
+		isWG := tunnel.CustomProto == "wireguard" || tunnel.Node.Protocol == "wireguard"
+		if isWG {
+			endpointTag = fmt.Sprintf("soutwireguard%d", slot)
+			cfg, err := wireguardEndpoint(tunnel.Node.Config, endpointTag)
+			if err != nil {
+				return fmt.Errorf("转换 WireGuard 配置失败: %w", err)
+			}
+			endpointConfig = cfg
+		} else {
+			endpointTag = fmt.Sprintf("soutopenvpn%d", slot)
+			cfg, err := openVPNEndpoint(tunnel.Node.Config, endpointTag)
+			if err != nil {
+				return fmt.Errorf("转换 VPN Gate 配置失败: %w", err)
+			}
+			endpointConfig = cfg
+		}
+
+		if endpointTag != e.chainUpstreamTag && !tunnel.IsChainUpstream && e.chainUpstreamTag != "" {
+			endpointConfig["detour"] = e.chainUpstreamTag
+		}
+
+		endpointOpt, err := decodeSingBoxOptions[option.Endpoint](e.ctx, endpointConfig)
+		if err != nil {
+			return fmt.Errorf("解析 endpoint %s 失败: %w", endpointTag, err)
+		}
+		endpoints = append(endpoints, endpointOpt)
+
+		// 为 s-ui 模式及本地端口保留 SOCKS5 监听
+		if tunnel.Port > 0 {
+			socksTag := fmt.Sprintf("soutsocks%d", slot)
+			socksConfig := map[string]any{
+				"type":        "socks",
+				"tag":         socksTag,
+				"listen":      e.listenIP,
+				"listen_port": tunnel.Port,
+			}
+			cred := tunnel.Cred
+			if cred.User != "" && cred.Pass != "" {
+				socksConfig["users"] = []any{map[string]any{"username": cred.User, "password": cred.Pass}}
+			}
+			socksOpt, err := decodeSingBoxOptions[option.Inbound](e.ctx, socksConfig)
+			if err != nil {
+				return fmt.Errorf("解析 SOCKS5 入站 %s 失败: %w", socksTag, err)
+			}
+			inbounds = append(inbounds, socksOpt)
+			nextRoutes[socksTag] = embeddedRoute{endpoint: endpointTag}
+		}
+	}
+
+	e.routes = nextRoutes
+
+	outbounds := []option.Outbound{{
+		Type:    soutDynamicOutboundType,
+		Tag:     soutDynamicOutboundType,
+		Options: &soutDynamicOutboundOptions{},
+	}}
+
+	newBox, err := sbox.New(sbox.Options{
+		Context: e.ctx,
+		Options: option.Options{
+			Log:       &option.LogOptions{Level: "warn", Timestamp: true},
+			Inbounds:  inbounds,
+			Endpoints: endpoints,
+			Outbounds: outbounds,
+			Route:     &option.RouteOptions{Final: soutDynamicOutboundType},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("创建内嵌 sing-box 失败: %w", err)
+	}
+
+	if e.box != nil {
+		_ = e.box.Close()
+	}
+
+	if err := newBox.Start(); err != nil {
+		return fmt.Errorf("启动内嵌 sing-box 失败: %w", err)
+	}
+
+	e.box = newBox
+	return nil
+}
+
+func wireguardEndpoint(configJSON, tag string) (map[string]any, error) {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(configJSON), &raw); err != nil {
+		return nil, fmt.Errorf("解析 WireGuard 配置 JSON 失败: %w", err)
+	}
+
+	server, _ := raw["server"].(string)
+	serverPort, _ := raw["server_port"].(float64)
+	privKey, _ := raw["private_key"].(string)
+	pubKey, _ := raw["peer_public_key"].(string)
+	preSharedKey, _ := raw["pre_shared_key"].(string)
+	reservedRaw, _ := raw["reserved"].([]any)
+	localAddressRaw, _ := raw["local_address"].([]any)
+	mtu, _ := raw["mtu"].(float64)
+	if mtu == 0 {
+		mtu = 1420
+	}
+
+	peer := map[string]any{
+		"server":      server,
+		"server_port": int(serverPort),
+		"public_key":  pubKey,
+	}
+	if preSharedKey != "" {
+		peer["pre_shared_key"] = preSharedKey
+	}
+	if len(reservedRaw) > 0 {
+		var reserved []int
+		for _, v := range reservedRaw {
+			if num, ok := v.(float64); ok {
+				reserved = append(reserved, int(num))
+			}
+		}
+		if len(reserved) > 0 {
+			peer["reserved"] = reserved
+		}
+	}
+
+	var addresses []string
+	for _, v := range localAddressRaw {
+		if s, ok := v.(string); ok && s != "" {
+			addresses = append(addresses, s)
+		}
+	}
+	if len(addresses) == 0 {
+		addresses = []string{"10.0.0.2/32"}
+	}
+
+	endpoint := map[string]any{
+		"type":        "wireguard",
+		"tag":         tag,
+		"system":      false,
+		"address":     addresses,
+		"private_key": privKey,
+		"mtu":         int(mtu),
+		"peers":       []any{peer},
+	}
+	return endpoint, nil
+}
+
+func openVPNEndpoint(ovpnText, tag string) (map[string]any, error) {
+	parsed, err := parseOpenVPNText(ovpnText)
+	if err != nil {
+		return nil, err
+	}
+	endpoint := map[string]any{
+		"type":        "openvpn",
+		"tag":         tag,
+		"system":      false,
+		"server":      parsed.RemoteHost,
+		"server_port": parsed.RemotePort,
+	}
+	if parsed.Proto != "" {
+		endpoint["network"] = parsed.Proto
+	}
+	if parsed.CA != "" {
+		endpoint["certificate"] = parsed.CA
+	}
+	if parsed.Cert != "" {
+		endpoint["client_certificate"] = parsed.Cert
+	}
+	if parsed.Key != "" {
+		endpoint["client_key"] = parsed.Key
+	}
+	if parsed.TLSAuth != "" {
+		endpoint["tls_auth"] = parsed.TLSAuth
+		endpoint["tls_auth_key_direction"] = parsed.Direction
+	}
+	if parsed.Cipher != "" {
+		endpoint["cipher"] = parsed.Cipher
+	}
+	if parsed.Auth != "" {
+		endpoint["auth"] = parsed.Auth
+	}
+	if parsed.User != "" || parsed.Pass != "" {
+		endpoint["username"] = parsed.User
+		endpoint["password"] = parsed.Pass
+	}
+	return endpoint, nil
 }
 
 func cloneEmbeddedRoutes(routes map[string]embeddedRoute) map[string]embeddedRoute {
@@ -698,24 +620,3 @@ func decodeSingBoxOptions[T any](ctx context.Context, raw map[string]any) (T, er
 	}
 	return out, nil
 }
-
-func closeInbound(box *sbox.Box, tag string) {
-	if box == nil || tag == "" {
-		return
-	}
-	if ib, found := box.Inbound().Get(tag); found {
-		_ = common.Close(ib)
-	}
-	_ = box.Inbound().Remove(tag)
-}
-
-func closeEndpoint(box *sbox.Box, tag string) {
-	if box == nil || tag == "" {
-		return
-	}
-	if ep, found := box.Endpoint().Get(tag); found {
-		_ = common.Close(ep)
-	}
-	_ = box.Endpoint().Remove(tag)
-}
-

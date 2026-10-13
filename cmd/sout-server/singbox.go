@@ -629,7 +629,7 @@ func (sb *SingBox) syncToEmbedded(cfg map[string]any) error {
 	}
 
 	inboundsRaw, _ := cfg["inbounds"].([]any)
-	desiredTags := make(map[string]bool)
+	var inboundsToSync []map[string]any
 	routes := make(map[string]embeddedRoute)
 	userRoutes := make(map[string]embeddedRoute)
 
@@ -643,10 +643,7 @@ func (sb *SingBox) syncToEmbedded(cfg map[string]any) error {
 		if tag == "" || typ == "" {
 			continue
 		}
-		desiredTags[tag] = true
-		if err := eng.AddInbound(ibMap); err != nil {
-			log.Printf("[sing-box] 内嵌加载入站 %s 警告: %v", tag, err)
-		}
+		inboundsToSync = append(inboundsToSync, ibMap)
 		routes[tag] = embeddedRoute{direct: true}
 	}
 
@@ -674,7 +671,7 @@ func (sb *SingBox) syncToEmbedded(cfg map[string]any) error {
 					var epTag string
 					for _, t := range sb.lastTunnels {
 						hTag := "sout" + sanitizeTag(t.Node.HostName)
-						if hTag == outbound || ("sout"+t.Node.HostName) == outbound {
+						if hTag == outbound || ("sout" + t.Node.HostName) == outbound {
 							if t.CustomProto == "wireguard" || t.Node.Protocol == "wireguard" {
 								epTag = fmt.Sprintf("soutwireguard%d", t.Slot)
 							} else {
@@ -693,17 +690,9 @@ func (sb *SingBox) syncToEmbedded(cfg map[string]any) error {
 		}
 	}
 
-	eng.mu.Lock()
-	for tag := range eng.inbounds {
-		if strings.HasPrefix(tag, "soutsocks") || tag == "cf-tunnel-in" {
-			continue
-		}
-		if !desiredTags[tag] {
-			closeInbound(eng.box, tag)
-			delete(eng.inbounds, tag)
-		}
+	if err := eng.SyncInbounds(inboundsToSync); err != nil {
+		log.Printf("[sing-box] 内嵌同步入站警告: %v", err)
 	}
-	eng.mu.Unlock()
 
 	eng.SyncRoutes(routes, userRoutes)
 	return nil
