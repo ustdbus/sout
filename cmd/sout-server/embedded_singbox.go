@@ -253,14 +253,6 @@ func (e *embeddedEngine) hasTunnel(slot int) bool {
 	return found && e.box != nil
 }
 
-func (e *embeddedEngine) portAvailable(port int) bool {
-	listener, err := net.Listen("tcp4", net.JoinHostPort(e.listenIP, strconv.Itoa(port)))
-	if err != nil {
-		return false
-	}
-	_ = listener.Close()
-	return true
-}
 
 // AddInbound 在内存态下发与热加载单个入站
 func (e *embeddedEngine) AddInbound(rawConfig map[string]any) error {
@@ -560,46 +552,6 @@ func wireguardEndpoint(configJSON, tag string) (map[string]any, error) {
 	return endpoint, nil
 }
 
-func openVPNEndpoint(ovpnText, tag string) (map[string]any, error) {
-	parsed, err := parseOpenVPNText(ovpnText)
-	if err != nil {
-		return nil, err
-	}
-	endpoint := map[string]any{
-		"type":        "openvpn",
-		"tag":         tag,
-		"system":      false,
-		"server":      parsed.RemoteHost,
-		"server_port": parsed.RemotePort,
-	}
-	if parsed.Proto != "" {
-		endpoint["network"] = parsed.Proto
-	}
-	if parsed.CA != "" {
-		endpoint["certificate"] = parsed.CA
-	}
-	if parsed.Cert != "" {
-		endpoint["client_certificate"] = parsed.Cert
-	}
-	if parsed.Key != "" {
-		endpoint["client_key"] = parsed.Key
-	}
-	if parsed.TLSAuth != "" {
-		endpoint["tls_auth"] = parsed.TLSAuth
-		endpoint["tls_auth_key_direction"] = parsed.Direction
-	}
-	if parsed.Cipher != "" {
-		endpoint["cipher"] = parsed.Cipher
-	}
-	if parsed.Auth != "" {
-		endpoint["auth"] = parsed.Auth
-	}
-	if parsed.User != "" || parsed.Pass != "" {
-		endpoint["username"] = parsed.User
-		endpoint["password"] = parsed.Pass
-	}
-	return endpoint, nil
-}
 
 func cloneEmbeddedRoutes(routes map[string]embeddedRoute) map[string]embeddedRoute {
 	copyRoutes := make(map[string]embeddedRoute, len(routes))
