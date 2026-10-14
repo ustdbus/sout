@@ -2395,7 +2395,7 @@ func toolSUIInitBaseNodes(args []string) {
 		findTag := func(prefix string) (string, any) {
 			for _, r := range inbRows {
 				t, _ := r["tag"].(string)
-				if strings.HasPrefix(t, prefix+"-") && len(t) == len(prefix)+5 {
+				if t == prefix || strings.HasPrefix(t, prefix+"-") {
 					return t, r["id"]
 				}
 			}
@@ -2403,17 +2403,20 @@ func toolSUIInitBaseNodes(args []string) {
 		}
 
 		// 创建/编辑 vless-argo
-		vlwsTag, vlwsID := findTag("vlws")
-		vlwsPayload := map[string]any{
+		argoTag, argoID := findTag("vless-argo")
+		argoPayload := map[string]any{
 			"id":          0,
 			"type":        "vless",
-			"tag":         vlwsTag,
+			"tag":         argoTag,
 			"tls_id":      0,
 			"listen":      "127.0.0.1",
 			"listen_port": nodePort,
 			"transport": map[string]any{
-				"type": "ws",
-				"path": cleanWS,
+				"type":                   "ws",
+				"path":                   cleanWS,
+				"headers":                map[string]any{"Host": domain},
+				"early_data_header_name": "Sec-WebSocket-Protocol",
+				"max_early_data":         2560,
 			},
 			"addrs": []any{
 				map[string]any{
@@ -2421,20 +2424,25 @@ func toolSUIInitBaseNodes(args []string) {
 					"server_port": 443,
 					"tls": map[string]any{
 						"enabled":     true,
+						"insecure":    false,
 						"server_name": domain,
+						"utls": map[string]any{
+							"enabled":     true,
+							"fingerprint": "chrome",
+						},
 					},
 				},
 			},
 		}
-		vlwsAct := "new"
-		if vlwsID != nil {
-			vlwsPayload["id"] = vlwsID
-			vlwsAct = "edit"
+		argoAct := "new"
+		if argoID != nil {
+			argoPayload["id"] = argoID
+			argoAct = "edit"
 		}
-		pay1, _ := json.Marshal(vlwsPayload)
+		pay1, _ := json.Marshal(argoPayload)
 		_, _ = suiAPICall(baseURL, token, "POST", "save", url.Values{
 			"object": {"inbounds"},
-			"action": {vlwsAct},
+			"action": {argoAct},
 			"data":   {string(pay1)},
 		})
 
@@ -2456,9 +2464,13 @@ func toolSUIInitBaseNodes(args []string) {
 			}
 		}
 
-		privK := genRandHex(16)
-		pubK := genRandHex(16)
-		sid := genRandHex(4)
+		priv, _ := ecdh.X25519().GenerateKey(crand.Reader)
+		privK := base64.RawURLEncoding.EncodeToString(priv.Bytes())
+		pubK := base64.RawURLEncoding.EncodeToString(priv.PublicKey().Bytes())
+		sidBytes := make([]byte, 4)
+		_, _ = crand.Read(sidBytes)
+		sid := hex.EncodeToString(sidBytes)
+
 		if realityTID == nil || realityTID == 0 {
 			realityTLSPayload := map[string]any{
 				"id":   0,
@@ -2496,31 +2508,49 @@ func toolSUIInitBaseNodes(args []string) {
 			time.Sleep(200 * time.Millisecond)
 		}
 
-		vlreTag, vlreID := findTag("vlre")
-		realityAddrs := []any{
-			map[string]any{
+		realityTag, realityID := findTag("vless-reality")
+		var realityAddrs []any
+		if publicIP != "" && publicIP != "127.0.0.1" && !strings.Contains(publicIP, ":") {
+			realityAddrs = append(realityAddrs, map[string]any{
 				"server":      publicIP,
 				"server_port": realityPort,
-			},
+			})
 		}
-		vlrePayload := map[string]any{
+		var v6Host string
+		if d, err := os.ReadFile("/var/lib/sout/host_ipv6"); err == nil {
+			v6Host = strings.TrimSpace(string(d))
+		}
+		if v6Host != "" && v6Host != "127.0.0.1" {
+			realityAddrs = append(realityAddrs, map[string]any{
+				"server":      v6Host,
+				"server_port": realityPort,
+			})
+		}
+		if len(realityAddrs) == 0 {
+			realityAddrs = append(realityAddrs, map[string]any{
+				"server":      domain,
+				"server_port": realityPort,
+			})
+		}
+
+		realityPayload := map[string]any{
 			"id":          0,
 			"type":        "vless",
-			"tag":         vlreTag,
+			"tag":         realityTag,
 			"tls_id":      realityTID,
 			"listen":      "::",
 			"listen_port": realityPort,
 			"addrs":       realityAddrs,
 		}
-		vlreAct := "new"
-		if vlreID != nil {
-			vlrePayload["id"] = vlreID
-			vlreAct = "edit"
+		realityAct := "new"
+		if realityID != nil {
+			realityPayload["id"] = realityID
+			realityAct = "edit"
 		}
-		pay2, _ := json.Marshal(vlrePayload)
+		pay2, _ := json.Marshal(realityPayload)
 		_, _ = suiAPICall(baseURL, token, "POST", "save", url.Values{
 			"object": {"inbounds"},
-			"action": {vlreAct},
+			"action": {realityAct},
 			"data":   {string(pay2)},
 		})
 
@@ -2648,26 +2678,35 @@ func toolSUIInitBaseNodes(args []string) {
 		for _, raw := range inbounds {
 			if m, ok := raw.(map[string]any); ok {
 				t, _ := m["tag"].(string)
-				if strings.HasPrefix(t, "vlws-") || strings.HasPrefix(t, "vlre-") || t == "cf-tunnel-in" {
+				if strings.HasPrefix(t, "vless-argo") || strings.HasPrefix(t, "vless-reality") || strings.HasPrefix(t, "vlws-") || strings.HasPrefix(t, "vlre-") || t == "cf-tunnel-in" {
 					continue
 				}
 				newInbs = append(newInbs, m)
 			}
 		}
+
+		argoTag := fmt.Sprintf("vless-argo-%s", genRandSuffix())
+		realityTag := fmt.Sprintf("vless-reality-%s", genRandSuffix())
+
 		newInbs = append(newInbs, map[string]any{
 			"type":        "vless",
-			"tag":         fmt.Sprintf("vlws-%s", genRandSuffix()),
+			"tag":         argoTag,
 			"listen":      "127.0.0.1",
 			"listen_port": nodePort,
 			"users": []any{
 				map[string]any{"name": adminUser, "uuid": cUUID},
 			},
-			"transport": map[string]any{"type": "ws", "path": cleanWS},
+			"transport": map[string]any{
+				"type":                   "ws",
+				"path":                   cleanWS,
+				"headers":                map[string]any{"Host": domain},
+				"early_data_header_name": "Sec-WebSocket-Protocol",
+				"max_early_data":         2560,
+			},
 		})
-		var privStr string
-		if priv, err := ecdh.X25519().GenerateKey(crand.Reader); err == nil {
-			privStr = base64.RawURLEncoding.EncodeToString(priv.Bytes())
-		}
+
+		priv, _ := ecdh.X25519().GenerateKey(crand.Reader)
+		privStr := base64.RawURLEncoding.EncodeToString(priv.Bytes())
 		shortBytes := make([]byte, 4)
 		_, _ = crand.Read(shortBytes)
 		shortID := hex.EncodeToString(shortBytes)
@@ -2683,7 +2722,7 @@ func toolSUIInitBaseNodes(args []string) {
 
 		newInbs = append(newInbs, map[string]any{
 			"type":        "vless",
-			"tag":         fmt.Sprintf("vlre-%s", genRandSuffix()),
+			"tag":         realityTag,
 			"listen":      "::",
 			"listen_port": realityPort,
 			"users": []any{
@@ -2705,6 +2744,85 @@ func toolSUIInitBaseNodes(args []string) {
 		conf["inbounds"] = newInbs
 		if out, err := json.MarshalIndent(conf, "", "  "); err == nil {
 			_ = os.WriteFile(sbConf, out, 0644)
+		}
+
+		// 同步写盘 singbox_inbound_addrs.json
+		addrsMap := make(map[string][]map[string]any)
+		addrsFile := "/var/lib/sout/singbox_inbound_addrs.json"
+		if data, err := os.ReadFile(addrsFile); err == nil {
+			_ = json.Unmarshal(data, &addrsMap)
+		}
+
+		addrsMap[argoTag] = []map[string]any{
+			{
+				"server":      domain,
+				"server_port": 443,
+				"tls": map[string]any{
+					"enabled":     true,
+					"insecure":    false,
+					"server_name": domain,
+					"utls": map[string]any{
+						"enabled":     true,
+						"fingerprint": "chrome",
+					},
+				},
+			},
+		}
+
+		var rAddrs []map[string]any
+		if publicIP != "" && publicIP != "127.0.0.1" && !strings.Contains(publicIP, ":") {
+			rAddrs = append(rAddrs, map[string]any{
+				"server":      publicIP,
+				"server_port": realityPort,
+				"tls": map[string]any{
+					"enabled":     true,
+					"insecure":    false,
+					"server_name": "apple.com",
+					"utls": map[string]any{
+						"enabled":     true,
+						"fingerprint": "chrome",
+					},
+				},
+			})
+		}
+		var v6Host string
+		if d, err := os.ReadFile("/var/lib/sout/host_ipv6"); err == nil {
+			v6Host = strings.TrimSpace(string(d))
+		}
+		if v6Host != "" && v6Host != "127.0.0.1" {
+			rAddrs = append(rAddrs, map[string]any{
+				"server":      v6Host,
+				"server_port": realityPort,
+				"tls": map[string]any{
+					"enabled":     true,
+					"insecure":    false,
+					"server_name": "apple.com",
+					"utls": map[string]any{
+						"enabled":     true,
+						"fingerprint": "chrome",
+					},
+				},
+			})
+		}
+		if len(rAddrs) == 0 {
+			rAddrs = append(rAddrs, map[string]any{
+				"server":      domain,
+				"server_port": realityPort,
+				"tls": map[string]any{
+					"enabled":     true,
+					"insecure":    false,
+					"server_name": "apple.com",
+					"utls": map[string]any{
+						"enabled":     true,
+						"fingerprint": "chrome",
+					},
+				},
+			})
+		}
+		addrsMap[realityTag] = rAddrs
+
+		if b, err := json.MarshalIndent(addrsMap, "", "  "); err == nil {
+			_ = os.WriteFile(addrsFile, b, 0644)
 		}
 	}
 
