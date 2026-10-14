@@ -5,10 +5,12 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -70,7 +72,8 @@ func getOrInitEmbeddedEngine(listenIP string) (*embeddedEngine, error) {
 	return engine, nil
 }
 
-// embeddedEngine 管理唯一的 sing-box 用户态实例，接管所有入站与出口。
+// embeddedEngine 管理唯一的 sing-box 用户态常驻实例，接管所有入站与出口。
+// 出口与入站完全解耦，通过 Endpoint/Inbound Registry 进行细粒度动态热插拔。
 type embeddedEngine struct {
 	mu sync.Mutex
 
@@ -80,6 +83,7 @@ type embeddedEngine struct {
 	routes           map[string]embeddedRoute
 	userRoutes       map[string]embeddedRoute
 	inboundConfigs   map[string]map[string]any
+	inboundHashes    map[string][32]byte
 	activeTunnels    map[int]*Tunnel
 	chainUpstreamTag string
 	listenIP         string
@@ -106,6 +110,7 @@ func newEmbeddedEngine(listenIP string) (*embeddedEngine, error) {
 		routes:         make(map[string]embeddedRoute),
 		userRoutes:     make(map[string]embeddedRoute),
 		inboundConfigs: make(map[string]map[string]any),
+		inboundHashes:  make(map[string][32]byte),
 		activeTunnels:  make(map[int]*Tunnel),
 		listenIP:       listenIP,
 	}
@@ -139,10 +144,42 @@ func newEmbeddedEngine(listenIP string) (*embeddedEngine, error) {
 		dnsRegistry, sbservice.NewRegistry(), sbcertificate.NewRegistry())
 	engine.ctx = ctx
 
-	if err := engine.rebuildBoxLocked(); err != nil {
+	dnsConfig := map[string]any{
+		"strategy": "prefer_ipv6",
+		"servers": []any{
+			map[string]any{
+				"tag":  "default-dns",
+				"type": "local",
+			},
+		},
+	}
+	dnsOpt, err := decodeSingBoxOptions[*option.DNSOptions](ctx, dnsConfig)
+	if err != nil {
+		return nil, fmt.Errorf("解析 DNS 配置失败: %w", err)
+	}
+
+	box, err := sbox.New(sbox.Options{
+		Context: ctx,
+		Options: option.Options{
+			Log: &option.LogOptions{Level: "warn", Timestamp: true},
+			DNS: dnsOpt,
+			Outbounds: []option.Outbound{{
+				Type:    soutDynamicOutboundType,
+				Tag:     soutDynamicOutboundType,
+				Options: &soutDynamicOutboundOptions{},
+			}},
+			Route: &option.RouteOptions{Final: soutDynamicOutboundType},
+		},
+	})
+	if err != nil {
 		return nil, fmt.Errorf("创建内嵌 sing-box 初始实例失败: %w", err)
 	}
 
+	if err := box.Start(); err != nil {
+		return nil, fmt.Errorf("启动内嵌 sing-box 初始实例失败: %w", err)
+	}
+
+	engine.box = box
 	return engine, nil
 }
 
@@ -261,11 +298,43 @@ func (e *embeddedEngine) hasTunnel(slot int) bool {
 	return found && e.box != nil
 }
 
+func (e *embeddedEngine) HasInbound(tag string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.box == nil {
+		return false
+	}
+	if _, ok := e.inboundConfigs[tag]; ok {
+		return true
+	}
+	_, found := e.box.Inbound().Get(tag)
+	return found
+}
+
+func (e *embeddedEngine) portAvailable(port int) bool {
+	listener, err := net.Listen("tcp4", net.JoinHostPort(e.listenIP, strconv.Itoa(port)))
+	if err != nil {
+		return false
+	}
+	_ = listener.Close()
+	return true
+}
+
+func hashInboundConfig(raw map[string]any) ([32]byte, error) {
+	blob, err := json.Marshal(raw)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return sha256.Sum256(blob), nil
+}
 
 // AddInbound 在内存态下发与热加载单个入站
 func (e *embeddedEngine) AddInbound(rawConfig map[string]any) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.box == nil {
+		return fmt.Errorf("内嵌 sing-box 已关闭")
+	}
 
 	tag, _ := rawConfig["tag"].(string)
 	typ, _ := rawConfig["type"].(string)
@@ -273,47 +342,126 @@ func (e *embeddedEngine) AddInbound(rawConfig map[string]any) error {
 		return fmt.Errorf("入站缺少 tag 或 type")
 	}
 
+	h, err := hashInboundConfig(rawConfig)
+	if err != nil {
+		return fmt.Errorf("计算入站 %s 哈希失败: %w", tag, err)
+	}
+
+	// 若已有同 tag，先 Remove
+	if _, running := e.box.Inbound().Get(tag); running {
+		_ = e.box.Inbound().Remove(tag)
+	}
+
+	opt, err := decodeSingBoxOptions[option.Inbound](e.ctx, rawConfig)
+	if err != nil {
+		return fmt.Errorf("解析入站 %s 配置失败: %w", tag, err)
+	}
+	if err := e.box.Inbound().Create(e.ctx, e.box.Router(), e.box.LogFactory().NewLogger("inbound"), opt.Tag, opt.Type, opt.Options); err != nil {
+		return fmt.Errorf("启动入站 %s 失败: %w", tag, err)
+	}
+
 	e.inboundConfigs[tag] = rawConfig
-	return e.rebuildBoxLocked()
+	e.inboundHashes[tag] = h
+	return nil
 }
 
-// SyncInbounds 批量原子热同步所有配置的入站
+// SyncInbounds 批量原子热同步所有配置的入站，做细粒度差异比对，未变化的入站绝不重启
 func (e *embeddedEngine) SyncInbounds(inbounds []map[string]any) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.box == nil {
+		return fmt.Errorf("内嵌 sing-box 已关闭")
+	}
 
-	nextConfigs := make(map[string]map[string]any, len(inbounds))
+	desired := make(map[string]map[string]any, len(inbounds))
+	desiredHashes := make(map[string][32]byte, len(inbounds))
 	for _, raw := range inbounds {
 		tag, _ := raw["tag"].(string)
 		typ, _ := raw["type"].(string)
 		if tag == "" || typ == "" {
 			continue
 		}
-		nextConfigs[tag] = raw
+		h, err := hashInboundConfig(raw)
+		if err != nil {
+			return fmt.Errorf("计算入站 %s 哈希失败: %w", tag, err)
+		}
+		desired[tag] = raw
+		desiredHashes[tag] = h
 	}
-	e.inboundConfigs = nextConfigs
-	return e.rebuildBoxLocked()
+
+	// 1. 已删除的入站：Remove
+	for tag := range e.inboundConfigs {
+		if _, exists := desired[tag]; !exists {
+			if _, running := e.box.Inbound().Get(tag); running {
+				_ = e.box.Inbound().Remove(tag)
+			}
+			delete(e.inboundConfigs, tag)
+			delete(e.inboundHashes, tag)
+			delete(e.routes, tag)
+		}
+	}
+
+	// 2. 差异对比与同步
+	var firstErr error
+	for tag, raw := range desired {
+		newHash := desiredHashes[tag]
+		oldHash, exists := e.inboundHashes[tag]
+
+		// 未变化的入站（尤其是稳定连接的 cf-tunnel-in 和已启动的公网节点）：完全不动，严禁 Remove/Create！
+		if exists && oldHash == newHash {
+			if _, running := e.box.Inbound().Get(tag); running {
+				continue
+			}
+		}
+
+		// 变化的入站：先 Remove 再 Create
+		if exists {
+			if _, running := e.box.Inbound().Get(tag); running {
+				_ = e.box.Inbound().Remove(tag)
+			}
+			delete(e.inboundConfigs, tag)
+			delete(e.inboundHashes, tag)
+		}
+
+		// 新增或变化的入站：Create
+		opt, err := decodeSingBoxOptions[option.Inbound](e.ctx, raw)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("解析入站 %s 配置失败: %w", tag, err)
+			}
+			continue
+		}
+		if err := e.box.Inbound().Create(e.ctx, e.box.Router(), e.box.LogFactory().NewLogger("inbound"), opt.Tag, opt.Type, opt.Options); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("启动入站 %s 失败: %w", tag, err)
+			}
+			continue
+		}
+
+		e.inboundConfigs[tag] = raw
+		e.inboundHashes[tag] = newHash
+	}
+
+	return firstErr
 }
 
 // RemoveInbound 在内存态注销指定的入站
 func (e *embeddedEngine) RemoveInbound(tag string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-
-	delete(e.inboundConfigs, tag)
-	delete(e.routes, tag)
-	return e.rebuildBoxLocked()
-}
-
-// HasInbound 检查入站是否处于运行状态
-func (e *embeddedEngine) HasInbound(tag string) bool {
-	e.mu.Lock()
-	defer e.mu.Unlock()
 	if e.box == nil {
-		return false
+		return fmt.Errorf("内嵌 sing-box 已关闭")
 	}
-	_, found := e.inboundConfigs[tag]
-	return found
+
+	if _, running := e.box.Inbound().Get(tag); running {
+		if err := e.box.Inbound().Remove(tag); err != nil {
+			return fmt.Errorf("移除入站 %s 失败: %w", tag, err)
+		}
+	}
+	delete(e.inboundConfigs, tag)
+	delete(e.inboundHashes, tag)
+	delete(e.routes, tag)
+	return nil
 }
 
 // SyncRoutes 热同步入站路由与用户级分流路由表
@@ -351,23 +499,194 @@ func (e *embeddedEngine) setChainUpstream(tag string) {
 		return
 	}
 	e.chainUpstreamTag = tag
-	_ = e.rebuildBoxLocked()
+	if e.box == nil {
+		return
+	}
+
+	// 遍历已有的非 chainUpstream 的 activeTunnels，仅为其重新挂载 endpoint（更新 detour），绝不重启任何 Inbound
+	for slot, tunnel := range e.activeTunnels {
+		isWG := tunnel.CustomProto == "wireguard" || tunnel.Node.Protocol == "wireguard"
+		endpointTag := fmt.Sprintf("soutopenvpn%d", slot)
+		if isWG {
+			endpointTag = fmt.Sprintf("soutwireguard%d", slot)
+		}
+
+		if endpointTag == e.chainUpstreamTag || tunnel.IsChainUpstream {
+			continue
+		}
+
+		var endpointConfig map[string]any
+		var err error
+		if isWG {
+			endpointConfig, err = wireguardEndpoint(tunnel.Node.Config, endpointTag)
+		} else {
+			endpointConfig, err = openVPNEndpoint(tunnel.Node.Config, endpointTag)
+		}
+		if err != nil {
+			continue
+		}
+
+		if e.chainUpstreamTag != "" {
+			endpointConfig["detour"] = e.chainUpstreamTag
+		}
+
+		opt, err := decodeSingBoxOptions[option.Endpoint](e.ctx, endpointConfig)
+		if err != nil {
+			continue
+		}
+
+		_ = e.box.Endpoint().Remove(endpointTag)
+		_ = e.box.Endpoint().Create(e.ctx, e.box.Router(), e.box.LogFactory().NewLogger("endpoint"), opt.Tag, opt.Type, opt.Options)
+	}
 }
 
 func (e *embeddedEngine) addTunnel(tunnel *Tunnel) error {
+	if tunnel == nil {
+		return fmt.Errorf("tunnel 不能为空")
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.activeTunnels[tunnel.Slot] = tunnel
-	return e.rebuildBoxLocked()
+	if e.box == nil {
+		return fmt.Errorf("内嵌 sing-box 已关闭")
+	}
+
+	slot := tunnel.Slot
+	isWG := tunnel.CustomProto == "wireguard" || tunnel.Node.Protocol == "wireguard"
+	endpointTag := fmt.Sprintf("soutopenvpn%d", slot)
+	if isWG {
+		endpointTag = fmt.Sprintf("soutwireguard%d", slot)
+	}
+	socksTag := fmt.Sprintf("soutsocks%d", slot)
+
+	// 若该 slot 之前有 endpoint/socks，先调用 Remove
+	if prev, exists := e.activeTunnels[slot]; exists {
+		prevIsWG := prev.CustomProto == "wireguard" || prev.Node.Protocol == "wireguard"
+		prevEndpointTag := fmt.Sprintf("soutopenvpn%d", slot)
+		if prevIsWG {
+			prevEndpointTag = fmt.Sprintf("soutwireguard%d", slot)
+		}
+		prevSocksTag := fmt.Sprintf("soutsocks%d", slot)
+		_ = e.box.Inbound().Remove(prevSocksTag)
+		_ = e.box.Endpoint().Remove(prevEndpointTag)
+		delete(e.activeTunnels, slot)
+	}
+
+	var endpointConfig map[string]any
+	var err error
+	if isWG {
+		endpointConfig, err = wireguardEndpoint(tunnel.Node.Config, endpointTag)
+		if err != nil {
+			return fmt.Errorf("转换 WireGuard 配置失败: %w", err)
+		}
+	} else {
+		endpointConfig, err = openVPNEndpoint(tunnel.Node.Config, endpointTag)
+		if err != nil {
+			return fmt.Errorf("转换 VPN Gate 配置失败: %w", err)
+		}
+	}
+
+	if endpointTag != e.chainUpstreamTag && !tunnel.IsChainUpstream && e.chainUpstreamTag != "" {
+		endpointConfig["detour"] = e.chainUpstreamTag
+	}
+
+	opt, err := decodeSingBoxOptions[option.Endpoint](e.ctx, endpointConfig)
+	if err != nil {
+		return fmt.Errorf("解析 endpoint %s 配置失败: %w", endpointTag, err)
+	}
+
+	if err := e.box.Endpoint().Create(e.ctx, e.box.Router(), e.box.LogFactory().NewLogger("endpoint"), opt.Tag, opt.Type, opt.Options); err != nil {
+		return fmt.Errorf("启动 endpoint %s 失败: %w", endpointTag, err)
+	}
+
+	nextRoutes := cloneEmbeddedRoutes(e.routes)
+	// 如果之前因 removeTunnel 被置为 block 的路由指向该 endpointTag，在此予以解除 block
+	for tag, r := range nextRoutes {
+		if r.endpoint == endpointTag && r.block {
+			nextRoutes[tag] = embeddedRoute{endpoint: endpointTag, block: false}
+		}
+	}
+
+	if tunnel.Port > 0 {
+		socksConfig := map[string]any{
+			"type":        "socks",
+			"tag":         socksTag,
+			"listen":      e.listenIP,
+			"listen_port": tunnel.Port,
+		}
+		cred := tunnel.Cred
+		if cred.User != "" && cred.Pass != "" {
+			socksConfig["users"] = []any{map[string]any{"username": cred.User, "password": cred.Pass}}
+		}
+		socksOpt, err := decodeSingBoxOptions[option.Inbound](e.ctx, socksConfig)
+		if err != nil {
+			_ = e.box.Endpoint().Remove(endpointTag)
+			return fmt.Errorf("解析公网 SOCKS5 配置失败: %w", err)
+		}
+		if err := e.box.Inbound().Create(e.ctx, e.box.Router(), e.box.LogFactory().NewLogger("socks"), socksOpt.Tag, socksOpt.Type, socksOpt.Options); err != nil {
+			_ = e.box.Endpoint().Remove(endpointTag)
+			return fmt.Errorf("启动公网 SOCKS5 失败: %w", err)
+		}
+		nextRoutes[socksTag] = embeddedRoute{endpoint: endpointTag}
+	} else {
+		delete(nextRoutes, socksTag)
+	}
+	e.routes = nextRoutes
+
+	if e.userRoutes != nil {
+		nextUsers := cloneEmbeddedRoutes(e.userRoutes)
+		for u, r := range nextUsers {
+			if r.endpoint == endpointTag && r.block {
+				nextUsers[u] = embeddedRoute{endpoint: endpointTag, block: false}
+			}
+		}
+		e.userRoutes = nextUsers
+	}
+
+	e.activeTunnels[slot] = tunnel
+	return nil
 }
 
 func (e *embeddedEngine) removeTunnel(tunnel *Tunnel) {
+	if tunnel == nil {
+		return
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	delete(e.activeTunnels, tunnel.Slot)
-	socksTag := fmt.Sprintf("soutsocks%d", tunnel.Slot)
-	delete(e.routes, socksTag)
-	_ = e.rebuildBoxLocked()
+	if e.box == nil {
+		return
+	}
+
+	slot := tunnel.Slot
+	isWG := tunnel.CustomProto == "wireguard" || tunnel.Node.Protocol == "wireguard"
+	endpointTag := fmt.Sprintf("soutopenvpn%d", slot)
+	if isWG {
+		endpointTag = fmt.Sprintf("soutwireguard%d", slot)
+	}
+	socksTag := fmt.Sprintf("soutsocks%d", slot)
+
+	_ = e.box.Inbound().Remove(socksTag)
+	_ = e.box.Endpoint().Remove(endpointTag)
+
+	nextRoutes := cloneEmbeddedRoutes(e.routes)
+	delete(nextRoutes, socksTag)
+	for tag, r := range nextRoutes {
+		if r.endpoint == endpointTag {
+			nextRoutes[tag] = embeddedRoute{endpoint: endpointTag, block: true}
+		}
+	}
+	e.routes = nextRoutes
+
+	if e.userRoutes != nil {
+		nextUsers := cloneEmbeddedRoutes(e.userRoutes)
+		for u, r := range nextUsers {
+			if r.endpoint == endpointTag {
+				nextUsers[u] = embeddedRoute{endpoint: endpointTag, block: true}
+			}
+		}
+		e.userRoutes = nextUsers
+	}
+
+	delete(e.activeTunnels, slot)
 }
 
 func (e *embeddedEngine) dialTunnel(ctx context.Context, tunnel *Tunnel, network, address string) (net.Conn, error) {
@@ -399,141 +718,6 @@ func (e *embeddedEngine) dialTunnel(ctx context.Context, tunnel *Tunnel, network
 		destination = M.SocksaddrFrom(addresses[0], destination.Port)
 	}
 	return endpoint.DialContext(ctx, network, destination)
-}
-
-func (e *embeddedEngine) rebuildBoxLocked() error {
-	var inbounds []option.Inbound
-	for tag, raw := range e.inboundConfigs {
-		opt, err := decodeSingBoxOptions[option.Inbound](e.ctx, raw)
-		if err != nil {
-			return fmt.Errorf("解析入站 %s 配置失败: %w", tag, err)
-		}
-		inbounds = append(inbounds, opt)
-	}
-
-	var endpoints []option.Endpoint
-	nextRoutes := cloneEmbeddedRoutes(e.routes)
-
-	for slot, tunnel := range e.activeTunnels {
-		var endpointTag string
-		var endpointConfig map[string]any
-		isWG := tunnel.CustomProto == "wireguard" || tunnel.Node.Protocol == "wireguard"
-		if isWG {
-			endpointTag = fmt.Sprintf("soutwireguard%d", slot)
-			cfg, err := wireguardEndpoint(tunnel.Node.Config, endpointTag)
-			if err != nil {
-				return fmt.Errorf("转换 WireGuard 配置失败: %w", err)
-			}
-			endpointConfig = cfg
-		} else {
-			endpointTag = fmt.Sprintf("soutopenvpn%d", slot)
-			cfg, err := openVPNEndpoint(tunnel.Node.Config, endpointTag)
-			if err != nil {
-				return fmt.Errorf("转换 VPN Gate 配置失败: %w", err)
-			}
-			endpointConfig = cfg
-		}
-
-		if endpointTag != e.chainUpstreamTag && !tunnel.IsChainUpstream && e.chainUpstreamTag != "" {
-			endpointConfig["detour"] = e.chainUpstreamTag
-		}
-
-		endpointOpt, err := decodeSingBoxOptions[option.Endpoint](e.ctx, endpointConfig)
-		if err != nil {
-			return fmt.Errorf("解析 endpoint %s 失败: %w", endpointTag, err)
-		}
-		endpoints = append(endpoints, endpointOpt)
-
-		// 为 s-ui 模式及本地端口保留 SOCKS5 监听
-		if tunnel.Port > 0 {
-			socksTag := fmt.Sprintf("soutsocks%d", slot)
-			socksConfig := map[string]any{
-				"type":        "socks",
-				"tag":         socksTag,
-				"listen":      e.listenIP,
-				"listen_port": tunnel.Port,
-			}
-			cred := tunnel.Cred
-			if cred.User != "" && cred.Pass != "" {
-				socksConfig["users"] = []any{map[string]any{"username": cred.User, "password": cred.Pass}}
-			}
-			socksOpt, err := decodeSingBoxOptions[option.Inbound](e.ctx, socksConfig)
-			if err != nil {
-				return fmt.Errorf("解析 SOCKS5 入站 %s 失败: %w", socksTag, err)
-			}
-			inbounds = append(inbounds, socksOpt)
-			nextRoutes[socksTag] = embeddedRoute{endpoint: endpointTag}
-		}
-	}
-
-	e.routes = nextRoutes
-
-	outbounds := []option.Outbound{{
-		Type:    soutDynamicOutboundType,
-		Tag:     soutDynamicOutboundType,
-		Options: &soutDynamicOutboundOptions{},
-	}}
-
-	dnsConfig := map[string]any{
-		"strategy": "prefer_ipv6",
-		"servers": []any{
-			map[string]any{
-				"tag":  "default-dns",
-				"type": "local",
-			},
-		},
-	}
-	dnsOpt, err := decodeSingBoxOptions[*option.DNSOptions](e.ctx, dnsConfig)
-	if err != nil {
-		return fmt.Errorf("解析 DNS 配置失败: %w", err)
-	}
-
-	newBox, err := sbox.New(sbox.Options{
-		Context: e.ctx,
-		Options: option.Options{
-			Log:       &option.LogOptions{Level: "warn", Timestamp: true},
-			DNS:       dnsOpt,
-			Inbounds:  inbounds,
-			Endpoints: endpoints,
-			Outbounds: outbounds,
-			Route:     &option.RouteOptions{Final: soutDynamicOutboundType},
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("创建内嵌 sing-box 失败: %w", err)
-	}
-
-	if e.box != nil {
-		oldBox := e.box
-		closeDone := make(chan struct{})
-		go func() {
-			_ = oldBox.Close()
-			close(closeDone)
-		}()
-		select {
-		case <-closeDone:
-		case <-time.After(1 * time.Second):
-		}
-	}
-
-	var startErr error
-	for attempt := 0; attempt < 6; attempt++ {
-		startErr = newBox.Start()
-		if startErr == nil {
-			break
-		}
-		if strings.Contains(startErr.Error(), "address already in use") {
-			time.Sleep(500 * time.Millisecond)
-			continue
-		}
-		break
-	}
-	if startErr != nil {
-		return fmt.Errorf("启动内嵌 sing-box 失败: %w", startErr)
-	}
-
-	e.box = newBox
-	return nil
 }
 
 func wireguardEndpoint(configJSON, tag string) (map[string]any, error) {
@@ -596,7 +780,6 @@ func wireguardEndpoint(configJSON, tag string) (map[string]any, error) {
 	}
 	return endpoint, nil
 }
-
 
 func cloneEmbeddedRoutes(routes map[string]embeddedRoute) map[string]embeddedRoute {
 	copyRoutes := make(map[string]embeddedRoute, len(routes))
