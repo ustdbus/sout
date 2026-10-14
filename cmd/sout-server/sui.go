@@ -1274,35 +1274,39 @@ func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {
 		if t.Status != "up" {
 			continue
 		}
-		tag := suiTagPrefix + sanitizeTag(t.Node.HostName)
-		activeTags[tag] = true
+		socksTag := fmt.Sprintf("soutsocks%d", t.Slot)
+		activeTags[socksTag] = true
+		hostTag := suiTagPrefix + sanitizeTag(t.Node.HostName)
+		activeTags[hostTag] = true
 
 		cred := t.credential()
-		outboundPayload := map[string]any{
-			"type":        "socks",
-			"tag":         tag,
-			"server":      "127.0.0.1",
-			"server_port": t.Port,
-			"version":     "5",
-		}
-		if cred.User != "" {
-			outboundPayload["username"] = cred.User
-			outboundPayload["password"] = cred.Pass
-		}
+		for _, tag := range []string{socksTag, hostTag} {
+			outboundPayload := map[string]any{
+				"type":        "socks",
+				"tag":         tag,
+				"server":      "127.0.0.1",
+				"server_port": t.Port,
+				"version":     "5",
+			}
+			if cred.User != "" {
+				outboundPayload["username"] = cred.User
+				outboundPayload["password"] = cred.Pass
+			}
 
-		action := "new"
-		if id, exists := existingFanoutTags[tag]; exists {
-			action = "edit"
-			outboundPayload["id"] = id
-		}
+			action := "new"
+			if id, exists := existingFanoutTags[tag]; exists {
+				action = "edit"
+				outboundPayload["id"] = id
+			}
 
-		payloadBytes, _ := json.Marshal(outboundPayload)
-		form := url.Values{
-			"object": {"outbounds"},
-			"action": {action},
-			"data":   {string(payloadBytes)},
+			payloadBytes, _ := json.Marshal(outboundPayload)
+			form := url.Values{
+				"object": {"outbounds"},
+				"action": {action},
+				"data":   {string(payloadBytes)},
+			}
+			_, _ = s.callAPI(http.MethodPost, "save", form)
 		}
-		_, _ = s.callAPI(http.MethodPost, "save", form)
 	}
 
 	for tag := range existingFanoutTags {
@@ -1980,7 +1984,10 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 			Remark:     clientRemark,
 		})
 
-		clientName := fmt.Sprintf("soutu%d%s", templateID, sanitizeTag(host))
+		clientName := fmt.Sprintf("soutu%d_s%d", templateID, slot)
+		if slot <= 0 {
+			clientName = fmt.Sprintf("soutu%d%s", templateID, sanitizeTag(host))
+		}
 
 		existing, existingOK, err := s.apiClientByName(clientName)
 		if err != nil {
@@ -1997,9 +2004,8 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 				existingFull = full[0]
 			}
 		}
-		preserveCred := false
-		newUUID := generateUUID()
-		newPass := generateRandomToken(10)
+		// 固化凭据注入：通过 GetOrCreateSlotCredentials 获取 slot 专属永久凭据
+		newUUID, newPass := GetOrCreateSlotCredentials(slot, clientRemark)
 
 		// 精准深拷贝原生主客户端模版的 config，仅替换实际存在的协议字段
 		clientCfgObj := make(map[string]map[string]any)
@@ -2007,7 +2013,6 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 			if rawCfg, ok := existingFull["config"]; ok {
 				rawBytes, _ := json.Marshal(rawCfg)
 				_ = json.Unmarshal(rawBytes, &clientCfgObj)
-				preserveCred = true
 			}
 		}
 		if len(clientCfgObj) == 0 && templateClient != nil {
@@ -2037,19 +2042,13 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 					vals["username"] = clientName
 				}
 				if _, hasUUID := vals["uuid"]; hasUUID {
-					if !preserveCred {
-						vals["uuid"] = newUUID
-					}
+					vals["uuid"] = newUUID
 				}
 				if _, hasPass := vals["password"]; hasPass {
-					if !preserveCred {
-						vals["password"] = newPass
-					}
+					vals["password"] = newPass
 				}
 				if _, hasAuth := vals["auth_str"]; hasAuth {
-					if !preserveCred {
-						vals["auth_str"] = newPass
-					}
+					vals["auth_str"] = newPass
 				}
 				if proto == "vless" {
 					vals["flow"] = baseFlow
@@ -2237,7 +2236,11 @@ func (s *SUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
 	}
 
 	for userName, host := range boundMap {
-		if host == oldHost || host == oldHostTag {
+		matched := (host == oldHost || host == oldHostTag)
+		if !matched && target.Slot > 0 && parseSlotFromClientName(userName) == target.Slot {
+			matched = true
+		}
+		if matched {
 			if err := s.BindUserRoute(userName, target.Node.HostName, tunnels); err != nil {
 				return err
 			}
@@ -3722,6 +3725,28 @@ func (s *SUI) cleanStaleRoutesAndClients(tunnels []*Tunnel) error {
 			if !isSplitUser(name) {
 				continue
 			}
+			slot := parseSlotFromClientName(name)
+			if slot > 0 {
+				slotActive := false
+				for _, t := range tunnels {
+					if t.Slot == slot {
+						slotActive = true
+						break
+					}
+				}
+				if !slotActive {
+					for _, b := range bindings {
+						if b.Slot == slot {
+							slotActive = true
+							break
+						}
+					}
+				}
+				if slotActive {
+					continue // 活跃槽位分流客户端，严禁删除！
+				}
+			}
+
 			matched := false
 			for hostTag := range configuredHosts {
 				if strings.HasSuffix(name, hostTag) {

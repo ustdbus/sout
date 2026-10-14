@@ -804,8 +804,9 @@ func (sb *SingBox) Inbounds(live map[string]bool) ([]Inbound, error) {
 				}
 				cRemark := ""
 				bindings := sb.loadBranchBindings()
+				userSlot := parseSlotFromClientName(userName)
 				for _, b := range bindings {
-					if b.TemplateID == baseID && (b.Host == boundHost || sanitizeTag(b.Host) == boundHost || strings.Contains(userName, sanitizeTag(b.Host))) {
+					if b.TemplateID == baseID && (b.Host == boundHost || sanitizeTag(b.Host) == boundHost || strings.Contains(userName, sanitizeTag(b.Host)) || (userSlot > 0 && b.Slot == userSlot)) {
 						if b.Remark != "" {
 							cRemark = b.Remark
 							break
@@ -1059,6 +1060,23 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 	uuidStr, _ := uMap["uuid"].(string)
 	passStr, _ := uMap["password"].(string)
 	flowStr, _ := uMap["flow"].(string)
+
+	slot := parseSlotFromClientName(uName)
+	if slot > 0 {
+		solidUUID, solidPass := GetOrCreateSlotCredentials(slot, uName)
+		if solidUUID != "" {
+			uuidStr = solidUUID
+		}
+		if solidPass != "" {
+			passStr = solidPass
+		}
+	} else if uName == "default" || strings.HasPrefix(uName, "default") {
+		directUUID := GetOrCreateDirectUUID(uuidStr)
+		if directUUID != "" {
+			uuidStr = directUUID
+		}
+	}
+
 	if uuidStr == "" {
 		uuidStr = passStr
 	}
@@ -1074,7 +1092,13 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 		matchedRemark := ""
 		bindings := sb.loadBranchBindings()
 		for _, b := range bindings {
-			if b.Host != "" && strings.Contains(uName, sanitizeTag(b.Host)) {
+			matched := false
+			if slot > 0 && b.Slot == slot {
+				matched = true
+			} else if b.Host != "" && strings.Contains(uName, sanitizeTag(b.Host)) {
+				matched = true
+			}
+			if matched {
 				if b.Remark != "" {
 					matchedRemark = b.Remark
 					break
@@ -1655,6 +1679,17 @@ func (sb *SingBox) CloneToTunnels(templateID int, hosts []string, tunnels []*Tun
 			}
 		}
 
+		if slot <= 0 {
+			for _, b := range sb.loadBranchBindings() {
+				if b.Host == host || sanitizeTag(b.Host) == sanitizeTag(host) {
+					if b.Slot > 0 {
+						slot = b.Slot
+						break
+					}
+				}
+			}
+		}
+
 		// 持久化保存分流绑定记录，重启或隧道切换时自动自愈
 		sb.saveBranchBinding(branchBinding{
 			TemplateID: templateID,
@@ -1666,7 +1701,10 @@ func (sb *SingBox) CloneToTunnels(templateID int, hosts []string, tunnels []*Tun
 		})
 
 		hTag := sanitizeTag(host)
-		clientName := fmt.Sprintf("soutu%d%s", templateID, hTag)
+		clientName := fmt.Sprintf("soutu%d_s%d", templateID, slot)
+		if slot <= 0 {
+			clientName = fmt.Sprintf("soutu%d%s", templateID, hTag)
+		}
 
 		// 检查是否已存在该客户端
 		exists := false
@@ -1688,7 +1726,7 @@ func (sb *SingBox) CloneToTunnels(templateID int, hosts []string, tunnels []*Tun
 				}
 			}
 			ibType, _ := ibMap["type"].(string)
-			newClient := makeSingboxUser(ibType, clientName, sampleUser)
+			newClient := makeSingboxUser(ibType, clientName, sampleUser, slot)
 			usersRaw = append(usersRaw, newClient)
 		}
 
@@ -1793,7 +1831,6 @@ func (sb *SingBox) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) err
 
 	oldHostTag := sanitizeTag(oldHost)
 	newHostTag := sanitizeTag(target.Node.HostName)
-	oldTag := "sout" + oldHostTag
 	newTag := "sout" + newHostTag
 
 	// 1. 同步更新持久化绑定记录 (同时精准匹配该 host 或对应的 slot 分支，杜绝换节点导致孤儿)
@@ -1836,7 +1873,8 @@ func (sb *SingBox) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) err
 	}
 	sb.saveAllBranchBindings(bindings)
 
-	// 2. 更新或自愈 inbounds 中的客户端及 route.rules
+	// 2. 节点轮换零震荡：绝不删除旧 Client，绝不重新生成 UUID！
+	// 只需更新 route 规则中的 outboundTag 以及内存态 userRoutes 指针
 	inboundsRaw, _ := cfg["inbounds"].([]any)
 	routeRaw, _ := cfg["route"].(map[string]any)
 	if routeRaw == nil {
@@ -1845,46 +1883,18 @@ func (sb *SingBox) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) err
 	}
 	rulesRaw, _ := routeRaw["rules"].([]any)
 
-	// 首先做直接的字符串改名替换 (如果尚存旧客户端)
-	for _, ib := range inboundsRaw {
-		if ibMap, ok := ib.(map[string]any); ok {
-			usersRaw, _ := ibMap["users"].([]any)
-			for _, u := range usersRaw {
-				if uMap, ok := u.(map[string]any); ok {
-					name, _ := uMap["name"].(string)
-					if oldHostTag != "" && strings.Contains(name, oldHostTag) {
-						uMap["name"] = strings.Replace(name, oldHostTag, newHostTag, 1)
-					}
-				}
-			}
-		}
-	}
-	for _, r := range rulesRaw {
-		if rMap, ok := r.(map[string]any); ok {
-			if oldTag != "" && rMap["outbound"] == oldTag {
-				rMap["outbound"] = newTag
-			}
-			if authUsers, ok := rMap["auth_user"].([]any); ok {
-				for idx, au := range authUsers {
-					if auStr, ok := au.(string); ok && oldHostTag != "" && strings.Contains(auStr, oldHostTag) {
-						authUsers[idx] = strings.Replace(auStr, oldHostTag, newHostTag, 1)
-					}
-				}
-			}
-		}
-	}
-
-	// 接着为所有匹配到的 binding 兜底保证：若客户端或规则丢失，原地补齐重建
 	for _, b := range matchedBindings {
 		ibMap, _, err := resolveTemplateInbound(inboundsRaw, b.TemplateID)
 		if err != nil {
 			continue
 		}
-		targetClientName := fmt.Sprintf("soutu%d%s", b.TemplateID, newHostTag)
+		clientName := fmt.Sprintf("soutu%d_s%d", b.TemplateID, target.Slot)
+
+		// 保证 inbounds 中拥有该 client（若没有才使用固化凭据补齐，已有则 100% 恒定不变）
 		usersRaw, _ := ibMap["users"].([]any)
 		userExists := false
 		for _, u := range usersRaw {
-			if uMap, ok := u.(map[string]any); ok && uMap["name"] == targetClientName {
+			if uMap, ok := u.(map[string]any); ok && uMap["name"] == clientName {
 				userExists = true
 				break
 			}
@@ -1898,17 +1908,18 @@ func (sb *SingBox) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) err
 				}
 			}
 			ibType, _ := ibMap["type"].(string)
-			newClient := makeSingboxUser(ibType, targetClientName, sampleUser)
+			newClient := makeSingboxUser(ibType, clientName, sampleUser, target.Slot)
 			usersRaw = append(usersRaw, newClient)
 			ibMap["users"] = usersRaw
 		}
 
+		// 仅更新 route 规则中的 outboundTag 指向新出口
 		ruleExists := false
 		for _, r := range rulesRaw {
 			if rMap, ok := r.(map[string]any); ok {
 				if authUsers, ok := rMap["auth_user"].([]any); ok {
 					for _, au := range authUsers {
-						if au == targetClientName {
+						if au == clientName {
 							rMap["outbound"] = newTag
 							ruleExists = true
 							break
@@ -1922,7 +1933,7 @@ func (sb *SingBox) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) err
 		}
 		if !ruleExists {
 			rulesRaw = append([]any{map[string]any{
-				"auth_user": []any{targetClientName},
+				"auth_user": []any{clientName},
 				"outbound":  newTag,
 			}}, rulesRaw...)
 		}
@@ -2704,11 +2715,12 @@ func (sb *SingBox) OnTunnelsChanged(tunnels []*Tunnel) error {
 			var targetTunnel *Tunnel
 			for _, t := range tunnels {
 				if t.Status == "up" {
-					if (b.Host != "" && (t.Node.HostName == b.Host || sanitizeTag(t.Node.HostName) == sanitizeTag(b.Host))) ||
-						(b.Slot > 0 && t.Slot == b.Slot) {
+					if (b.Slot > 0 && t.Slot == b.Slot) ||
+						(b.Host != "" && (t.Node.HostName == b.Host || sanitizeTag(t.Node.HostName) == sanitizeTag(b.Host))) {
 						targetTunnel = t
-						if b.Host != t.Node.HostName {
+						if b.Host != t.Node.HostName || (b.Slot <= 0 && t.Slot > 0) {
 							b.Host = t.Node.HostName
+							b.Slot = t.Slot
 							sb.saveBranchBinding(b)
 						}
 						break
@@ -2720,7 +2732,7 @@ func (sb *SingBox) OnTunnelsChanged(tunnels []*Tunnel) error {
 			}
 
 			hTag := sanitizeTag(targetTunnel.Node.HostName)
-			clientName := fmt.Sprintf("soutu%d%s", b.TemplateID, hTag)
+			clientName := fmt.Sprintf("soutu%d_s%d", b.TemplateID, targetTunnel.Slot)
 			outboundTag := "sout" + hTag
 
 			usersRaw, _ := ibMap["users"].([]any)
@@ -2740,7 +2752,7 @@ func (sb *SingBox) OnTunnelsChanged(tunnels []*Tunnel) error {
 					}
 				}
 				ibType, _ := ibMap["type"].(string)
-				newClient := makeSingboxUser(ibType, clientName, sampleUser)
+				newClient := makeSingboxUser(ibType, clientName, sampleUser, targetTunnel.Slot)
 				usersRaw = append(usersRaw, newClient)
 				ibMap["users"] = usersRaw
 				changed = true
@@ -2799,49 +2811,67 @@ func generateRandomPassword(length int) string {
 }
 
 // makeSingboxUser 根据入站协议类型生成符合 sing-box 严格校验的合法 user 字典
-func makeSingboxUser(proto, clientName string, sampleUser map[string]any) map[string]any {
+func makeSingboxUser(proto, clientName string, sampleUser map[string]any, slotOpt ...int) map[string]any {
 	proto = strings.ToLower(strings.TrimSpace(proto))
 	u := map[string]any{
 		"name": clientName,
 	}
 
+	slot := 0
+	if len(slotOpt) > 0 && slotOpt[0] > 0 {
+		slot = slotOpt[0]
+	} else {
+		slot = parseSlotFromClientName(clientName)
+	}
+
+	var fixedUUID, fixedPass string
+	if slot > 0 {
+		fixedUUID, fixedPass = GetOrCreateSlotCredentials(slot, clientName)
+	} else if clientName == "default" || strings.HasPrefix(clientName, "default") {
+		fixedUUID = GetOrCreateDirectUUID("")
+		fixedPass = generateRandomPassword(16)
+	} else {
+		fixedUUID = generateUUID()
+		fixedPass = generateRandomPassword(16)
+	}
+
 	switch proto {
 	case "vmess":
-		u["uuid"] = generateUUID()
+		u["uuid"] = fixedUUID
 		if sampleUser != nil {
 			if aid, ok := sampleUser["alterId"]; ok {
 				u["alterId"] = aid
 			}
 		}
 	case "vless":
-		u["uuid"] = generateUUID()
+		u["uuid"] = fixedUUID
 		if sampleUser != nil {
 			if flow, ok := sampleUser["flow"].(string); ok && flow != "" {
 				u["flow"] = flow
 			}
 		}
 	case "tuic":
-		u["uuid"] = generateUUID()
-		u["password"] = generateRandomPassword(16)
+		u["uuid"] = fixedUUID
+		u["password"] = fixedPass
 	case "hysteria2", "hy2":
-		u["password"] = generateRandomPassword(16)
+		u["password"] = fixedPass
 	case "shadowsocks", "ss", "trojan":
-		u["password"] = generateRandomPassword(16)
+		u["password"] = fixedPass
 	default:
 		if sampleUser != nil {
 			_, hasUUID := sampleUser["uuid"]
 			_, hasPass := sampleUser["password"]
 			if hasUUID && !hasPass {
-				u["uuid"] = generateUUID()
+				u["uuid"] = fixedUUID
 			} else if hasPass && !hasUUID {
-				u["password"] = generateRandomPassword(16)
+				u["password"] = fixedPass
 			} else {
-				u["uuid"] = generateUUID()
-				u["password"] = generateRandomPassword(16)
+				u["uuid"] = fixedUUID
+				u["password"] = fixedPass
 			}
 		} else {
-			u["uuid"] = generateUUID()
-			u["password"] = generateRandomPassword(16)
+			u["uuid"] = fixedUUID
+			u["password"] = fixedPass
 		}
 	}
 

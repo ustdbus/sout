@@ -72,6 +72,7 @@ func main() {
 
 	// 立即拉起内置反代网关，接管隧道回源端口
 	InitGateway(*workDir)
+	InitCredentials(*workDir)
 
 	configurePanel(*workDir)
 	if p, err := openPanel(); err != nil {
