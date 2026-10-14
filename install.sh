@@ -972,6 +972,7 @@ command="/usr/local/bin/sout-server"
 command_args="-dir /var/lib/sout"
 command_background="yes"
 pidfile="/run/sout.pid"
+retry="TERM/3/KILL/3"
 output_log="/var/log/sout.log"
 error_log="/var/log/sout.log"
 respawn_delay=3

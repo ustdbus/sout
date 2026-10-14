@@ -59,6 +59,26 @@ detect_init() {
 }
 INIT_SYS=$(detect_init)
 
+restart_sout_service() {
+  if [[ "$INIT_SYS" == "systemd" ]]; then
+    systemctl restart sout 2>/dev/null || true
+  else
+    rc-service sout restart 2>/dev/null || (rc-service sout zap 2>/dev/null && rc-service sout start 2>/dev/null) || true
+  fi
+}
+
+restart_backend_service() {
+  if is_sui_backend; then
+    if [[ "$INIT_SYS" == "systemd" ]]; then
+      systemctl restart s-ui 2>/dev/null || true
+    else
+      rc-service s-ui restart 2>/dev/null || (rc-service s-ui zap 2>/dev/null && rc-service s-ui start 2>/dev/null) || true
+    fi
+  else
+    restart_sout_service
+  fi
+}
+
 
 # 在 OpenRC/Alpine 上自动把 systemctl 调用翻译为 rc-service / rc-update。
 # 优先从 systemd unit 生成 OpenRC init 脚本，保证 cloudflared/sing-box 可被管理。
@@ -2331,11 +2351,7 @@ setup_caddy_proxy() {
     rm -f "${WORK_DIR}/.caddy_meta_vars"
   fi
 
-  if [[ "$has_sui" == "true" ]]; then
-    systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || service s-ui restart 2>/dev/null || true
-  else
-    systemctl restart sout 2>/dev/null || rc-service sout restart 2>/dev/null || service sout restart 2>/dev/null || true
-  fi
+  restart_backend_service
 
   # 5. 自动化配置 sout
   echo -e "  [+] 正在自动配置 sout 插件 (绑定 127.0.0.1:${sout_port} 并挂载路径 /${sout_path}/)..."
@@ -2471,7 +2487,7 @@ disable_caddy_proxy() {
   # 从 /etc/sing-box/config.json 安全移除 cf-tunnel-in 入站以及 route.rules 中的直连规则
   if [[ -f /etc/sing-box/config.json ]]; then
     sout_tool singbox-clean-cf /etc/sing-box/config.json 2>/dev/null || true
-    systemctl restart sout 2>/dev/null || rc-service sout restart 2>/dev/null || service sout restart 2>/dev/null || true
+    restart_sout_service
   fi
 
   # 从 s-ui 数据库安全移除 cf-tunnel-in 原生入站
@@ -2518,7 +2534,7 @@ disable_caddy_proxy() {
   fi
 
   if [[ "${SOUT_CALLED_FROM_WEB:-0}" != "1" ]]; then
-    systemctl restart sout 2>/dev/null || rc-service sout restart 2>/dev/null || systemctl restart fanout 2>/dev/null || true
+    restart_sout_service
   fi
   echo -e "  ${G}[✓] 已成功关闭隧道反代，所有服务已恢复公网 0.0.0.0 直连模式 (已还原证书与配置)：${N}"
   echo -e "      • sout 管理面板: ${B}http://${public_ip}:8899/$(cat "${WORK_DIR}/basepath" 2>/dev/null || echo "")/${N}"
@@ -2748,7 +2764,7 @@ reload_caddy_proxy() {
 
 
   # 重启/重载 sout 服务以激活内置网关
-  systemctl restart sout 2>/dev/null || rc-service sout restart 2>/dev/null || service sout restart 2>/dev/null || true
+  restart_sout_service
 
   echo -e "  ${G}[✓] 内置轻量反代网关已重新加载最新分流配置并成功启动！${N}"
   echo
@@ -2907,13 +2923,13 @@ do_apply_cf_ssl_cert() {
   "$acme_cmd" --install-cert -d "${domain}" --ecc \
     --key-file "${cert_dir}/privkey.pem" \
     --fullchain-file "${cert_dir}/fullchain.pem" \
-    --reloadcmd "systemctl restart sout 2>/dev/null || rc-service sout restart 2>/dev/null || true" >/dev/null 2>&1 || true
+    --reloadcmd "command -v systemctl >/dev/null 2>&1 && systemctl restart sout || (rc-service sout zap 2>/dev/null; rc-service sout restart 2>/dev/null) || true" >/dev/null 2>&1 || true
 
   if [[ ! -s "${cert_dir}/fullchain.pem" ]]; then
     "$acme_cmd" --install-cert -d "${domain}" \
       --key-file "${cert_dir}/privkey.pem" \
       --fullchain-file "${cert_dir}/fullchain.pem" \
-      --reloadcmd "systemctl restart sout 2>/dev/null || rc-service sout restart 2>/dev/null || true" >/dev/null 2>&1 || true
+      --reloadcmd "command -v systemctl >/dev/null 2>&1 && systemctl restart sout || (rc-service sout zap 2>/dev/null; rc-service sout restart 2>/dev/null) || true" >/dev/null 2>&1 || true
   fi
 
   # 若通过 acme.sh 自身安装仍然为空，直接从 /root/.acme.sh/${domain}* 目录兜底拷贝
@@ -3185,11 +3201,7 @@ apply_tuic_hy2_to_singbox() {
   fi
   rm -f "${sb_conf}.bak"
 
-  if is_sui_backend; then
-    systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || true
-  else
-    systemctl restart sout 2>/dev/null || rc-service sout restart 2>/dev/null || true
-  fi
+  restart_backend_service
 
   local insec_flag=0
   [[ "$is_insecure" == "true" ]] && insec_flag=1
