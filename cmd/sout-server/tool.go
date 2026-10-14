@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/ecdh"
 	crand "crypto/rand"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -2525,11 +2527,10 @@ func toolSUIInitBaseNodes(args []string) {
 		// cf-tunnel-in 原生入站
 		if tunnelToken != "" {
 			cfPayload := map[string]any{
-				"id":     0,
-				"type":   "cloudflared",
-				"tag":    "cf-tunnel-in",
-				"token":  tunnelToken,
-				"listen": "127.0.0.1",
+				"id":    0,
+				"type":  "cloudflared",
+				"tag":   "cf-tunnel-in",
+				"token": tunnelToken,
 			}
 			payCF, _ := json.Marshal(cfPayload)
 			_, _ = suiAPICall(baseURL, token, "POST", "save", url.Values{
@@ -2663,6 +2664,23 @@ func toolSUIInitBaseNodes(args []string) {
 			},
 			"transport": map[string]any{"type": "ws", "path": cleanWS},
 		})
+		var privStr string
+		if priv, err := ecdh.X25519().GenerateKey(crand.Reader); err == nil {
+			privStr = base64.RawURLEncoding.EncodeToString(priv.Bytes())
+		}
+		shortBytes := make([]byte, 4)
+		_, _ = crand.Read(shortBytes)
+		shortID := hex.EncodeToString(shortBytes)
+
+		realityMap := map[string]any{
+			"enabled":   true,
+			"handshake": map[string]any{"server": "apple.com", "server_port": 443},
+		}
+		if privStr != "" {
+			realityMap["private_key"] = privStr
+			realityMap["short_id"] = []string{shortID}
+		}
+
 		newInbs = append(newInbs, map[string]any{
 			"type":        "vless",
 			"tag":         fmt.Sprintf("vlre-%s", genRandSuffix()),
@@ -2674,18 +2692,14 @@ func toolSUIInitBaseNodes(args []string) {
 			"tls": map[string]any{
 				"enabled":     true,
 				"server_name": "apple.com",
-				"reality": map[string]any{
-					"enabled":   true,
-					"handshake": map[string]any{"server": "apple.com", "server_port": 443},
-				},
+				"reality":     realityMap,
 			},
 		})
 		if tunnelToken != "" {
 			newInbs = append(newInbs, map[string]any{
-				"type":   "cloudflared",
-				"tag":    "cf-tunnel-in",
-				"token":  tunnelToken,
-				"listen": "127.0.0.1",
+				"type":  "cloudflared",
+				"tag":   "cf-tunnel-in",
+				"token": tunnelToken,
 			})
 		}
 		conf["inbounds"] = newInbs
