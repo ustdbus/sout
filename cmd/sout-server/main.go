@@ -102,7 +102,12 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-stop
-		log.Println("正在清理所有隧道...")
+		log.Println("收到退出信号，正在快速清理服务...")
+		go func() {
+			time.Sleep(2 * time.Second)
+			log.Println("清理超时，强制退出")
+			os.Exit(0)
+		}()
 		ShutdownGateway()
 		mgr.Shutdown()
 		closePanel()

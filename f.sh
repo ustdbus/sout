@@ -2043,8 +2043,11 @@ sys.exit(0 if latest > cur else 1)
   # 1. 下载前执行页缓存回收，降低内存碎片和缓存占用
   (sync; echo 3 > /proc/sys/vm/drop_caches) 2>/dev/null || true
 
-  # 2. 解包覆盖前停止 sout 释放其占用的常驻内存
-  svc_stop
+  # 2. 解包覆盖前彻底停止并强杀 sout 旧进程，防止端口与隧道冲突
+  svc_stop 2>/dev/null || true
+  pkill -9 -f "/usr/local/bin/sout-server" 2>/dev/null || true
+  pkill -9 -f "sout-server" 2>/dev/null || true
+  sleep 1
 
   echo -e "  正在下载并解压: ${tar_url} ..."
   # 3. 采用管道流式下载解压；若管道解包失败则平滑降级到带重试的文件下载解压

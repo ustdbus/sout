@@ -1343,6 +1343,11 @@ MGR=$(detect_pkg_mgr)
 
 
 echo "[2/6] 获取 sout 二进制文件..."
+# 覆盖安装前彻底关停并清理残留旧进程，防止端口与隧道抢占
+svc_stop 2>/dev/null || true
+pkill -9 -f "/usr/local/bin/sout-server" 2>/dev/null || true
+pkill -9 -f "sout-server" 2>/dev/null || true
+sleep 1
 ARCH=$(uname -m)
 case "$ARCH" in
   x86_64)  GOARCH=amd64 ;;

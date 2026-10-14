@@ -16,6 +16,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/net/proxy"
+
 	sbox "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	sbcertificate "github.com/sagernet/sing-box/adapter/certificate"
@@ -657,14 +659,65 @@ func (o *soutDynamicOutbound) endpointFor(ctx context.Context, destination M.Soc
 			return nil, destination, fmt.Errorf("域名 %s 仅解析到 IPv6 且当前出口不支持 IPv6，已安全阻断以防真实 IPv6 泄露", destination.Fqdn)
 		}
 	}
-	if outboundBox == nil {
-		return nil, destination, fmt.Errorf("内嵌出口引擎未就绪")
+	if outboundBox != nil {
+		if endpoint, found := outboundBox.Endpoint().Get(route.endpoint); found {
+			return endpoint, destination, nil
+		}
 	}
-	endpoint, found := outboundBox.Endpoint().Get(route.endpoint)
-	if !found {
-		return nil, destination, fmt.Errorf("入站 %s 的出口已移除", metadata.Inbound)
+
+	// 兜底自愈：如果内存 Endpoint 尚未就绪，但该 slot 的隧道在运行，通过本地 SOCKS5 端口直接转发
+	o.engine.mu.Lock()
+	var fallbackTunnel *Tunnel
+	for _, t := range o.engine.activeTunnels {
+		if t != nil && t.Port > 0 {
+			epTag := fmt.Sprintf("soutopenvpn%d", t.Slot)
+			if t.CustomProto == "wireguard" || t.Node.Protocol == "wireguard" {
+				epTag = fmt.Sprintf("soutwireguard%d", t.Slot)
+			}
+			if epTag == route.endpoint || len(o.engine.activeTunnels) == 1 {
+				fallbackTunnel = t
+				break
+			}
+		}
 	}
-	return endpoint, destination, nil
+	listenIP := o.engine.listenIP
+	o.engine.mu.Unlock()
+
+	if fallbackTunnel != nil {
+		cred := fallbackTunnel.credential()
+		return &socksFallbackDialer{
+			serverAddr: fmt.Sprintf("%s:%d", listenIP, fallbackTunnel.Port),
+			username:   cred.User,
+			password:   cred.Pass,
+		}, destination, nil
+	}
+
+	return nil, destination, fmt.Errorf("入站 %s 的出口已移除", metadata.Inbound)
+}
+
+type socksFallbackDialer struct {
+	serverAddr string
+	username   string
+	password   string
+}
+
+func (d *socksFallbackDialer) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	var auth *proxy.Auth
+	if d.username != "" && d.password != "" {
+		auth = &proxy.Auth{User: d.username, Password: d.password}
+	}
+	dialer, err := proxy.SOCKS5("tcp", d.serverAddr, auth, proxy.Direct)
+	if err != nil {
+		return nil, err
+	}
+	if ctxDialer, ok := dialer.(proxy.ContextDialer); ok {
+		return ctxDialer.DialContext(ctx, network, destination.String())
+	}
+	return dialer.Dial(network, destination.String())
+}
+
+func (d *socksFallbackDialer) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	return nil, fmt.Errorf("SOCKS5 fallback 暂不支持 UDP 代理")
 }
 
 func isEmbeddedEndpointInbound(tag string) bool {
