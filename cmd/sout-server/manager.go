@@ -68,7 +68,7 @@ type Manager struct {
 
 func NewManager(maxSlots int, workDir string) *Manager {
 	initVPNGateToggle(workDir)
-	engine, err := newEmbeddedEngine("127.0.0.1")
+	engine, err := getOrInitEmbeddedEngine("127.0.0.1")
 	if err != nil {
 		log.Printf("初始化内嵌 sing-box 引擎警告: %v", err)
 	}

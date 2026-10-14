@@ -202,7 +202,21 @@ func (e *embeddedEngine) rebuildInboundBoxLocked() error {
 	}
 	sort.Strings(tags)
 	for _, tag := range tags {
-		inboundsRaw = append(inboundsRaw, e.inboundConfigs[tag])
+		cfg := e.inboundConfigs[tag]
+		typ, _ := cfg["type"].(string)
+		if users, ok := cfg["users"].([]any); ok {
+			for _, u := range users {
+				if uMap, ok := u.(map[string]any); ok {
+					if typ == "vless" || typ == "vmess" {
+						delete(uMap, "password")
+					} else if typ == "hysteria2" || typ == "hy2" || typ == "trojan" || typ == "shadowsocks" || typ == "ss" {
+						delete(uMap, "uuid")
+						delete(uMap, "flow")
+					}
+				}
+			}
+		}
+		inboundsRaw = append(inboundsRaw, cfg)
 	}
 
 	dnsConfig := map[string]any{
@@ -668,13 +682,14 @@ func (o *soutDynamicOutbound) endpointFor(ctx context.Context, destination M.Soc
 	// 兜底自愈：如果内存 Endpoint 尚未就绪，但该 slot 的隧道在运行，通过本地 SOCKS5 端口直接转发
 	o.engine.mu.Lock()
 	var fallbackTunnel *Tunnel
+	slotFromUser := parseSlotFromClientName(metadata.User)
 	for _, t := range o.engine.activeTunnels {
 		if t != nil && t.Port > 0 {
 			epTag := fmt.Sprintf("soutopenvpn%d", t.Slot)
 			if t.CustomProto == "wireguard" || t.Node.Protocol == "wireguard" {
 				epTag = fmt.Sprintf("soutwireguard%d", t.Slot)
 			}
-			if epTag == route.endpoint || len(o.engine.activeTunnels) == 1 {
+			if epTag == route.endpoint || (slotFromUser > 0 && t.Slot == slotFromUser) || len(o.engine.activeTunnels) == 1 {
 				fallbackTunnel = t
 				break
 			}
@@ -692,7 +707,10 @@ func (o *soutDynamicOutbound) endpointFor(ctx context.Context, destination M.Soc
 		}, destination, nil
 	}
 
-	return nil, destination, fmt.Errorf("入站 %s 的出口已移除", metadata.Inbound)
+	if metadata.User != "" {
+		return nil, destination, fmt.Errorf("分流用户 %s (入站 %s) 指定出口 %s 不可用或未就绪", metadata.User, metadata.Inbound, route.endpoint)
+	}
+	return nil, destination, fmt.Errorf("入站 %s 指定出口 %s 不可用或未就绪", metadata.Inbound, route.endpoint)
 }
 
 type socksFallbackDialer struct {

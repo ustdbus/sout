@@ -45,7 +45,7 @@ func (sb *SingBox) getEngine() *embeddedEngine {
 	if sb.engine != nil {
 		return sb.engine
 	}
-	sb.engine = getEmbeddedEngine()
+	sb.engine, _ = getOrInitEmbeddedEngine("127.0.0.1")
 	return sb.engine
 }
 
@@ -784,6 +784,13 @@ func (sb *SingBox) cleanupAndMigrateLegacyClients(cfg map[string]any) bool {
 			}
 			if name != "" {
 				seenNames[name] = true
+			}
+			// 严格按协议净化字段，杜绝非法字段导致 sing-box 反序列化崩溃
+			if typ == "vless" || typ == "vmess" {
+				delete(uMap, "password")
+			} else if typ == "hysteria2" || typ == "hy2" || typ == "trojan" || typ == "shadowsocks" || typ == "ss" {
+				delete(uMap, "uuid")
+				delete(uMap, "flow")
 			}
 			cleanUsers = append(cleanUsers, uMap)
 		}
