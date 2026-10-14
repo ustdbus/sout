@@ -127,6 +127,11 @@ EOF
 }
 
 restore_nat64_if_temporary() {
+  if [[ "${IS_PURE_IPV6:-0}" == "1" ]]; then
+    # 纯 IPv6 机器必须依赖公共 DNS64/NAT64 才能访问纯 IPv4 资源，安装完成后永久保持该解析配置
+    rm -f "$SOUT_NAT64_BACKUP" 2>/dev/null || true
+    return 0
+  fi
   if [[ "${SOUT_CONFIGURED_NAT64:-0}" == "1" && -f "$SOUT_NAT64_BACKUP" ]]; then
     echo
     echo "  [+] 安装与配置流程已全部就绪，正在安全还原安装前备份的 DNS 配置..."
@@ -1343,11 +1348,6 @@ MGR=$(detect_pkg_mgr)
 
 
 echo "[2/6] 获取 sout 二进制文件..."
-# 覆盖安装前彻底关停并清理残留旧进程，防止端口与隧道抢占
-svc_stop 2>/dev/null || true
-pkill -9 -f "/usr/local/bin/sout-server" 2>/dev/null || true
-pkill -9 -f "sout-server" 2>/dev/null || true
-sleep 1
 ARCH=$(uname -m)
 case "$ARCH" in
   x86_64)  GOARCH=amd64 ;;
@@ -1368,7 +1368,16 @@ else
     "https://ghproxy.net/https://github.com/${REPO}/releases/latest/download/sout-linux-${GOARCH}.tar.gz"
   )
   sout_dl_ok=0
+
+  # 若本机运行着旧版且有就绪 SOCKS5 代理端口，优先尝试带代理高速拉取
+  active_socks_port=$(grep -oE '"port"[[:space:]]*:[[:space:]]*[0-9]+' "${WORK_DIR}/state.json" 2>/dev/null | head -1 | grep -oE '[0-9]+' || true)
   for u in "${sout_urls[@]}"; do
+    if [[ -n "$active_socks_port" ]] && (echo > /dev/tcp/127.0.0.1/"$active_socks_port") >/dev/null 2>&1; then
+      if curl -fsSL --socks5-hostname 127.0.0.1:"$active_socks_port" --connect-timeout 8 --max-time 60 "$u" -o "$TMP/f.tar.gz" 2>/dev/null && tar -tzf "$TMP/f.tar.gz" >/dev/null 2>&1; then
+        sout_dl_ok=1
+        break
+      fi
+    fi
     if curl -fL -# --connect-timeout 10 --max-time 120 "$u" -o "$TMP/f.tar.gz" && tar -tzf "$TMP/f.tar.gz" >/dev/null 2>&1; then
       sout_dl_ok=1
       break
@@ -1380,6 +1389,13 @@ else
     exit 1
   fi
   tar xzf "$TMP/f.tar.gz" -C "$TMP"
+
+  # 下载并解包成功后，安全停止旧服务并执行毫秒级替换
+  svc_stop 2>/dev/null || true
+  pkill -9 -f "/usr/local/bin/sout-server" 2>/dev/null || true
+  pkill -9 -f "sout-server" 2>/dev/null || true
+  sleep 0.5
+
   if [[ -f "$TMP/sout-server" ]]; then
     install -m 755 "$TMP/sout-server" "$BIN"
   elif [[ -f "$TMP/sout" ]]; then

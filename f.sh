@@ -1972,6 +1972,60 @@ update_singbox_kernel() {
   return 0
 }
 
+get_sout_warp_proxy() {
+  local st_file="${WORK_DIR}/state.json"
+  [[ ! -f "$st_file" ]] && return 1
+
+  local proxy_str
+  proxy_str=$(python3 -c "
+import json, sys
+try:
+    with open('${st_file}', 'r') as f:
+        data = json.load(f)
+    tunnels = data.get('tunnels', [])
+    for t in tunnels:
+        if t.get('is_chain_upstream') and t.get('status') == 'up' and t.get('port', 0) > 0:
+            user = t.get('socks_user', '')
+            pw = t.get('socks_pass', '')
+            port = t.get('port')
+            auth = f'{user}:{pw}@' if user else ''
+            print(f'{auth}127.0.0.1:{port}')
+            sys.exit(0)
+    for t in tunnels:
+        c = str(t.get('country', '')).upper()
+        rem = str(t.get('remark', '')).upper()
+        h = str(t.get('hostname', '')).lower()
+        if ('WARP' in c or 'WARP' in rem or 'cloudflare' in h or 'cs-wg' in h) and t.get('status') == 'up' and t.get('port', 0) > 0:
+            user = t.get('socks_user', '')
+            pw = t.get('socks_pass', '')
+            port = t.get('port')
+            auth = f'{user}:{pw}@' if user else ''
+            print(f'{auth}127.0.0.1:{port}')
+            sys.exit(0)
+    for t in tunnels:
+        if t.get('status') == 'up' and t.get('port', 0) > 0:
+            user = t.get('socks_user', '')
+            pw = t.get('socks_pass', '')
+            port = t.get('port')
+            auth = f'{user}:{pw}@' if user else ''
+            print(f'{auth}127.0.0.1:{port}')
+            sys.exit(0)
+except Exception:
+    pass
+sys.exit(1)
+" 2>/dev/null || true)
+
+  if [[ -n "$proxy_str" ]]; then
+    local p_port
+    p_port=$(echo "$proxy_str" | awk -F: '{print $NF}')
+    if (echo > /dev/tcp/127.0.0.1/"$p_port") >/dev/null 2>&1; then
+      echo "$proxy_str"
+      return 0
+    fi
+  fi
+  return 1
+}
+
 check_and_update() {
   echo
   echo -e "${B}========================================${N}"
@@ -2004,18 +2058,40 @@ check_and_update() {
   fi
   [[ -z "$cur_ver" ]] && cur_ver="dev"
 
-  local rel_json tag_name html_url
-  rel_json=$(curl -fsSLm 8 "https://api.github.com/repos/ustdbus/sout/releases/latest" 2>/dev/null || true)
-  if [[ -z "$rel_json" ]]; then
-    echo -e "  ${R}检查更新失败，无法连接 GitHub API${N}"
-    return
+  local proxy_auth
+  proxy_auth=$(get_sout_warp_proxy 2>/dev/null || true)
+
+  local rel_json="" tag_name="" html_url=""
+  if [[ -n "$proxy_auth" ]]; then
+    echo -e "  ${C}[⚡] 检测到内部就绪出站隧道，启用高速 WARP/SOCKS5 出口直连 GitHub...${N}"
+    rel_json=$(curl -fsSL --socks5-hostname "$proxy_auth" --connect-timeout 4 -m 10 "https://api.github.com/repos/ustdbus/sout/releases/latest" 2>/dev/null || true)
   fi
 
-  tag_name=$(echo "$rel_json" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | cut -d'"' -f4)
-  html_url=$(echo "$rel_json" | grep -oE '"html_url"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | cut -d'"' -f4)
+  # 若 WARP 通道未就绪或请求失败，自动降级为直连 (NAT64/DNS64 兜底)
+  if [[ -z "$rel_json" ]]; then
+    rel_json=$(curl -fsSL --connect-timeout 8 -m 18 "https://api.github.com/repos/ustdbus/sout/releases/latest" 2>/dev/null || true)
+  fi
+
+  if [[ -n "$rel_json" ]]; then
+    tag_name=$(echo "$rel_json" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | cut -d'"' -f4)
+    html_url=$(echo "$rel_json" | grep -oE '"html_url"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | cut -d'"' -f4)
+  fi
+
+  # 若 GitHub API 触发频次限制 (403 Rate Limit) 或解析异常，通过 Release 页面 302 重定向解析 (完全不消耗 API 额度)
+  if [[ -z "$tag_name" ]]; then
+    local redir_url=""
+    if [[ -n "$proxy_auth" ]]; then
+      redir_url=$(curl -sIL --socks5-hostname "$proxy_auth" --connect-timeout 4 -m 8 -o /dev/null -w "%{url_effective}" "https://github.com/ustdbus/sout/releases/latest" 2>/dev/null || true)
+    fi
+    if [[ -z "$redir_url" || "$redir_url" == *"releases/latest"* ]]; then
+      redir_url=$(curl -sIL --connect-timeout 8 -m 18 -o /dev/null -w "%{url_effective}" "https://github.com/ustdbus/sout/releases/latest" 2>/dev/null || true)
+    fi
+    tag_name=$(echo "$redir_url" | grep -oE 'tag/v[0-9.]+' | cut -d'/' -f2)
+    html_url="$redir_url"
+  fi
 
   if [[ -z "$tag_name" ]]; then
-    echo -e "  ${R}未能获取到最新版本信息${N}"
+    echo -e "  ${R}未能获取到最新版本信息，请检查网络连接${N}"
     return
   fi
 
@@ -2067,26 +2143,38 @@ sys.exit(0 if latest > cur else 1)
   tmp_dir=$(mktemp -d)
   trap 'rm -rf "$tmp_dir"' RETURN
 
-  # 1. 下载前执行页缓存回收，降低内存碎片和缓存占用
-  (sync; echo 3 > /proc/sys/vm/drop_caches) 2>/dev/null || true
+  # 1. 优先在服务运行状态下利用内部 WARP 高速出网通道极速拉取并校验发布包
+  echo -e "  正在下载发布包: ${tar_url} ..."
+  local dl_ok=0
+  if [[ -n "$proxy_auth" ]]; then
+    echo -e "  ${C}[⚡] 启用 WARP 高速通道下载并解压...${N}"
+    if curl -fsSL --socks5-hostname "$proxy_auth" --retry 2 --connect-timeout 8 -m 60 "$tar_url" -o "$tmp_dir/sout.tar.gz" 2>/dev/null && tar -zxf "$tmp_dir/sout.tar.gz" -C "$tmp_dir" 2>/dev/null; then
+      dl_ok=1
+    fi
+  fi
+  if [[ "$dl_ok" -eq 0 ]]; then
+    # 回退到直连下载
+    if ! (curl -fsSL --connect-timeout 10 -m 120 "$tar_url" | tar -zxf - -C "$tmp_dir" 2>/dev/null); then
+      if curl -fsSL --retry 3 --connect-timeout 15 -m 180 "$tar_url" -o "$tmp_dir/sout.tar.gz" && tar -zxf "$tmp_dir/sout.tar.gz" -C "$tmp_dir" 2>/dev/null; then
+        dl_ok=1
+      fi
+    else
+      dl_ok=1
+    fi
+  fi
 
-  # 2. 解包覆盖前彻底停止并强杀 sout 旧进程，防止端口与隧道冲突
+  if [[ "$dl_ok" -eq 0 ]]; then
+    echo -e "  ${R}下载或解压发布包失败，请检查网络！${N}"
+    return 1
+  fi
+  rm -f "$tmp_dir/sout.tar.gz" 2>/dev/null || true
+
+  # 2. 下载与校验完成后，执行页缓存回收，并彻底停止旧服务进行毫秒级替换
+  (sync; echo 3 > /proc/sys/vm/drop_caches) 2>/dev/null || true
   svc_stop 2>/dev/null || true
   pkill -9 -f "/usr/local/bin/sout-server" 2>/dev/null || true
   pkill -9 -f "sout-server" 2>/dev/null || true
-  sleep 1
-
-  echo -e "  正在下载并解压: ${tar_url} ..."
-  # 3. 采用管道流式下载解压；若管道解包失败则平滑降级到带重试的文件下载解压
-  if ! (curl -fsSL "$tar_url" | tar -zxf - -C "$tmp_dir"); then
-    echo -e "  ${Y}[!] 管道流式解压失败，尝试回退到带重试的文件下载...${N}"
-    if ! curl -fsSL --retry 3 --connect-timeout 15 "$tar_url" -o "$tmp_dir/sout.tar.gz" || ! tar -zxf "$tmp_dir/sout.tar.gz" -C "$tmp_dir"; then
-      echo -e "  ${R}下载或解压发布包失败！正在恢复服务...${N}"
-      svc_start
-      return 1
-    fi
-    rm -f "$tmp_dir/sout.tar.gz" 2>/dev/null || true
-  fi
+  sleep 0.5
 
   # 4. 将解包出的二进制用 mv -f 覆盖至 $BIN 并赋予可执行权限
   if [[ -f "$tmp_dir/sout-server" ]]; then
