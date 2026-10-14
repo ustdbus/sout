@@ -839,7 +839,7 @@ func toolSUISyncListen(args []string) {
 	if !hasCmd("sqlite3") {
 		return
 	}
-	out, err := exec.Command("sqlite3", dbPath, "SELECT value FROM settings WHERE key='webPort';").Output()
+	out, _ := exec.Command("sqlite3", dbPath, "SELECT value FROM settings WHERE key='webPort';").Output()
 	port := strings.TrimSpace(string(out))
 	if port == "" {
 		port = "2096"
