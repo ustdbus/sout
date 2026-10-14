@@ -2390,7 +2390,6 @@ func (sb *SingBox) DeleteBranchesBySlot(slot int, tunnels []*Tunnel) error {
 	}
 
 	// 2. 从所有 inbounds 中移除属于该 slot 的 Client
-	inboundsRaw, _ := cfg["inbounds"].([]any)
 	for _, ib := range inboundsRaw {
 		if ibMap, ok := ib.(map[string]any); ok {
 			usersRaw, hasUsers := ibMap["users"].([]any)
