@@ -145,6 +145,52 @@ func GetOrCreateSlotCredentials(slot int, remark string) (string, string) {
 	globalCreds.SlotCredentials[key] = sc
 	_ = saveCredentialsLocked()
 	return newUUID, newPass
+// AdoptLegacySlotCredentials 若指定 slot 尚无凭据，或者凭据与旧凭据不同，支持将其收纳固化覆盖到 credentials.json 中并持久化保存。
+// 确保旧客户端的 UUID 能够被 slot 继承并永久保持。
+func AdoptLegacySlotCredentials(slot int, uuid, password, remark string) bool {
+	if slot <= 0 || uuid == "" {
+		return false
+	}
+	credMu.Lock()
+	defer credMu.Unlock()
+	if globalCreds == nil {
+		loadCredentialsLocked()
+	}
+	if globalCreds.SlotCredentials == nil {
+		globalCreds.SlotCredentials = make(map[string]SlotCredential)
+	}
+
+	key := strconv.Itoa(slot)
+	existing, ok := globalCreds.SlotCredentials[key]
+	if password == "" {
+		if ok && existing.Password != "" {
+			password = existing.Password
+		} else {
+			password = generateRandomPassword(16)
+		}
+	}
+	if remark == "" && ok && existing.Remark != "" {
+		remark = existing.Remark
+	}
+
+	if ok && existing.UUID == uuid && existing.Password == password {
+		if remark != "" && existing.Remark != remark {
+			existing.Remark = remark
+			globalCreds.SlotCredentials[key] = existing
+			_ = saveCredentialsLocked()
+			return true
+		}
+		return false
+	}
+
+	globalCreds.SlotCredentials[key] = SlotCredential{
+		Slot:     slot,
+		UUID:     uuid,
+		Password: password,
+		Remark:   remark,
+	}
+	_ = saveCredentialsLocked()
+	return true
 }
 
 // ReleaseSlotCredentials 支持标记或释放指定 slot 的凭据

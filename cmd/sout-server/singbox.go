@@ -596,6 +596,264 @@ func (sb *SingBox) healCloudflareQuickTunnel(cfg map[string]any) bool {
 	return true
 }
 
+// parseTemplateIDFromClientName 从 soutu%d 或 soutu%d_s%d 中解析入站模板 ID
+func parseTemplateIDFromClientName(name string) int {
+	if !strings.HasPrefix(name, "soutu") {
+		return 0
+	}
+	rest := name[5:]
+	var numStr strings.Builder
+	for i := 0; i < len(rest); i++ {
+		if rest[i] >= '0' && rest[i] <= '9' {
+			numStr.WriteByte(rest[i])
+		} else {
+			break
+		}
+	}
+	if numStr.Len() > 0 {
+		if id, err := strconv.Atoi(numStr.String()); err == nil && id > 0 {
+			return id
+		}
+	}
+	return 0
+}
+
+// resolveSlotForLegacyUser 解析旧命名格式分流用户对应的 slot 编号
+func resolveSlotForLegacyUser(userName string, tplID int, bindings []branchBinding, tunnels []*Tunnel) int {
+	if s := parseSlotFromClientName(userName); s > 0 {
+		return s
+	}
+
+	prefix := fmt.Sprintf("soutu%d", tplID)
+	hostPart := strings.TrimPrefix(userName, prefix)
+
+	// 1. 从持久化绑定中匹配
+	for _, b := range bindings {
+		if b.TemplateID == tplID || b.TemplateID <= 0 {
+			if b.Slot > 0 {
+				if hostPart != "" && (b.Host == hostPart || sanitizeTag(b.Host) == sanitizeTag(hostPart) || strings.Contains(hostPart, sanitizeTag(b.Host)) || strings.Contains(userName, sanitizeTag(b.Host))) {
+					return b.Slot
+				}
+			}
+		}
+	}
+
+	// 2. 从活跃隧道中匹配
+	for _, t := range tunnels {
+		if t != nil && t.Slot > 0 {
+			h := t.Node.HostName
+			if hostPart != "" && (h == hostPart || sanitizeTag(h) == sanitizeTag(hostPart) || strings.Contains(hostPart, sanitizeTag(h)) || strings.Contains(userName, sanitizeTag(h))) {
+				return t.Slot
+			}
+		}
+	}
+
+	// 3. 若持久化绑定中该模板已有有效 slot，沿用首个 slot
+	for _, b := range bindings {
+		if (b.TemplateID == tplID || b.TemplateID <= 0) && b.Slot > 0 {
+			return b.Slot
+		}
+	}
+
+	// 4. 默认首个分流对应 slot 1
+	return 1
+}
+
+// cleanupAndMigrateLegacyClients 扫描清理存量旧格式分流客户端（soutu%d[host]），继承旧凭据至对应 slot，消除重复节点
+func (sb *SingBox) cleanupAndMigrateLegacyClients(cfg map[string]any) bool {
+	if cfg == nil {
+		return false
+	}
+
+	inboundsRaw, ok := cfg["inbounds"].([]any)
+	if !ok || len(inboundsRaw) == 0 {
+		return false
+	}
+
+	bindings := sb.loadBranchBindings()
+	tunnels := sb.lastTunnels
+	changed := false
+	migratedMap := make(map[string]string) // oldUserName -> canonicalName
+
+	for idx, ibRaw := range inboundsRaw {
+		ibMap, ok := ibRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		typ, _ := ibMap["type"].(string)
+		if typ == "cloudflared" || typ == "direct" || typ == "block" {
+			continue
+		}
+
+		usersRaw, ok := ibMap["users"].([]any)
+		if !ok || len(usersRaw) == 0 {
+			continue
+		}
+
+		baseID := (idx + 1) * 1000
+		markRemove := make(map[string]bool)
+
+		for _, uRaw := range usersRaw {
+			uMap, ok := uRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			userName, _ := uMap["name"].(string)
+			// 仅处理旧格式分流用户 soutu%d[host]（非 _s%d 结尾）
+			if !strings.HasPrefix(userName, "soutu") || parseSlotFromClientName(userName) > 0 {
+				continue
+			}
+
+			tplID := parseTemplateIDFromClientName(userName)
+			if tplID <= 0 {
+				tplID = baseID
+			}
+
+			slot := resolveSlotForLegacyUser(userName, tplID, bindings, tunnels)
+			if slot <= 0 {
+				slot = 1
+			}
+
+			canonicalName := fmt.Sprintf("soutu%d_s%d", tplID, slot)
+			oldUUID, _ := uMap["uuid"].(string)
+			oldPass, _ := uMap["password"].(string)
+			if oldUUID == "" && oldPass != "" {
+				oldUUID = oldPass
+			}
+			if oldPass == "" && oldUUID != "" {
+				oldPass = oldUUID
+			}
+
+			// 继承并固化旧客户端凭据到 slot
+			if oldUUID != "" || oldPass != "" {
+				AdoptLegacySlotCredentials(slot, oldUUID, oldPass, userName)
+			}
+
+			// 检查同一 inbound 下是否已存在规范客户端
+			var canonicalUser map[string]any
+			for _, otherRaw := range usersRaw {
+				if otherMap, ok := otherRaw.(map[string]any); ok {
+					if otherMap["name"] == canonicalName {
+						canonicalUser = otherMap
+						break
+					}
+				}
+			}
+
+			if canonicalUser != nil {
+				// 若同一 inbound 下已存在对应的规范客户端 soutu%d_s%d，同步更新其 UUID 与 Password
+				if oldUUID != "" {
+					canonicalUser["uuid"] = oldUUID
+				}
+				if oldPass != "" {
+					canonicalUser["password"] = oldPass
+				}
+				markRemove[userName] = true
+			} else {
+				// 若尚不存在规范客户端，直接重命名为规范名
+				uMap["name"] = canonicalName
+				if oldUUID != "" {
+					uMap["uuid"] = oldUUID
+				}
+				if oldPass != "" {
+					uMap["password"] = oldPass
+				}
+			}
+
+			migratedMap[userName] = canonicalName
+			changed = true
+		}
+
+		// 净化 users 数组：移除待删除旧用户，并按用户名去重
+		var cleanUsers []any
+		seenNames := make(map[string]bool)
+		for _, uRaw := range usersRaw {
+			uMap, ok := uRaw.(map[string]any)
+			if !ok {
+				cleanUsers = append(cleanUsers, uRaw)
+				continue
+			}
+			name, _ := uMap["name"].(string)
+			if markRemove[name] {
+				changed = true
+				continue
+			}
+			if name != "" && seenNames[name] {
+				changed = true
+				continue
+			}
+			if name != "" {
+				seenNames[name] = true
+			}
+			cleanUsers = append(cleanUsers, uMap)
+		}
+		ibMap["users"] = cleanUsers
+	}
+
+	// 同步净化 route.rules：替换旧用户名并清理冗余规则
+	routeRaw, _ := cfg["route"].(map[string]any)
+	if routeRaw != nil {
+		rulesRaw, _ := routeRaw["rules"].([]any)
+		var newRules []any
+		routedUsers := make(map[string]bool)
+
+		for _, rItem := range rulesRaw {
+			rMap, ok := rItem.(map[string]any)
+			if !ok {
+				newRules = append(newRules, rItem)
+				continue
+			}
+
+			authUsersRaw, hasAuth := rMap["auth_user"].([]any)
+			if !hasAuth || len(authUsersRaw) == 0 {
+				newRules = append(newRules, rMap)
+				continue
+			}
+
+			var cleanAuthUsers []any
+			for _, u := range authUsersRaw {
+				uStr, ok := u.(string)
+				if !ok || uStr == "" {
+					continue
+				}
+
+				if canonical, exists := migratedMap[uStr]; exists {
+					uStr = canonical
+					changed = true
+				} else if strings.HasPrefix(uStr, "soutu") && parseSlotFromClientName(uStr) == 0 {
+					tplID := parseTemplateIDFromClientName(uStr)
+					if tplID <= 0 {
+						tplID = 1000
+					}
+					slot := resolveSlotForLegacyUser(uStr, tplID, bindings, tunnels)
+					canonical := fmt.Sprintf("soutu%d_s%d", tplID, slot)
+					uStr = canonical
+					changed = true
+				}
+
+				if !routedUsers[uStr] {
+					routedUsers[uStr] = true
+					cleanAuthUsers = append(cleanAuthUsers, uStr)
+				} else {
+					changed = true
+				}
+			}
+
+			if len(cleanAuthUsers) > 0 {
+				rMap["auth_user"] = cleanAuthUsers
+				newRules = append(newRules, rMap)
+			} else {
+				// 冗余规则被清理
+				changed = true
+			}
+		}
+
+		routeRaw["rules"] = ensureDirectPrivateRules(newRules)
+	}
+
+	return changed
+}
+
 func (sb *SingBox) loadConfig() (map[string]any, error) {
 	data, err := os.ReadFile(sb.configPath)
 	if err != nil {
@@ -613,7 +871,14 @@ func (sb *SingBox) loadConfig() (map[string]any, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("解析 sing-box 配置 JSON 失败: %w", err)
 	}
+	changed := false
 	if sb.healCloudflareQuickTunnel(cfg) {
+		changed = true
+	}
+	if sb.cleanupAndMigrateLegacyClients(cfg) {
+		changed = true
+	}
+	if changed {
 		_ = sb.saveConfig(cfg)
 	}
 	return cfg, nil
@@ -639,6 +904,8 @@ func (sb *SingBox) syncToEmbedded(cfg map[string]any) error {
 	if eng == nil {
 		return fmt.Errorf("内嵌 sing-box 未就绪")
 	}
+
+	sb.cleanupAndMigrateLegacyClients(cfg)
 
 	inboundsRaw, _ := cfg["inbounds"].([]any)
 	var inboundsToSync []map[string]any
@@ -680,22 +947,49 @@ func (sb *SingBox) syncToEmbedded(cfg map[string]any) error {
 				} else if outbound == "block" {
 					userRoutes[uStr] = embeddedRoute{block: true}
 				} else {
-					var epTag string
-					for _, t := range sb.lastTunnels {
-						hTag := "sout" + sanitizeTag(t.Node.HostName)
-						if hTag == outbound || ("sout" + t.Node.HostName) == outbound {
-							if t.CustomProto == "wireguard" || t.Node.Protocol == "wireguard" {
-								epTag = fmt.Sprintf("soutwireguard%d", t.Slot)
-							} else {
-								epTag = fmt.Sprintf("soutopenvpn%d", t.Slot)
+					slot := parseSlotFromClientName(uStr)
+					if slot > 0 {
+						isWG := false
+						for _, t := range sb.lastTunnels {
+							if t != nil && t.Slot == slot {
+								if t.CustomProto == "wireguard" || t.Node.Protocol == "wireguard" {
+									isWG = true
+								}
+								break
 							}
-							break
 						}
-					}
-					if epTag != "" {
+						if !isWG && eng != nil {
+							eng.mu.Lock()
+							if t, ok := eng.activeTunnels[slot]; ok && t != nil {
+								if t.CustomProto == "wireguard" || t.Node.Protocol == "wireguard" {
+									isWG = true
+								}
+							}
+							eng.mu.Unlock()
+						}
+						epTag := fmt.Sprintf("soutopenvpn%d", slot)
+						if isWG {
+							epTag = fmt.Sprintf("soutwireguard%d", slot)
+						}
 						userRoutes[uStr] = embeddedRoute{endpoint: epTag}
 					} else {
-						userRoutes[uStr] = embeddedRoute{block: true}
+						var epTag string
+						for _, t := range sb.lastTunnels {
+							hTag := "sout" + sanitizeTag(t.Node.HostName)
+							if hTag == outbound || ("sout" + t.Node.HostName) == outbound {
+								if t.CustomProto == "wireguard" || t.Node.Protocol == "wireguard" {
+									epTag = fmt.Sprintf("soutwireguard%d", t.Slot)
+								} else {
+									epTag = fmt.Sprintf("soutopenvpn%d", t.Slot)
+								}
+								break
+							}
+						}
+						if epTag != "" {
+							userRoutes[uStr] = embeddedRoute{endpoint: epTag}
+						} else {
+							userRoutes[uStr] = embeddedRoute{block: true}
+						}
 					}
 				}
 			}
@@ -1949,6 +2243,7 @@ func (sb *SingBox) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) err
 func (sb *SingBox) ResyncOutbound(t *Tunnel, tunnels []*Tunnel) error {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
+	sb.lastTunnels = tunnels
 
 	cfg, err := sb.loadConfig()
 	if err != nil {
