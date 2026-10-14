@@ -253,62 +253,7 @@ ensure_sui_log_redirect() {
   echo "  [✓] 已为 s-ui 补全日志落盘: /var/log/s-ui.log /var/log/s-ui.err（原脚本已备份）"
 }
 
-detect_adaptive_mem_tuning() {
-  local mem_kb=0
-  local swap_kb=0
-  if [[ -f /proc/meminfo ]]; then
-    mem_kb=$(grep -i 'MemTotal' /proc/meminfo 2>/dev/null | awk '{print $2}')
-    swap_kb=$(grep -i 'SwapTotal' /proc/meminfo 2>/dev/null | awk '{print $2}')
-  fi
 
-  local cg_bytes=0
-  for cg_path in /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.limit_in_bytes /sys/fs/cgroup/memory.limit_in_bytes; do
-    if [[ -f "$cg_path" ]]; then
-      local val
-      val=$(cat "$cg_path" 2>/dev/null || true)
-      if [[ "$val" =~ ^[0-9]+$ ]] && [[ "$val" -lt 1099511627776 ]]; then
-        cg_bytes="$val"
-        break
-      fi
-    fi
-  done
-
-  local sys_bytes=0
-  if [[ -n "$mem_kb" && "$mem_kb" -gt 0 ]]; then
-    sys_bytes=$(( mem_kb * 1024 ))
-  fi
-
-  local min_bytes=0
-  if [[ "$sys_bytes" -gt 0 && "$cg_bytes" -gt 0 ]]; then
-    if [[ "$sys_bytes" -lt "$cg_bytes" ]]; then
-      min_bytes="$sys_bytes"
-    else
-      min_bytes="$cg_bytes"
-    fi
-  elif [[ "$sys_bytes" -gt 0 ]]; then
-    min_bytes="$sys_bytes"
-  elif [[ "$cg_bytes" -gt 0 ]]; then
-    min_bytes="$cg_bytes"
-  fi
-
-  local mem_mb=0
-  if [[ "$min_bytes" -gt 0 ]]; then
-    mem_mb=$(( min_bytes / 1024 / 1024 ))
-  fi
-
-  HAS_SWAP=0
-  if [[ -n "$swap_kb" && "$swap_kb" =~ ^[0-9]+$ && "$swap_kb" -ge 32768 ]]; then
-    HAS_SWAP=1
-  fi
-  AUTO_HAS_SWAP="$HAS_SWAP"
-
-  AUTO_MEM_MB="$mem_mb"
-  AUTO_GOMEMLIMIT=""
-  AUTO_GOGC=""
-  # 全平台统一采用与 Ubuntu 一致的原生全速调度模式（零 GOMEMLIMIT 截断，GOGC=100）
-  AUTO_GOMEMLIMIT=""
-  AUTO_GOGC=""
-}
 
 detect_pkg_mgr() {
   if command -v apt-get >/dev/null 2>&1; then
@@ -597,7 +542,6 @@ SBCONF
 
   # 注册并启动系统服务
   echo "      正在注册 sing-box 服务 (${INIT_SYS})..."
-  detect_adaptive_mem_tuning
   local sb_env_systemd=""
   local sb_env_openrc=""
 
@@ -829,33 +773,16 @@ ${k} = ${v}"
 }
 
 optimize_low_memory() {
-  local mem_arg="${1:-}"
-  local keep_env="${2:-}"
-  detect_adaptive_mem_tuning
-  local mem_mb="${AUTO_MEM_MB:-${mem_arg:-512}}"
-  local has_swap="${AUTO_HAS_SWAP:-0}"
-
   # 1. 清理 /tmp 内存文件系统历史残留的 tar.gz 与二进制
-  rm -f /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/fanout /tmp/f.sh 2>/dev/null || true
+  rm -f /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/f.sh 2>/dev/null || true
 
   # 2. 彻底清除历史强加的 MemorySwapMax=0，避免突发瞬时尖峰因 0 容错直接触发内核 OOM Killer
   sed -i '/MemorySwapMax/d' /etc/systemd/system/*.service.d/override.conf 2>/dev/null || true
 
-  # 3. 清理 OpenRC /etc/init.d/ 历史遗留硬编码的 export GOMEMLIMIT 与 export GOGC
-  #    keep_env 非空时跳过：那是本脚本刚按自适应结果写好的护栏，不是历史遗留
-  if [[ -z "$keep_env" ]]; then
-    for s in cloudflared sing-box caddy sout fanout s-ui; do
-      if [[ -f "/etc/init.d/${s}" ]]; then
-        sed -i '/export GOMEMLIMIT/d' "/etc/init.d/${s}" 2>/dev/null || true
-        sed -i '/export GOGC/d' "/etc/init.d/${s}" 2>/dev/null || true
-      fi
-    done
-  fi
-
-  # 4. 调低 swappiness（从默认 100 降为 30），防止过早向虚拟 Swap 剧烈换页
+  # 3. 调低 swappiness（从默认 100 降为 30），防止过早向虚拟 Swap 剧烈换页
   sysctl -w vm.swappiness=30 >/dev/null 2>&1 || true
 
-  # 5. 限制 journald 运行时内存
+  # 4. 限制 journald 运行时内存
   if [[ -d /run/systemd/system ]]; then
     mkdir -p /etc/systemd/journald.conf.d 2>/dev/null || true
     cat > /etc/systemd/journald.conf.d/00-mem-limit.conf <<'EOF'
@@ -865,29 +792,6 @@ SystemMaxUse=8M
 MaxRetentionSec=3day
 EOF
     systemctl restart systemd-journald >/dev/null 2>&1 || true
-  fi
-
-  # 全平台统一原生全速模式（无论 systemd 还是 OpenRC，无论是否有 Swap），全面清除历史遗留的 GOMEMLIMIT 与 GOGC 限制，对齐 Ubuntu 原生全速调度
-  if [[ -d /run/systemd/system ]]; then
-    for svc in cloudflared sing-box caddy sout s-ui; do
-      if [[ -f "/etc/systemd/system/${svc}.service.d/override.conf" ]]; then
-        sed -i '/GOMEMLIMIT/d' "/etc/systemd/system/${svc}.service.d/override.conf" 2>/dev/null || true
-        sed -i '/GOGC/d' "/etc/systemd/system/${svc}.service.d/override.conf" 2>/dev/null || true
-        if ! grep -qE 'Environment|Exec|Limit' "/etc/systemd/system/${svc}.service.d/override.conf" 2>/dev/null; then
-          rm -f "/etc/systemd/system/${svc}.service.d/override.conf" 2>/dev/null || true
-        fi
-      fi
-    done
-    systemctl daemon-reload >/dev/null 2>&1 || true
-  fi
-
-  if [[ -f /etc/alpine-release ]] || command -v rc-service >/dev/null 2>&1; then
-    for svc in cloudflared sing-box caddy sout s-ui; do
-      if [[ -f "/etc/conf.d/${svc}" ]]; then
-        sed -i '/GOMEMLIMIT/d' "/etc/conf.d/${svc}" 2>/dev/null || true
-        sed -i '/GOGC/d' "/etc/conf.d/${svc}" 2>/dev/null || true
-      fi
-    done
   fi
 }
 
@@ -1227,15 +1131,8 @@ SEEOF
 
 svc_install() {
   echo "      正在注册系统服务 (${INIT_SYS})..."
-  detect_adaptive_mem_tuning
   local sout_env_systemd=""
   local sout_env_openrc=""
-  if [[ -n "$AUTO_GOMEMLIMIT" ]]; then
-    sout_env_systemd="Environment=\"GOMEMLIMIT=${AUTO_GOMEMLIMIT}\"
-Environment=\"GOGC=${AUTO_GOGC}\""
-    sout_env_openrc="export GOMEMLIMIT=\"${AUTO_GOMEMLIMIT}\"
-export GOGC=\"${AUTO_GOGC}\""
-  fi
 
   if [[ "$INIT_SYS" == systemd ]]; then
     cat > /etc/systemd/system/sout.service <<SVCEOF
@@ -1400,10 +1297,7 @@ else
     install -m 755 "$TMP/sout-server" "$BIN"
   elif [[ -f "$TMP/sout" ]]; then
     install -m 755 "$TMP/sout" "$BIN"
-  elif [[ -f "$TMP/fanout" ]]; then
-    install -m 755 "$TMP/fanout" "$BIN"
   fi
-  ln -sf "$BIN" /usr/local/bin/fanout 2>/dev/null || true
   if [[ -f "$TMP/f.sh" ]]; then
     install -m 755 "$TMP/f.sh" /usr/local/bin/sout
     rm -f /usr/local/bin/f /usr/local/bin/sout-cli 2>/dev/null || true
@@ -1437,7 +1331,6 @@ chmod 700 "$WORK_DIR"
 # 若为 sing-box 后端，确保持久化 panel_mode，由 sout-server 唯一内嵌内核接管
 if [[ "$backend_kind" == "sing-box" ]] || (! check_sui && check_singbox); then
   echo -n "sing-box" > "${WORK_DIR}/panel_mode"
-  detect_adaptive_mem_tuning
   if [[ "$INIT_SYS" == "systemd" ]]; then
     systemctl stop sing-box >/dev/null 2>&1 || true
     systemctl disable sing-box >/dev/null 2>&1 || true
@@ -1543,24 +1436,26 @@ BP="${BP%/}/"
 ACTUAL_PORT=$(json_get "${WORK_DIR}/settings.json" port)
 WEB_PORT="${ACTUAL_PORT:-8899}"
 
-CADDY_META="${WORK_DIR}/caddy_meta.json"
+GATEWAY_META="${WORK_DIR}/gateway_meta.json"
+[[ ! -f "$GATEWAY_META" && -f "${WORK_DIR}/caddy_meta.json" ]] && GATEWAY_META="${WORK_DIR}/caddy_meta.json"
+CADDY_META="$GATEWAY_META"
 backend_mode=$(cat "${WORK_DIR}/panel_mode" 2>/dev/null || echo "")
 
-if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$CADDY_META"; then
-  c_dom=$(json_get "$CADDY_META" domain)
-  c_sout_p=$(json_get "$CADDY_META" sout_path)
-  c_sui_p=$(json_get "$CADDY_META" sui_path)
-  c_sui_u=$(json_get "$CADDY_META" sui_user)
-  c_sui_w=$(json_get "$CADDY_META" sui_pass)
-  c_sub_p=$(json_get "$CADDY_META" sub_path)
+if [[ -f "$GATEWAY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$GATEWAY_META"; then
+  c_dom=$(json_get "$GATEWAY_META" domain)
+  c_sout_p=$(json_get "$GATEWAY_META" sout_path)
+  c_sui_p=$(json_get "$GATEWAY_META" sui_path)
+  c_sui_u=$(json_get "$GATEWAY_META" sui_user)
+  c_sui_w=$(json_get "$GATEWAY_META" sui_pass)
+  c_sub_p=$(json_get "$GATEWAY_META" sub_path)
   if [[ "$WANT_TUNNEL" != "y" && -x /usr/local/bin/sout ]]; then
-    tun_eng=$(json_get "$CADDY_META" tunnel_engine)
+    tun_eng=$(json_get "$GATEWAY_META" tunnel_engine)
     if [[ "$tun_eng" != "sing-box" ]]; then
       systemctl restart cloudflared 2>/dev/null || rc-service cloudflared restart 2>/dev/null || service cloudflared restart 2>/dev/null || true
     fi
     systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || true
     systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true
-    /usr/local/bin/sout reload_caddy >/dev/null 2>&1 || true
+    /usr/local/bin/sout reload_gateway >/dev/null 2>&1 || /usr/local/bin/sout reload_caddy >/dev/null 2>&1 || true
   fi
   echo
   echo "================================================================"

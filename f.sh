@@ -40,62 +40,6 @@ detect_init() {
 }
 INIT_SYS=$(detect_init)
 
-detect_adaptive_mem_tuning() {
-  local mem_kb=0
-  local swap_kb=0
-  if [[ -f /proc/meminfo ]]; then
-    mem_kb=$(grep -i 'MemTotal' /proc/meminfo 2>/dev/null | awk '{print $2}')
-    swap_kb=$(grep -i 'SwapTotal' /proc/meminfo 2>/dev/null | awk '{print $2}')
-  fi
-
-  local cg_bytes=0
-  for cg_path in /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.limit_in_bytes /sys/fs/cgroup/memory.limit_in_bytes; do
-    if [[ -f "$cg_path" ]]; then
-      local val
-      val=$(cat "$cg_path" 2>/dev/null || true)
-      if [[ "$val" =~ ^[0-9]+$ ]] && [[ "$val" -lt 1099511627776 ]]; then
-        cg_bytes="$val"
-        break
-      fi
-    fi
-  done
-
-  local sys_bytes=0
-  if [[ -n "$mem_kb" && "$mem_kb" -gt 0 ]]; then
-    sys_bytes=$(( mem_kb * 1024 ))
-  fi
-
-  local min_bytes=0
-  if [[ "$sys_bytes" -gt 0 && "$cg_bytes" -gt 0 ]]; then
-    if [[ "$sys_bytes" -lt "$cg_bytes" ]]; then
-      min_bytes="$sys_bytes"
-    else
-      min_bytes="$cg_bytes"
-    fi
-  elif [[ "$sys_bytes" -gt 0 ]]; then
-    min_bytes="$sys_bytes"
-  elif [[ "$cg_bytes" -gt 0 ]]; then
-    min_bytes="$cg_bytes"
-  fi
-
-  local mem_mb=0
-  if [[ "$min_bytes" -gt 0 ]]; then
-    mem_mb=$(( min_bytes / 1024 / 1024 ))
-  fi
-
-  HAS_SWAP=0
-  if [[ -n "$swap_kb" && "$swap_kb" =~ ^[0-9]+$ && "$swap_kb" -ge 32768 ]]; then
-    HAS_SWAP=1
-  fi
-  AUTO_HAS_SWAP="$HAS_SWAP"
-
-  AUTO_MEM_MB="$mem_mb"
-  AUTO_GOMEMLIMIT=""
-  AUTO_GOGC=""
-  # 全平台统一采用与 Ubuntu 一致的原生全速调度模式（零 GOMEMLIMIT 截断，GOGC=100）
-  AUTO_GOMEMLIMIT=""
-  AUTO_GOGC=""
-}
 
 # 在 OpenRC/Alpine 上自动把 systemctl 调用翻译为 rc-service / rc-update。
 # 优先从 systemd unit 生成 OpenRC init 脚本，保证 cloudflared/sing-box 可被管理。
@@ -214,7 +158,6 @@ _openrc_init_from_unit() {
     [[ -z "$command" ]] && return 1
   fi
 
-  detect_adaptive_mem_tuning
   local env_export=""
 
   local supervisor_line="command_background=\"yes\""
@@ -645,32 +588,20 @@ ${k} = ${v}"
 }
 
 optimize_low_memory() {
-  detect_adaptive_mem_tuning
-  local mem_mb="${AUTO_MEM_MB:-${1:-512}}"
-  local has_swap="${AUTO_HAS_SWAP:-0}"
-
   # 1. 清理 /tmp 内存文件系统历史残留的 tar.gz 与二进制
-  rm -f /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/fanout /tmp/f.sh 2>/dev/null || true
+  rm -f /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/f.sh 2>/dev/null || true
 
   # 2. 彻底清除历史强加的 MemorySwapMax=0，避免突发瞬时尖峰因 0 容错直接触发内核 OOM Killer
   sed -i '/MemorySwapMax/d' /etc/systemd/system/*.service.d/override.conf 2>/dev/null || true
 
-  # 3. 清理 OpenRC /etc/init.d/ 历史遗留硬编码的 export GOMEMLIMIT 与 export GOGC
-  for s in cloudflared sing-box caddy sout fanout s-ui; do
-    if [[ -f "/etc/init.d/${s}" ]]; then
-      sed -i '/export GOMEMLIMIT/d' "/etc/init.d/${s}" 2>/dev/null || true
-      sed -i '/export GOGC/d' "/etc/init.d/${s}" 2>/dev/null || true
-    fi
-  done
-
-  # 4. 优化 sing-box 核心日志级别为 warn，杜绝短连接高频刷盘消耗 CPU 与内存
+  # 3. 优化 sing-box 核心日志级别为 warn，杜绝短连接高频刷盘消耗 CPU 与内存
   if [[ -f /etc/sing-box/config.json ]]; then
     sed -i 's/"level"[[:space:]]*:[[:space:]]*"info"/"level": "warn"/g' /etc/sing-box/config.json 2>/dev/null || true
     sed -i 's/"level"[[:space:]]*:[[:space:]]*"debug"/"level": "warn"/g' /etc/sing-box/config.json 2>/dev/null || true
     sed -i 's/"level"[[:space:]]*:[[:space:]]*"trace"/"level": "warn"/g' /etc/sing-box/config.json 2>/dev/null || true
   fi
 
-  # 5. 调低 swappiness（从默认 100 降为 30），防止过早向虚拟 Swap 剧烈换页
+  # 4. 调低 swappiness（从默认 100 降为 30），防止过早向虚拟 Swap 剧烈换页
   sysctl -w vm.swappiness=30 >/dev/null 2>&1 || true
 
   # 5. 限制 journald 运行时内存
@@ -683,29 +614,6 @@ SystemMaxUse=8M
 MaxRetentionSec=3day
 EOF
     systemctl restart systemd-journald >/dev/null 2>&1 || true
-  fi
-
-  # 全平台统一原生全速模式（无论 systemd 还是 OpenRC，无论是否有 Swap），全面清除历史遗留的 GOMEMLIMIT 与 GOGC 限制，对齐 Ubuntu 原生全速调度
-  if [[ -d /run/systemd/system ]]; then
-    for svc in cloudflared sing-box caddy sout s-ui; do
-      if [[ -f "/etc/systemd/system/${svc}.service.d/override.conf" ]]; then
-        sed -i '/GOMEMLIMIT/d' "/etc/systemd/system/${svc}.service.d/override.conf" 2>/dev/null || true
-        sed -i '/GOGC/d' "/etc/systemd/system/${svc}.service.d/override.conf" 2>/dev/null || true
-        if ! grep -qE 'Environment|Exec|Limit' "/etc/systemd/system/${svc}.service.d/override.conf" 2>/dev/null; then
-          rm -f "/etc/systemd/system/${svc}.service.d/override.conf" 2>/dev/null || true
-        fi
-      fi
-    done
-    systemctl daemon-reload >/dev/null 2>&1 || true
-  fi
-
-  if [[ -f /etc/alpine-release ]] || command -v rc-service >/dev/null 2>&1; then
-    for svc in cloudflared sing-box caddy sout s-ui; do
-      if [[ -f "/etc/conf.d/${svc}" ]]; then
-        sed -i '/GOMEMLIMIT/d' "/etc/conf.d/${svc}" 2>/dev/null || true
-        sed -i '/GOGC/d' "/etc/conf.d/${svc}" 2>/dev/null || true
-      fi
-    done
   fi
 }
 
@@ -898,7 +806,9 @@ pause() {
   read -rp "  按回车键继续..." _
 }
 
-CADDY_META="${WORK_DIR}/caddy_meta.json"
+GATEWAY_META="${WORK_DIR}/gateway_meta.json"
+[[ ! -f "$GATEWAY_META" && -f "${WORK_DIR}/caddy_meta.json" ]] && GATEWAY_META="${WORK_DIR}/caddy_meta.json"
+CADDY_META="$GATEWAY_META"
 
 is_sui_backend() {
   local m
@@ -2258,7 +2168,9 @@ D='[0;90m'
 N='[0m'
 
 WORK_DIR="/var/lib/sout"
-CADDY_META="${WORK_DIR}/caddy_meta.json"
+GATEWAY_META="${WORK_DIR}/gateway_meta.json"
+[[ ! -f "$GATEWAY_META" && -f "${WORK_DIR}/caddy_meta.json" ]] && GATEWAY_META="${WORK_DIR}/caddy_meta.json"
+CADDY_META="$GATEWAY_META"
 
 pause() {
   echo
@@ -2493,14 +2405,6 @@ setup_caddy_proxy() {
   fi
   echo -e "${B}================================================================${N}"
 
-  # 1. 确保已停用清理 Caddy 与独立 cloudflared
-  if command -v caddy >/dev/null 2>&1; then
-    rc-service caddy stop 2>/dev/null || true
-    rc-update del caddy default 2>/dev/null || true
-    systemctl stop caddy 2>/dev/null || true
-    systemctl disable caddy 2>/dev/null || true
-    pkill -9 -x caddy 2>/dev/null || true
-  fi
 
   # 彻底停止并注销可能存在的外部独立 cloudflared 服务与守护进程（隧道完全由 sing-box/s-ui 原生内嵌驱动）
   systemctl stop cloudflared 2>/dev/null || true
@@ -3030,34 +2934,20 @@ domain = os.environ['DOMAIN']
 created_inbound_tags = []
 
 # 固定启用 vless-argo 与 vless-reality 基础节点
-# 优先查找已有的 vless-argo；若无则查找存量的旧 vmess-argo 进行平滑覆盖升级
 existing_argo = None
 for r in inbound_rows:
     t = r.get('tag', '')
     if t.startswith('vless-argo') or (r.get('type') == 'vless' and 'argo' in t):
         existing_argo = r
         break
-if not existing_argo:
-    for r in inbound_rows:
-        t = r.get('tag', '')
-        if t.startswith('vmess-argo') or r.get('type') == 'vmess':
-            existing_argo = r
-            break
 
 argo_id = None
 argo_tag = None
-old_vmess_tag = None
 if existing_argo:
     argo_id = existing_argo.get('id')
     old_tag = existing_argo.get('tag', '')
     if old_tag.startswith('vless-argo-') and len(old_tag) == len('vless-argo-') + 4:
         argo_tag = old_tag
-    elif old_tag.startswith('vmess-argo-') and len(old_tag) == len('vmess-argo-') + 4:
-        old_vmess_tag = old_tag
-        argo_tag = 'vless-argo-' + old_tag[len('vmess-argo-'):]
-    elif old_tag == 'vmess-argo':
-        old_vmess_tag = old_tag
-        argo_tag = f"vless-argo-{gen_rand_suffix()}"
     else:
         argo_tag = f"vless-argo-{gen_rand_suffix()}"
 else:
@@ -3076,7 +2966,6 @@ if existing_argo:
     elif existing_argo.get('raw', {}).get('transport', {}).get('path'):
         ws_path = existing_argo['raw']['transport']['path']
 
-# 优选 IP/域名：保留所有已有的条目与备注，仅更新其 TLS server_name 为新域名
 argo_addrs = []
 old_addrs = existing_argo.get('addrs') if existing_argo else None
 if not old_addrs:
@@ -3084,8 +2973,6 @@ if not old_addrs:
         with open('/var/lib/sout/singbox_inbound_addrs.json', 'r') as af:
             ad_map = json.load(af)
             old_addrs = ad_map.get(argo_tag)
-            if not old_addrs and old_vmess_tag:
-                old_addrs = ad_map.get(old_vmess_tag)
     except Exception:
         pass
 
@@ -3115,19 +3002,6 @@ if not argo_addrs:
             'utls': {'enabled': True, 'fingerprint': 'chrome'}
         }
     }]
-
-# 若从旧的 vmess-argo 升级，同步迁移 singbox_inbound_addrs.json 中的 key
-if old_vmess_tag and old_vmess_tag != argo_tag:
-    try:
-        af_path = '/var/lib/sout/singbox_inbound_addrs.json'
-        with open(af_path, 'r') as af:
-            ad_map = json.load(af)
-        if old_vmess_tag in ad_map:
-            ad_map[argo_tag] = argo_addrs
-            with open(af_path, 'w') as af:
-                json.dump(ad_map, af, indent=2)
-    except Exception:
-        pass
 
 print(f"  [2/4] 正在配置 vless-argo (路径分流: {ws_path}) 节点...")
 sys.stdout.flush()
@@ -3531,8 +3405,6 @@ disable_caddy_proxy() {
   fi
 
   echo "  [+] 正在停止隧道与轻量网关分流..."
-  systemctl stop caddy 2>/dev/null || rc-service caddy stop 2>/dev/null || true
-  systemctl disable caddy 2>/dev/null || rc-update del caddy default 2>/dev/null || true
   systemctl stop cloudflared 2>/dev/null || rc-service cloudflared stop 2>/dev/null || true
   systemctl disable cloudflared 2>/dev/null || rc-update del cloudflared default 2>/dev/null || true
   pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
@@ -3582,9 +3454,7 @@ except Exception:
     systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || service s-ui restart 2>/dev/null || true
   fi
 
-  if [[ -f "$CADDY_META" ]]; then
-    rm -f "$CADDY_META"
-  fi
+  rm -f "${WORK_DIR}/gateway_meta.json" "${WORK_DIR}/caddy_meta.json" 2>/dev/null || true
 
   # 恢复 sout 为默认端口 8899 和 0.0.0.0 监听
   python3 -c "
@@ -4224,15 +4094,6 @@ with open(p, 'w') as f:
     json.dump(d, f, indent=2)
 " 2>/dev/null || true
 
-  # 6. 停用并清理残留 Caddy，由 sout 内置轻量网关接管
-  if command -v caddy >/dev/null 2>&1; then
-    rc-service caddy stop 2>/dev/null || true
-    rc-update del caddy default 2>/dev/null || true
-    systemctl stop caddy 2>/dev/null || true
-    systemctl disable caddy 2>/dev/null || true
-    rm -f /etc/init.d/caddy /etc/systemd/system/caddy.service 2>/dev/null || true
-    pkill -9 -x caddy 2>/dev/null || true
-  fi
 
   # 重启/重载 sout 服务以激活内置网关
   systemctl restart sout 2>/dev/null || rc-service sout restart 2>/dev/null || service sout restart 2>/dev/null || true
@@ -5846,7 +5707,7 @@ do_restart_tunnel_cmd() {
 }
 
 case "${1:-}" in
-  setup_tunnel|setup_caddy)
+  setup_tunnel|setup_caddy|setup_gateway)
     shift
     setup_caddy_proxy "$@"
     ;;
@@ -5858,13 +5719,13 @@ case "${1:-}" in
   listen|port) change_listen_and_port ;;
   url)       change_panel_url ;;
   ssl)       change_ssl ;;
-  caddy|cf|tunnel) caddy_menu ;;
-  reload_caddy) reload_caddy_proxy ;;
-  restart_tunnel)
+  caddy|cf|tunnel|gateway) caddy_menu ;;
+  reload_caddy|reload_gateway) reload_caddy_proxy ;;
+  restart_tunnel|restart_gateway)
     shift
     do_restart_tunnel_cmd
     ;;
-  disable_tunnel|delete_tunnel|stop_tunnel)
+  disable_tunnel|delete_tunnel|stop_tunnel|disable_caddy|disable_gateway)
     shift
     disable_caddy_proxy force
     ;;
@@ -5881,7 +5742,7 @@ case "${1:-}" in
   uninstall) do_uninstall ;;
   "")        menu ;;
   *)
-    echo "用法: sout [start|stop|restart|status|log|info|listen|port|url|ssl|caddy|cert|tuic|hy2|update|uninstall]"
+    echo "用法: sout [start|stop|restart|status|log|info|listen|port|url|ssl|tunnel|gateway|cert|tuic|hy2|update|uninstall]"
     echo "直接在终端输入 sout 即可进入交互控制菜单"
     ;;
 esac
