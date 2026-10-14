@@ -1591,7 +1591,12 @@ update_singbox_kernel() {
     cur_sb_ver=$(/usr/local/bin/sing-box version 2>/dev/null | head -1 | awk '{print $3}' || echo "已安装")
   fi
 
-  echo -e "  当前 sing-box 版本: ${Y}${cur_sb_ver}${N}"
+  if ! is_sui_backend; then
+    echo -e "  ${C}[ℹ] 提示: 当前 sout 采用内嵌 sing-box 单核模式（内核内置于 sout-server 中）。${N}"
+    echo -e "  ${C}    选择 [1] 更新 sout 即可同步更新内嵌 sing-box 内核。${N}"
+    echo
+  fi
+
   echo -e "  ${B}正在连接官方检查最新稳定版本...${N}"
 
   local tag=""
@@ -2329,7 +2334,7 @@ setup_caddy_proxy() {
   if [[ "$has_sui" == "true" ]]; then
     systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || service s-ui restart 2>/dev/null || true
   else
-    systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || service sing-box restart 2>/dev/null || true
+    systemctl restart sout 2>/dev/null || rc-service sout restart 2>/dev/null || service sout restart 2>/dev/null || true
   fi
 
   # 5. 自动化配置 sout
@@ -2466,7 +2471,7 @@ disable_caddy_proxy() {
   # 从 /etc/sing-box/config.json 安全移除 cf-tunnel-in 入站以及 route.rules 中的直连规则
   if [[ -f /etc/sing-box/config.json ]]; then
     sout_tool singbox-clean-cf /etc/sing-box/config.json 2>/dev/null || true
-    systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || service sing-box restart 2>/dev/null || true
+    systemctl restart sout 2>/dev/null || rc-service sout restart 2>/dev/null || service sout restart 2>/dev/null || true
   fi
 
   # 从 s-ui 数据库安全移除 cf-tunnel-in 原生入站
@@ -2902,13 +2907,13 @@ do_apply_cf_ssl_cert() {
   "$acme_cmd" --install-cert -d "${domain}" --ecc \
     --key-file "${cert_dir}/privkey.pem" \
     --fullchain-file "${cert_dir}/fullchain.pem" \
-    --reloadcmd "systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true" >/dev/null 2>&1 || true
+    --reloadcmd "systemctl restart sout 2>/dev/null || rc-service sout restart 2>/dev/null || true" >/dev/null 2>&1 || true
 
   if [[ ! -s "${cert_dir}/fullchain.pem" ]]; then
     "$acme_cmd" --install-cert -d "${domain}" \
       --key-file "${cert_dir}/privkey.pem" \
       --fullchain-file "${cert_dir}/fullchain.pem" \
-      --reloadcmd "systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true" >/dev/null 2>&1 || true
+      --reloadcmd "systemctl restart sout 2>/dev/null || rc-service sout restart 2>/dev/null || true" >/dev/null 2>&1 || true
   fi
 
   # 若通过 acme.sh 自身安装仍然为空，直接从 /root/.acme.sh/${domain}* 目录兜底拷贝
@@ -3180,7 +3185,11 @@ apply_tuic_hy2_to_singbox() {
   fi
   rm -f "${sb_conf}.bak"
 
-  systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true
+  if is_sui_backend; then
+    systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || true
+  else
+    systemctl restart sout 2>/dev/null || rc-service sout restart 2>/dev/null || true
+  fi
 
   local insec_flag=0
   [[ "$is_insecure" == "true" ]] && insec_flag=1
@@ -3525,7 +3534,7 @@ caddy_menu() {
       tun_eng="sing-box"
     fi
     if [[ "$tun_eng" == "sing-box" ]]; then
-      local svc_target="sing-box"
+      local svc_target="sout"
       is_sui_backend && svc_target="s-ui"
       if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
         cf_st=$(systemctl is-active "$svc_target" 2>/dev/null || echo "inactive")
@@ -3622,7 +3631,7 @@ caddy_menu() {
         3)
           echo
           if [[ "$tun_eng" == "sing-box" ]]; then
-            local svc_log_target="sing-box"
+            local svc_log_target="sout"
             is_sui_backend && svc_log_target="s-ui"
             if command -v journalctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
               echo -e "  ${B}[+] 正在检索 ${svc_log_target} 隧道运行日志...${N}"
@@ -3645,7 +3654,7 @@ caddy_menu() {
           echo -e "  正在重启 Cloudflare 隧道服务..."
           local cf_re_ok=false
           if [[ "$tun_eng" == "sing-box" ]]; then
-            local svc_re_target="sing-box"
+            local svc_re_target="sout"
             is_sui_backend && svc_re_target="s-ui"
             if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
               systemctl restart "$svc_re_target" 2>/dev/null && cf_re_ok=true
@@ -3749,7 +3758,7 @@ do_restart_tunnel_cmd() {
     tun_eng="sing-box"
   fi
   if [[ "$tun_eng" == "sing-box" ]]; then
-    svc_cmd_target="sing-box"
+    svc_cmd_target="sout"
     is_sui_backend && svc_cmd_target="s-ui"
     if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
       systemctl restart "$svc_cmd_target" 2>/dev/null || true

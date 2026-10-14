@@ -401,114 +401,22 @@ check_singbox() {
 
 install_singbox() {
   echo
-  echo "  [+] 正在检查并配置 sing-box 原生内核..."
+  echo "  [+] 正在准备 sout 内嵌 sing-box 轻量内核运行配置..."
 
-  # 1. 优先检测是否可直接复用本地现存且能正常运行的 sing-box 内核
-  if ! /usr/local/bin/sing-box version >/dev/null 2>&1; then
-    if /usr/local/s-ui/bin/sing-box version >/dev/null 2>&1; then
-      echo "      发现 s-ui 现有 sing-box 内核 (/usr/local/s-ui/bin/sing-box)，正在建立复用软链接..."
-      mkdir -p /usr/local/bin
-      ln -sf /usr/local/s-ui/bin/sing-box /usr/local/bin/sing-box
-    elif /usr/bin/sing-box version >/dev/null 2>&1; then
-      echo "      发现系统 /usr/bin/sing-box，正在建立复用软链接..."
-      mkdir -p /usr/local/bin
-      ln -sf /usr/bin/sing-box /usr/local/bin/sing-box
-    elif command -v sing-box >/dev/null 2>&1 && sing-box version >/dev/null 2>&1; then
-      local existing_sb
-      existing_sb="$(command -v sing-box)"
-      echo "      发现 PATH 中已有 sing-box (${existing_sb})，正在建立复用软链接..."
-      mkdir -p /usr/local/bin
-      ln -sf "$existing_sb" /usr/local/bin/sing-box
-    fi
+  # 清理可能残留的历史独立外部 sing-box 服务，避免双进程争抢内存与端口
+  if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+    systemctl stop sing-box >/dev/null 2>&1 || true
+    systemctl disable sing-box >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/sing-box.service
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  elif command -v rc-service >/dev/null 2>&1; then
+    rc-service sing-box stop >/dev/null 2>&1 || true
+    rc-update del sing-box default >/dev/null 2>&1 || true
+    rm -f /etc/init.d/sing-box
   fi
+  pkill -9 -f "supervise-daemon.*sing-box" >/dev/null 2>&1 || true
 
-  # 2. 若本地无可用内核，自动从官方拉取最新稳定版 (Release)
-  if ! /usr/local/bin/sing-box version >/dev/null 2>&1; then
-    echo "      本地未发现兼容且可运行的 sing-box 内核，正在自动获取官方最新稳定版内核..."
-    local arch
-    arch=$(uname -m)
-    local goarch=""
-    case "$arch" in
-      x86_64) goarch="amd64" ;;
-      aarch64|arm64) goarch="arm64" ;;
-      armv7l|armhf) goarch="armv7" ;;
-      *) echo "  [!] 暂不支持该系统架构: $arch" >&2; return 1 ;;
-    esac
-
-    local tag=""
-    # 方式一：通过 HTTP 302 重定向解析最新稳定 Release 标签（免 GitHub API 频率限制）
-    tag=$(curl -sIL -m 8 "https://github.com/SagerNet/sing-box/releases/latest" 2>/dev/null | grep -i '^location:' | tail -1 | grep -oE 'v[0-9]+(\.[0-9]+)+' | tr -d ' \r\n' || true)
-    
-    # 方式二：备用通过 GitHub API 获取
-    if [[ -z "$tag" ]]; then
-      tag=$(curl -sSL -m 8 "https://api.github.com/repos/SagerNet/sing-box/releases/latest" 2>/dev/null | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | cut -d'"' -f4 || true)
-    fi
-
-    # 方式三：兜底官方稳定版
-    [[ -z "$tag" ]] && tag="v1.11.5"
-    local ver="${tag#v}"
-    echo "      识别到 sing-box 最新稳定版本: ${tag} (${goarch})"
-
-    local tmp_dir
-    tmp_dir=$(mktemp -d)
-    local is_musl=0
-    if [[ -f /etc/alpine-release ]] || (ldd --version 2>&1 | grep -iq musl); then
-      is_musl=1
-    fi
-
-    local pkg_candidates=()
-    if [[ "$is_musl" -eq 1 ]]; then
-      pkg_candidates+=("sing-box-${ver}-linux-${goarch}-musl.tar.gz" "sing-box-${ver}-linux-${goarch}.tar.gz")
-    else
-      pkg_candidates+=("sing-box-${ver}-linux-${goarch}.tar.gz" "sing-box-${ver}-linux-${goarch}-glibc.tar.gz")
-    fi
-
-    local download_urls=()
-    for pkg in "${pkg_candidates[@]}"; do
-      download_urls+=(
-        "https://github.com/SagerNet/sing-box/releases/download/${tag}/${pkg}"
-        "https://ghproxy.net/https://github.com/SagerNet/sing-box/releases/download/${tag}/${pkg}"
-      )
-    done
-
-    local dl_ok=0
-    for u in "${download_urls[@]}"; do
-      echo "      正在下载内核: ${u} ..."
-      rm -rf "${tmp_dir:?}"/* /usr/local/bin/sing-box
-      local archive_file="${tmp_dir}/sing-box.tar.gz"
-      if curl -fL -# --connect-timeout 10 --max-time 180 "$u" -o "$archive_file" && [[ -s "$archive_file" ]]; then
-        if tar -xzf "$archive_file" -C "$tmp_dir" --strip-components=1 2>/dev/null || tar -xzf "$archive_file" -C "$tmp_dir" 2>/dev/null; then
-          local extracted_bin=""
-          if [[ -f "${tmp_dir}/sing-box" ]]; then
-            extracted_bin="${tmp_dir}/sing-box"
-          else
-            extracted_bin=$(find "$tmp_dir" -type f -name "sing-box" 2>/dev/null | head -1)
-          fi
-          if [[ -n "$extracted_bin" && -f "$extracted_bin" ]]; then
-            mv -f "$extracted_bin" /usr/local/bin/sing-box
-            chmod 755 /usr/local/bin/sing-box
-            if /usr/local/bin/sing-box version >/dev/null 2>&1; then
-              dl_ok=1
-              break
-            fi
-          fi
-        fi
-      fi
-    done
-    rm -rf "$tmp_dir"
-
-    if [[ "$dl_ok" -eq 0 ]]; then
-      echo "  [!] 下载并校验 sing-box 内核失败，请检查网络连接。" >&2
-      rm -f /usr/local/bin/sing-box
-      return 1
-    fi
-
-    echo "      sing-box 原生内核已就绪: $(/usr/local/bin/sing-box version 2>/dev/null | head -1 || echo 'ok')"
-  else
-    echo "      成功复用本地 sing-box 内核: $(/usr/local/bin/sing-box version 2>/dev/null | head -1 || echo 'ok')"
-  fi
-
-  # 初始化目录和精简配置
+  # 初始化目录和精简配置模板
   mkdir -p /etc/sing-box
   if [[ ! -f /etc/sing-box/config.json ]]; then
     cat > /etc/sing-box/config.json <<'SBCONF'
@@ -536,94 +444,12 @@ SBCONF
     chmod 644 /etc/sing-box/config.json
   fi
 
-  # 注册并启动系统服务
-  echo "      正在注册 sing-box 服务 (${INIT_SYS})..."
-  local sb_env_systemd=""
-  local sb_env_openrc=""
-
-  if [[ "$INIT_SYS" == "systemd" ]]; then
-    cat > /etc/systemd/system/sing-box.service <<SBEU
-[Unit]
-Description=sing-box service
-Documentation=https://sing-box.sagernet.org
-After=network.target nss-lookup.target network-online.target
-
-[Service]
-${sb_env_systemd}
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
-ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
-Restart=on-failure
-RestartSec=3s
-LimitNOFILE=65535
-
-[Install]
-WantedBy=multi-user.target
-SBEU
-    systemctl daemon-reload
-    systemctl enable sing-box >/dev/null 2>&1 || true
-    systemctl restart sing-box >/dev/null 2>&1 || true
-  else
-    local supervisor_line="command_background=\"yes\"\npidfile=\"/run/sing-box.pid\""
-    if command -v supervise-daemon >/dev/null 2>&1; then
-      supervisor_line="supervisor=\"supervise-daemon\""
-    fi
-    cat > /etc/init.d/sing-box <<SBRC
-#!/sbin/openrc-run
-name="sing-box"
-description="sing-box service"
-${sb_env_openrc}
-${supervisor_line}
-command="/usr/local/bin/sing-box"
-command_args="run -c /etc/sing-box/config.json"
-output_log="/var/log/sing-box.log"
-error_log="/var/log/sing-box.err"
-respawn_delay=2
-respawn_max=0
-
-depend() {
-  need net
-  after firewall
-}
-
-start_pre() {
-  if [ -n "\$command" ]; then
-    local bin_name
-    bin_name="\$(basename "\$command")"
-    pkill -9 -x "\$bin_name" 2>/dev/null || true
-  fi
-  if [ -f "/etc/sing-box/config.json" ]; then
-    for p in \$(grep -oE '"listen_port"[[:space:]]*:[[:space:]]*[0-9]+' /etc/sing-box/config.json 2>/dev/null | grep -oE '[0-9]+'); do
-      fuser -k -n tcp "\$p" 2>/dev/null || true
-    done
-  fi
-  if [ -f "\$pidfile" ]; then
-    local p
-    p=\$(cat "\$pidfile" 2>/dev/null)
-    if [ -n "\$p" ] && ! kill -0 "\$p" 2>/dev/null; then
-      rm -f "\$pidfile"
-    fi
-  fi
-}
-
-stop_post() {
-  rm -f "\$pidfile"
-  if [ -n "\$command" ]; then
-    pkill -9 -x "\$(basename "\$command")" 2>/dev/null || true
-  fi
-}
-SBRC
-    chmod +x /etc/init.d/sing-box
-    rc-update add sing-box default >/dev/null 2>&1 || true
-    rc-service sing-box restart >/dev/null 2>&1 || true
-  fi
-
   mkdir -p "$WORK_DIR"
   echo "sing-box" > "${WORK_DIR}/panel_mode"
 
   echo
   echo "================================================================"
-  echo "  [✓] sing-box 原生内核已成功就绪并启动！继续进行 sout 插件安装..."
+  echo "  [✓] sout 内嵌 sing-box 轻量内核已就绪！继续进行 sout 插件安装..."
   echo "================================================================"
   echo
   return 0
@@ -940,25 +766,20 @@ ask_tunnel_setup
 SUI_INSTALLED_BY_US=0
 
 ensure_backend() {
-  local has_sb=0 has_sui=0
-  check_singbox && has_sb=1
+  local has_sui=0
   check_sui && has_sui=1
 
   echo
   echo "================================================================"
-  if [[ "$has_sui" -eq 1 && "$has_sb" -eq 1 ]]; then
-    echo "  [+] 检测到当前 VPS 同时已安装 s-ui 面板 与 sing-box 原生内核"
-  elif [[ "$has_sui" -eq 1 ]]; then
+  if [[ "$has_sui" -eq 1 ]]; then
     echo "  [+] 检测到当前 VPS 已安装 s-ui 面板"
-  elif [[ "$has_sb" -eq 1 ]]; then
-    echo "  [+] 检测到当前 VPS 已安装 sing-box 原生内核"
   else
-    echo "  [!] 检测到当前 VPS 尚未安装 s-ui 面板或 sing-box 内核！"
+    echo "  [!] 检测到当前 VPS 尚未安装 s-ui 面板！"
   fi
   echo
   echo "  sout 支持两种节点运行后端："
   echo "    1) 安装 / 对接 s-ui 面板"
-  echo "    2) 安装 / 对接 singbox 内核（默认）"
+  echo "    2) 仅使用 sout 内嵌 sing-box（推荐）"
   echo "    3) 不安装退出"
   echo
   echo "  直接回车默认选择 [2]"
@@ -966,13 +787,13 @@ ensure_backend() {
   echo
 
   local choice=""
-  # 低内存机器（<=180MB）直接用 sing-box 轻量内核，不再询问：
+  # 低内存机器（<=180MB）直接用 sout 内嵌 sing-box，不再询问：
   # s-ui 面板自身常驻约 50MB，在 128MB 级机器上会明显挤压转发与出口进程的内存
   local _mem_now=0
   _mem_now=$(grep -i 'MemTotal' /proc/meminfo 2>/dev/null | awk '{print int($2/1024)}')
   if [[ "${_mem_now:-0}" -gt 0 && "${_mem_now:-0}" -le 180 ]]; then
     choice="2"
-    echo "  [!] 检测到内存仅 ${_mem_now}MB，已自动选择 [2] sing-box 轻量内核（不再询问）"
+    echo "  [!] 检测到内存仅 ${_mem_now}MB，已自动选择 [2] 仅使用 sout 内嵌 sing-box（推荐）"
     echo "      (s-ui 面板常驻约 50MB，低内存机型上会挤压转发性能)"
   elif [[ -t 0 ]]; then
     read -rp "  请选择操作 [1-3] (默认: 2): " choice
@@ -1070,17 +891,7 @@ ensure_backend() {
       fi
       ;;
     2)
-      if [[ "$has_sb" -eq 1 ]]; then
-        echo "  [✓] 检测到已存在 sing-box 原生内核，直接对接当前内核！"
-        mkdir -p "$WORK_DIR"
-        echo "sing-box" > "${WORK_DIR}/panel_mode"
-        return 0
-      fi
-      if ! install_singbox; then
-        echo "  [!] sing-box 安装失败，正在退出..."
-        cleanup_sout
-        exit 1
-      fi
+      install_singbox
       ;;
     3)
       echo
@@ -1303,10 +1114,8 @@ echo "[3/6] 准备节点管理后端..."
 backend_kind=$(cat "${WORK_DIR}/panel_mode" 2>/dev/null || echo "")
 if [[ "$backend_kind" == "s-ui" ]] || check_sui; then
   echo "      已就绪: s-ui 面板接管模式"
-elif [[ "$backend_kind" == "sing-box" ]] || check_singbox; then
-  echo "      已就绪: sing-box 原生内核接管模式"
 else
-  echo "      提示: 未检测到后端，可在安装后配置 sing-box 或 s-ui 以启用分流联动"
+  echo "      已就绪: sout 内嵌 sing-box 轻量内核接管模式"
 fi
 
 echo "[4/6] 准备网络运行环境并优化内核套接字/UDP缓冲区..."
@@ -1322,8 +1131,10 @@ rm -f /usr/local/bin/f /usr/local/bin/sout-cli 2>/dev/null || true
 mkdir -p "$WORK_DIR"
 chmod 700 "$WORK_DIR"
 
-# 若为 sing-box 后端，确保持久化 panel_mode，由 sout-server 唯一内嵌内核接管
-if [[ "$backend_kind" == "sing-box" ]] || (! check_sui && check_singbox); then
+# 确保持久化 panel_mode，若非 s-ui 则统一由 sout-server 内嵌 sing-box 单核接管
+if [[ "$backend_kind" == "s-ui" ]] || check_sui; then
+  echo -n "s-ui" > "${WORK_DIR}/panel_mode"
+else
   echo -n "sing-box" > "${WORK_DIR}/panel_mode"
   if [[ "$INIT_SYS" == "systemd" ]]; then
     systemctl stop sing-box >/dev/null 2>&1 || true
@@ -1332,8 +1143,6 @@ if [[ "$backend_kind" == "sing-box" ]] || (! check_sui && check_singbox); then
     rc-service sing-box stop >/dev/null 2>&1 || true
     rc-update del sing-box default >/dev/null 2>&1 || true
   fi
-elif [[ "$backend_kind" == "s-ui" ]] || check_sui; then
-  echo -n "s-ui" > "${WORK_DIR}/panel_mode"
 fi
 
 seed_settings
@@ -1461,9 +1270,9 @@ if [[ -f "$GATEWAY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' 
   echo "  sout 唤起命令: sout"
   echo
 
-  if [[ "$backend_mode" == "sing-box" ]] || (! check_sui && check_singbox) || (! check_sui && [[ "$backend_mode" != "s-ui" ]]); then
-    echo "  [sing-box 原生内核]"
-    echo "  运行后端:      sing-box 原生内核"
+  if [[ "$backend_mode" == "sing-box" ]] || ! check_sui; then
+    echo "  [sout 内嵌 sing-box 轻量内核]"
+    echo "  运行后端:      sout 内嵌 sing-box（单核架构）"
     echo "  核心配置:      /etc/sing-box/config.json"
   elif [[ "$backend_mode" == "s-ui" ]] || check_sui; then
     echo "  [s-ui (Sing-Box) 节点面板]"
@@ -1519,10 +1328,10 @@ else
   echo "  sout 唤起命令: sout"
   echo
 
-  if [[ "$backend_mode" == "sing-box" ]] || (! check_sui && check_singbox) || (! check_sui && [[ "$backend_mode" != "s-ui" ]]); then
-    echo "  [内嵌 sing-box 内核]"
-    echo "  运行后端:      内嵌 sing-box v1.14.3"
-    echo "  核心配置:      ${WORK_DIR}/singbox_config.json"
+  if [[ "$backend_mode" == "sing-box" ]] || ! check_sui; then
+    echo "  [sout 内嵌 sing-box 轻量内核]"
+    echo "  运行后端:      sout 内嵌 sing-box（单核架构）"
+    echo "  核心配置:      /etc/sing-box/config.json"
   elif [[ "$backend_mode" == "s-ui" ]] || check_sui; then
     echo "  [s-ui (Sing-Box) 节点面板]"
     echo "  s-ui 面板:     http://${IP}:${sui_port}${sui_path}"
