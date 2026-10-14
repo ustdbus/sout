@@ -626,8 +626,6 @@ func (m *Manager) Stop(slot int) error {
 	if err := m.saveState(); err != nil {
 		log.Printf("保存状态失败: %v", err)
 	}
-	m.notifyPanel()
-
 	// 级联清理：提取该隧道当前节点及所有历史绑定过的节点（包括主机名、IP、自定义Host、出口IP等别名），全量清理分流管理中的分支与路由规则
 	hostSet := make(map[string]bool)
 	addHost := func(h string) {
@@ -652,7 +650,10 @@ func (m *Manager) Stop(slot int) error {
 	for h := range hostSet {
 		hosts = append(hosts, h)
 	}
-	go m.cleanupBoundBranches(slot, hosts...)
+
+	// 同步顺序清理绑定分支并对齐面板，彻底杜绝异步竞态与幽灵残留
+	m.cleanupBoundBranches(slot, hosts...)
+	m.notifyPanel()
 
 	return nil
 }

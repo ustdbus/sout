@@ -3324,9 +3324,11 @@ func (s *SUI) reconcileBranchBindings(tunnels []*Tunnel) {
 		}
 		var targetTunnel *Tunnel
 		for _, t := range tunnels {
-			if t.Status == "up" {
-				if (b.Host != "" && (t.Node.HostName == b.Host || sanitizeTag(t.Node.HostName) == sanitizeTag(b.Host))) ||
-					(b.Slot > 0 && t.Slot == b.Slot) {
+			if t.Status != "up" {
+				continue
+			}
+			if b.Slot > 0 {
+				if t.Slot == b.Slot {
 					targetTunnel = t
 					if b.Host != t.Node.HostName {
 						b.Host = t.Node.HostName
@@ -3334,12 +3336,25 @@ func (s *SUI) reconcileBranchBindings(tunnels []*Tunnel) {
 					}
 					break
 				}
+			} else if b.Host != "" {
+				if t.Node.HostName == b.Host || sanitizeTag(t.Node.HostName) == sanitizeTag(b.Host) {
+					targetTunnel = t
+					b.Host = t.Node.HostName
+					b.Slot = t.Slot
+					saveBranchBinding(s.workDir, b)
+					break
+				}
 			}
 		}
-		if targetTunnel == nil {
+		if targetTunnel == nil || targetTunnel.Status != "up" {
 			continue
 		}
-		clientName := fmt.Sprintf("soutu%d%s", b.TemplateID, sanitizeTag(targetTunnel.Node.HostName))
+
+		clientName := fmt.Sprintf("soutu%d_s%d", b.TemplateID, targetTunnel.Slot)
+		if targetTunnel.Slot <= 0 {
+			clientName = fmt.Sprintf("soutu%d%s", b.TemplateID, sanitizeTag(targetTunnel.Node.HostName))
+		}
+
 		if _, ok, err := s.apiClientByName(clientName); err == nil && !ok {
 			log.Printf("自动自愈并恢复家宽分流绑定: 模板入站 %d -> 节点 %s (%s)", b.TemplateID, targetTunnel.Node.HostName, targetTunnel.Node.Country)
 			_, _ = s.CloneToTunnels(b.TemplateID, []string{targetTunnel.Node.HostName}, tunnels)

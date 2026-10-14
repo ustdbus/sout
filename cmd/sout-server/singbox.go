@@ -2341,7 +2341,25 @@ func (sb *SingBox) DeleteBranchesBySlot(slot int, tunnels []*Tunnel) error {
 	slotSuffix := fmt.Sprintf("_s%d", slot)
 	targetUsers := make(map[string]bool)
 
-	// 1. 从 route.rules 中移除所有属于该 slot 的分流规则
+	// 先扫描所有 inbounds 收集匹配该 slot 的所有 Client 名称
+	inboundsRaw, _ := cfg["inbounds"].([]any)
+	for _, ib := range inboundsRaw {
+		if ibMap, ok := ib.(map[string]any); ok {
+			if usersRaw, ok := ibMap["users"].([]any); ok {
+				for _, u := range usersRaw {
+					if uMap, ok := u.(map[string]any); ok {
+						if uName, ok := uMap["name"].(string); ok && uName != "" {
+							if strings.HasSuffix(uName, slotSuffix) || parseSlotFromClientName(uName) == slot {
+								targetUsers[uName] = true
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 1. 从 route.rules 中完全移除包含属于该 slot 的分流路由
 	routeRaw, _ := cfg["route"].(map[string]any)
 	if routeRaw != nil {
 		rulesRaw, _ := routeRaw["rules"].([]any)
@@ -2352,7 +2370,7 @@ func (sb *SingBox) DeleteBranchesBySlot(slot int, tunnels []*Tunnel) error {
 					var keptAuth []any
 					for _, au := range authUsers {
 						if uStr, ok := au.(string); ok {
-							if strings.HasSuffix(uStr, slotSuffix) || parseSlotFromClientName(uStr) == slot {
+							if targetUsers[uStr] || strings.HasSuffix(uStr, slotSuffix) || parseSlotFromClientName(uStr) == slot {
 								targetUsers[uStr] = true
 							} else {
 								keptAuth = append(keptAuth, au)
@@ -2828,20 +2846,30 @@ func (sb *SingBox) OnTunnelsChanged(tunnels []*Tunnel) error {
 
 			var targetTunnel *Tunnel
 			for _, t := range tunnels {
-				if t.Status == "up" {
-					if (b.Slot > 0 && t.Slot == b.Slot) ||
-						(b.Host != "" && (t.Node.HostName == b.Host || sanitizeTag(t.Node.HostName) == sanitizeTag(b.Host))) {
+				if t.Status != "up" {
+					continue
+				}
+				if b.Slot > 0 {
+					// 严格以 Slot 唯一性匹配，严禁凭空为已删除或未就绪的槽位创建分流
+					if t.Slot == b.Slot {
 						targetTunnel = t
-						if b.Host != t.Node.HostName || (b.Slot <= 0 && t.Slot > 0) {
+						if b.Host != t.Node.HostName {
 							b.Host = t.Node.HostName
-							b.Slot = t.Slot
 							sb.saveBranchBinding(b)
 						}
 						break
 					}
+				} else if b.Host != "" {
+					if t.Node.HostName == b.Host || sanitizeTag(t.Node.HostName) == sanitizeTag(b.Host) {
+						targetTunnel = t
+						b.Host = t.Node.HostName
+						b.Slot = t.Slot
+						sb.saveBranchBinding(b)
+						break
+					}
 				}
 			}
-			if targetTunnel == nil {
+			if targetTunnel == nil || targetTunnel.Status != "up" {
 				continue
 			}
 

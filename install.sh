@@ -591,7 +591,6 @@ depend() {
 }
 
 start_pre() {
-  pkill -9 -f "supervise-daemon.*sing-box" 2>/dev/null || true
   if [ -n "\$command" ]; then
     local bin_name
     bin_name="\$(basename "\$command")"
@@ -613,7 +612,6 @@ start_pre() {
 
 stop_post() {
   rm -f "\$pidfile"
-  pkill -9 -f "supervise-daemon.*sing-box" 2>/dev/null || true
   if [ -n "\$command" ]; then
     pkill -9 -x "\$(basename "\$command")" 2>/dev/null || true
   fi

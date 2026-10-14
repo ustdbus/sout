@@ -280,7 +280,6 @@ _openrc_force_stop() {
       pkill -9 -f "sout-quick-tunnel" 2>/dev/null || true
       ;;
     sing-box)
-      pkill -9 -f "supervise-daemon.*sing-box" 2>/dev/null || true
       pkill -9 -f "/usr/local/bin/sing-box" 2>/dev/null || true
       ;;
   esac
@@ -2125,7 +2124,6 @@ sys.exit(0 if latest > cur else 1)
     systemctl disable sing-box 2>/dev/null || true
     rc-service sing-box stop 2>/dev/null || true
     rc-update del sing-box default 2>/dev/null || true
-    pkill -9 -f "supervise-daemon.*sing-box" 2>/dev/null || true
     pkill -9 -f "sing-box run" 2>/dev/null || true
   fi
 
