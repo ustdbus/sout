@@ -28,6 +28,10 @@ func initLowMemoryProtection() {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "tool" {
+		runTool(os.Args[2:])
+		return
+	}
 	initLowMemoryProtection()
 	initLogCapture()
 	var (

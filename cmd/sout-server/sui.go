@@ -84,14 +84,11 @@ func runSQLite(dbPath string, query string) (string, error) {
 			return strings.TrimSpace(string(out)), nil
 		}
 	}
-	if hasCmd("python3") {
-		pyCode := fmt.Sprintf("import sqlite3\ncon = sqlite3.connect(%q)\ncur = con.cursor()\ncur.execute(%q)\nif cur.description:\n    rows = cur.fetchall()\n    for r in rows:\n        print('|'.join(str(x) if x is not None else '' for x in r))\nelse:\n    con.commit()\n", dbPath, query)
-		out, err := exec.Command("python3", "-c", pyCode).Output()
-		if err == nil {
-			return strings.TrimSpace(string(out)), nil
-		}
+	res, err := runPureGoSQLite(dbPath, query)
+	if err == nil && res != "" {
+		return strings.TrimSpace(res), nil
 	}
-	return "", fmt.Errorf("未找到 sqlite3 或 python3 工具")
+	return "", fmt.Errorf("执行 sqlite 查询失败且未找到 sqlite3: %w", err)
 }
 
 func runSQLiteJSON(dbPath string, query string) ([]byte, error) {
@@ -101,14 +98,11 @@ func runSQLiteJSON(dbPath string, query string) ([]byte, error) {
 			return out, nil
 		}
 	}
-	if hasCmd("python3") {
-		pyCode := fmt.Sprintf("import sqlite3, json\ncon = sqlite3.connect(%q)\ncur = con.cursor()\ncur.execute(%q)\ncols = [d[0] for d in cur.description] if cur.description else []\nrows = []\nfor r in cur.fetchall():\n    row_dict = {}\n    for k, v in zip(cols, r):\n        if isinstance(v, (bytes, bytearray)):\n            v = v.decode('utf-8', errors='ignore')\n        row_dict[k] = v\n    rows.append(row_dict)\nprint(json.dumps(rows))\n", dbPath, query)
-		out, err := exec.Command("python3", "-c", pyCode).Output()
-		if err == nil {
-			return out, nil
-		}
+	data, err := runPureGoSQLiteJSON(dbPath, query)
+	if err == nil {
+		return data, nil
 	}
-	return nil, fmt.Errorf("未找到 sqlite3 或 python3 工具")
+	return nil, fmt.Errorf("执行 sqlite JSON 查询失败且未找到 sqlite3: %w", err)
 }
 
 

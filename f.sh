@@ -4,28 +4,47 @@ set -e
 # ==============================================================================
 # 统一 JSON 字段读取：替代 grep -oE/cut/awk 解析（键不存在或解析失败时输出空，由调用点 :- 兜底）
 # ==============================================================================
+sout_tool() {
+  if command -v sout-server >/dev/null 2>&1; then
+    sout-server tool "$@"
+  elif [[ -x "${BIN:-}" ]]; then
+    "$BIN" tool "$@"
+  elif [[ -x "/usr/local/bin/sout-server" ]]; then
+    /usr/local/bin/sout-server tool "$@"
+  else
+    return 127
+  fi
+}
+
 json_get() {
-  JSON_FILE="${1:-}" JSON_KEY="${2:-}" python3 -c '
-import json, os
-f = os.environ.get("JSON_FILE", "")
-key = os.environ.get("JSON_KEY", "")
-try:
-    with open(f) as fp:
-        data = json.load(fp)
-    val = data.get(key)
-    if val is None:
-        print("")
-    elif isinstance(val, bool):
-        print("true" if val else "false")
-    elif isinstance(val, (int, float)):
-        print(val)
-    elif isinstance(val, str):
-        print(val)
-    else:
-        print("")
-except Exception:
-    print("")
-' 2>/dev/null || printf '%s\n' ""
+  local f="${1:-}"
+  local k="${2:-}"
+  local def="${3:-}"
+  local out
+  if command -v sout-server >/dev/null 2>&1 || [[ -x "${BIN:-}" ]] || [[ -x "/usr/local/bin/sout-server" ]]; then
+    sout_tool json-get "$f" "$k" "$def" 2>/dev/null || true
+    return
+  fi
+  [[ ! -f "$f" ]] && { echo "$def"; return; }
+  local val
+  val=$(grep -oE "\"${k}\"[[:space:]]*:[[:space:]]*(\"[^\"]*\"|[0-9.]+|true|false|null)" "$f" 2>/dev/null | head -1 | awk -F: '{print $2}' | tr -d ' "\r\n' || true)
+  if [[ -n "$val" && "$val" != "null" ]]; then
+    echo "$val"
+  else
+    echo "$def"
+  fi
+}
+
+json_set() {
+  local f="$1"
+  local k="$2"
+  local v="$3"
+  local t="${4:-}"
+  if [[ -n "$t" ]]; then
+    sout_tool json-set "$f" "$k" "$v" --type "$t" 2>/dev/null || true
+  else
+    sout_tool json-set "$f" "$k" "$v" 2>/dev/null || true
+  fi
 }
 
 # ==============================================================================
@@ -827,10 +846,12 @@ get_sui_user() {
   local sui_db="/usr/local/s-ui/db/s-ui.db"
   local u="admin"
   if [[ -f "$sui_db" ]]; then
-    if command -v sqlite3 >/dev/null 2>&1; then
+    if command -v sout-server >/dev/null 2>&1; then
+      u=$(sout-server tool sui-query "$sui_db" username 2>/dev/null || echo "admin")
+    elif [[ -x "$BIN" ]]; then
+      u=$("$BIN" tool sui-query "$sui_db" username 2>/dev/null || echo "admin")
+    elif command -v sqlite3 >/dev/null 2>&1; then
       u=$(sqlite3 "$sui_db" "SELECT username FROM users LIMIT 1;" 2>/dev/null || echo "admin")
-    elif command -v python3 >/dev/null 2>&1; then
-      u=$(python3 -c "import sqlite3; con=sqlite3.connect('$sui_db'); cur=con.cursor(); r=cur.execute('SELECT username FROM users LIMIT 1').fetchone(); print(r[0] if r else 'admin'); con.close()" 2>/dev/null || echo "admin")
     fi
   fi
   [[ -z "$u" ]] && u="admin"
@@ -992,7 +1013,13 @@ show_info() {
         fi
         local has_cf_inbound=false
         if [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
-          has_cf_inbound=$(python3 -c "import sqlite3; con=sqlite3.connect('/usr/local/s-ui/db/s-ui.db'); cur=con.cursor(); print('true' if cur.execute(\"SELECT 1 FROM inbounds WHERE type='cloudflared' OR tag='cf-tunnel-in' LIMIT 1\").fetchone() else 'false')" 2>/dev/null || echo "false")
+          if command -v sout-server >/dev/null 2>&1; then
+            has_cf_inbound=$(sout-server tool sui-query /usr/local/s-ui/db/s-ui.db has-cf 2>/dev/null || echo "false")
+          elif [[ -x "$BIN" ]]; then
+            has_cf_inbound=$("$BIN" tool sui-query /usr/local/s-ui/db/s-ui.db has-cf 2>/dev/null || echo "false")
+          elif command -v sqlite3 >/dev/null 2>&1; then
+            has_cf_inbound=$(sqlite3 /usr/local/s-ui/db/s-ui.db "SELECT 1 FROM inbounds WHERE type='cloudflared' OR tag='cf-tunnel-in' LIMIT 1;" 2>/dev/null | grep -q 1 && echo "true" || echo "false")
+          fi
         fi
         if $sui_active_tun && [[ "$has_cf_inbound" == "true" ]]; then
           tun_active=true
@@ -1174,21 +1201,8 @@ change_listen_and_port() {
     return
   fi
 
-  python3 -c "
-import json, os
-path = '$WORK_DIR/settings.json'
-data = {}
-if os.path.exists(path):
-    try:
-        with open(path, 'r') as f:
-            data = json.load(f)
-    except: pass
-data['listen_addr'] = '$new_addr'
-data['port'] = int('$new_port')
-with open(path, 'w') as f:
-    json.dump(data, f, indent=2)
-os.chmod(path, 0o600)
-"
+  json_set "$WORK_DIR/settings.json" "listen_addr" "$new_addr" "string"
+  json_set "$WORK_DIR/settings.json" "port" "$new_port" "int"
   svc_restart
   echo -e "  ${G}面板配置已更新并生效: 监听地址 -> ${new_addr}，管理端口 -> ${new_port}${N}"
 }
@@ -1211,22 +1225,7 @@ change_panel_url() {
   # 去除结尾所有斜杠
   new_url=$(echo "$new_url" | sed -e 's:/*$::')
 
-  python3 -c "
-import json, os
-path = '$WORK_DIR/settings.json'
-data = {}
-if os.path.exists(path):
-    try:
-        with open(path, 'r') as f:
-            data = json.load(f)
-    except: pass
-if '$new_url':
-    data['panel_url'] = '$new_url'
-else:
-    data.pop('panel_url', None)
-with open(path, 'w') as f:
-    json.dump(data, f, indent=2)
-"
+  json_set "$WORK_DIR/settings.json" "panel_url" "$new_url" "string"
   svc_restart
   if [[ -n "$new_url" ]]; then
     echo -e "  ${G}面板基础 URL 已更新为: ${new_url}${N}"
@@ -1291,15 +1290,7 @@ change_ssl() {
     read -rp "  请选择 [0-3]: " opt
     case "$opt" in
       1)
-        python3 -c "
-import json, os
-path = '$WORK_DIR/settings.json'
-data = {}
-if os.path.exists(path):
-    with open(path) as f: data = json.load(f)
-data['ssl_enabled'] = False
-with open(path, 'w') as f: json.dump(data, f, indent=2)
-"
+        json_set "$WORK_DIR/settings.json" "ssl_enabled" "false" "bool"
         svc_restart
         echo -e "  ${Y}已关闭 SSL，面板已切换回 HTTP 访问${N}"
         ;;
@@ -1316,31 +1307,15 @@ with open(path, 'w') as f: json.dump(data, f, indent=2)
           echo -e "  ${R}私钥文件不存在: ${new_key}${N}"
           return
         fi
-        python3 -c "
-import json, os
-path = '$WORK_DIR/settings.json'
-data = {}
-if os.path.exists(path):
-    with open(path) as f: data = json.load(f)
-data['ssl_cert'] = '$new_cert'
-data['ssl_key'] = '$new_key'
-with open(path, 'w') as f: json.dump(data, f, indent=2)
-"
+        json_set "$WORK_DIR/settings.json" "ssl_cert" "$new_cert" "string"
+        json_set "$WORK_DIR/settings.json" "ssl_key" "$new_key" "string"
         svc_restart
         echo -e "  ${G}SSL 证书路径已更新并重启生效${N}"
         ;;
       3)
         echo
         read -rp "  请输入新域名 (如 sout.example.com): " new_dom
-        python3 -c "
-import json, os
-path = '$WORK_DIR/settings.json'
-data = {}
-if os.path.exists(path):
-    with open(path) as f: data = json.load(f)
-data['ssl_domain'] = '$new_dom'
-with open(path, 'w') as f: json.dump(data, f, indent=2)
-"
+        json_set "$WORK_DIR/settings.json" "ssl_domain" "$new_dom" "string"
         svc_restart
         echo -e "  ${G}域名已更新为: ${new_dom}${N}"
         ;;
@@ -1370,18 +1345,10 @@ with open(path, 'w') as f: json.dump(data, f, indent=2)
         echo -e "  ${R}私钥文件不存在: ${new_key}${N}"
         return
       fi
-      python3 -c "
-import json, os
-path = '$WORK_DIR/settings.json'
-data = {}
-if os.path.exists(path):
-    with open(path) as f: data = json.load(f)
-data['ssl_enabled'] = True
-data['ssl_domain'] = '$new_dom'
-data['ssl_cert'] = '$new_cert'
-data['ssl_key'] = '$new_key'
-with open(path, 'w') as f: json.dump(data, f, indent=2)
-"
+      json_set "$WORK_DIR/settings.json" "ssl_domain" "$new_dom" "string"
+      json_set "$WORK_DIR/settings.json" "ssl_cert" "$new_cert" "string"
+      json_set "$WORK_DIR/settings.json" "ssl_key" "$new_key" "string"
+      json_set "$WORK_DIR/settings.json" "ssl_enabled" "true" "bool"
       svc_restart
       echo -e "  ${G}🎉 SSL 已成功开启！面板已切换为 HTTPS 安全加密访问。${N}"
     fi
@@ -1394,69 +1361,12 @@ cleanup_sui() {
     return
   fi
   echo -e "  正在清理 s-ui 中由 sout 创建的所有出入站及路由规则..."
-  python3 -c "
-import sqlite3, json
-
-db = '/usr/local/s-ui/db/s-ui.db'
-try:
-    con = sqlite3.connect(db)
-    cur = con.cursor()
-    
-    # 1. 查找所有 sout/fanout 创建的入站 ID 和 Tag
-    cur.execute('SELECT id, tag FROM inbounds')
-    inbounds = cur.fetchall()
-    
-    sout_inb_ids = []
-    sout_inb_tags = []
-    for (ib_id, tag) in inbounds:
-        tag_str = str(tag)
-        if '家宽' in tag_str or 'fanout' in tag_str or 'sout' in tag_str:
-            sout_inb_ids.append(ib_id)
-            sout_inb_tags.append(tag_str)
-    
-    if sout_inb_ids:
-        for ib_id in sout_inb_ids:
-            con.execute('DELETE FROM inbounds WHERE id = ?', (ib_id,))
-        print(f'    - 已清理 {len(sout_inb_ids)} 个 sout 分流入站: {sout_inb_tags}')
-    
-    # 2. 删除所有 sout-* 与 fanout-* 出站
-    cur.execute(\"DELETE FROM outbounds WHERE tag LIKE 'sout-%' OR tag LIKE 'fanout-%'\")
-    out_deleted = cur.rowcount
-    if out_deleted > 0:
-        print(f'    - 已清理 {out_deleted} 个 sout 出站隧道')
-
-    # 3. 清理 settings 表中 config 的 route.rules
-    cur.execute(\"SELECT value FROM settings WHERE key = 'config'\")
-    row = cur.fetchone()
-    if row and row[0]:
-        try:
-            cfg = json.loads(row[0])
-            rules = cfg.get('route', {}).get('rules', [])
-            new_rules = []
-            for r in rules:
-                outbound = r.get('outbound', '')
-                if not outbound.startswith('sout-') and not outbound.startswith('fanout-'):
-                    new_rules.append(r)
-            if len(new_rules) != len(rules):
-                cfg['route']['rules'] = new_rules
-                con.execute(\"UPDATE settings SET value = ? WHERE key = 'config'\", (json.dumps(cfg, indent=2),))
-                print(f'    - 已清理 {len(rules) - len(new_rules)} 条 sout 分流路由规则')
-        except Exception as e:
-            print('    - 清理路由规则警告:', e)
-
-    # 4. 清理 clients
-    cur.execute("DELETE FROM clients WHERE name LIKE 'sout-%' OR name LIKE 'fanout-%'")
-
-    # 5. 清理 API Token
-    cur.execute("DELETE FROM tokens WHERE desc='sout' OR desc='fanout'")
-
-    con.commit()
-    con.close()
-    print('  已完全恢复 s-ui 原始数据库与节点配置。')
-except Exception as e:
-    print('  清理 s-ui 数据时出现异常:', e)
-" 2>/dev/null || true
-
+  if command -v sout-server >/dev/null 2>&1; then
+    sout-server tool sui-cleanup "$db" 2>/dev/null || true
+  elif [[ -x "$BIN" ]]; then
+    "$BIN" tool sui-cleanup "$db" 2>/dev/null || true
+  fi
+  echo -e "  已完全恢复 s-ui 原始数据库与节点配置。"
   systemctl restart s-ui 2>/dev/null || true
 }
 
@@ -1511,103 +1421,13 @@ uninstall_sout_only() {
   local sui_backup="${WORK_DIR}/sui_backup.json"
   local final_wp="8443" final_wpath="/app/" final_sp="8444" final_spath="/sub/"
   if [[ -f "$sui_db" ]]; then
-    local restore_info
-    restore_info=$(python3 -c "
-import sqlite3, json, os, socket
-
-db = '$sui_db'
-backup_file = '$sui_backup'
-pub_ip = '$public_ip'
-
-def is_port_free(port):
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.5)
-        res = s.connect_ex(('127.0.0.1', int(port)))
-        s.close()
-        return res != 0
-    except:
-        return True
-
-def get_free_port(start=8443):
-    import random
-    if is_port_free(start):
-        return start
-    for _ in range(50):
-        p = random.randint(10000, 60000)
-        if is_port_free(p):
-            return p
-    return start
-
-con = sqlite3.connect(db)
-cur = con.cursor()
-
-b = {}
-if os.path.exists(backup_file):
-    try:
-        with open(backup_file) as f:
-            b = json.load(f)
-    except:
-        pass
-
-# 1. 恢复 webPort / webPath
-orig_wp = b.get('webPort', '8443')
-final_wp = orig_wp if is_port_free(orig_wp) else get_free_port(8443)
-orig_wpath = b.get('webPath', '/app/')
-if not orig_wpath.startswith('/'): orig_wpath = '/' + orig_wpath
-if not orig_wpath.endswith('/'): orig_wpath += '/'
-
-# 2. 恢复 subPort / subPath
-orig_sp = b.get('subPort', '8444')
-final_sp = orig_sp if is_port_free(orig_sp) else get_free_port(8444)
-orig_spath = b.get('subPath', '/sub/')
-if not orig_spath.startswith('/'): orig_spath = '/' + orig_spath
-if not orig_spath.endswith('/'): orig_spath += '/'
-
-    # 3. 恢复证书配置 (如果有)
-    orig_wcert = b.get('webCertFile', '')
-    orig_wkey = b.get('webKeyFile', '')
-    orig_scert = b.get('subCertFile', '')
-    orig_skey = b.get('subKeyFile', '')
-    orig_wdom = b.get('webDomain', '')
-    orig_sdom = b.get('subDomain', '')
-    orig_supd = b.get('subUpdates', '12')
-
-    cur.execute('UPDATE settings SET value=? WHERE key="webCertFile"', (orig_wcert,))
-    cur.execute('UPDATE settings SET value=? WHERE key="webKeyFile"', (orig_wkey,))
-    cur.execute('UPDATE settings SET value=? WHERE key="subCertFile"', (orig_scert,))
-    cur.execute('UPDATE settings SET value=? WHERE key="subKeyFile"', (orig_skey,))
-    cur.execute('UPDATE settings SET value=? WHERE key="webDomain"', (orig_wdom,))
-    cur.execute('UPDATE settings SET value=? WHERE key="subDomain"', (orig_sdom,))
-    cur.execute('UPDATE settings SET value=? WHERE key="subUpdates"', (orig_supd,))
-
-    # 恢复其他高级订阅项
-    for ext_k in ['subEncode', 'subShowInfo', 'subClashExt', 'subJsonExt', 'subClashSprtAll', 'subClashNoDefGrp']:
-        if ext_k in b:
-            cur.execute('UPDATE settings SET value=? WHERE key=?', (str(b[ext_k]), ext_k))
-
-    proto = 'https' if (orig_wcert and orig_wkey) else 'http'
-    sub_proto = 'https' if (orig_scert and orig_skey) else 'http'
-
-    host_web = orig_wdom if orig_wdom else f'{pub_ip}:{final_wp}'
-    host_sub = orig_sdom if orig_sdom else f'{pub_ip}:{final_sp}'
-
-    # 4. 恢复监听地址为 0.0.0.0 (空字符串) 并更新公网直连 URI
-    cur.execute('UPDATE settings SET value=? WHERE key="webPort"', (str(final_wp),))
-    cur.execute('UPDATE settings SET value="" WHERE key="webListen"')
-    cur.execute('UPDATE settings SET value=? WHERE key="webPath"', (orig_wpath,))
-    cur.execute('UPDATE settings SET value=? WHERE key="webURI"', (f'{proto}://{host_web}{orig_wpath}',))
-
-    cur.execute('UPDATE settings SET value=? WHERE key="subPort"', (str(final_sp),))
-    cur.execute('UPDATE settings SET value="" WHERE key="subListen"')
-    cur.execute('UPDATE settings SET value=? WHERE key="subPath"', (orig_spath,))
-    cur.execute('UPDATE settings SET value=? WHERE key="subURI"', (f'{sub_proto}://{host_sub}{orig_spath}',))
-
-    con.commit()
-    con.close()
-
-    print(f'{final_wp}|{orig_wpath}|{final_sp}|{orig_spath}|{proto}|{sub_proto}|{orig_wdom}|{orig_sdom}')
-" 2>/dev/null || echo "8443|/app/|8444|/sub/|http|http||")
+    if command -v sout-server >/dev/null 2>&1; then
+      restore_info=$(sout-server tool sui-restore "$sui_db" "$sui_backup" "$public_ip" 2>/dev/null || echo "8443|/app/|8444|/sub/|http|http||")
+    elif [[ -x "$BIN" ]]; then
+      restore_info=$("$BIN" tool sui-restore "$sui_db" "$sui_backup" "$public_ip" 2>/dev/null || echo "8443|/app/|8444|/sub/|http|http||")
+    else
+      restore_info="8443|/app/|8444|/sub/|http|http||"
+    fi
 
     final_wp=$(echo "$restore_info" | cut -d'|' -f1)
     final_wpath=$(echo "$restore_info" | cut -d'|' -f2)
@@ -1628,28 +1448,11 @@ if not orig_spath.endswith('/'): orig_spath += '/'
 
   # 5. 若为 sing-box 原生模式，清理 cf-tunnel-in 入站并重启 sing-box (保留节点与证书配置)
   if [[ -f /etc/sing-box/config.json ]]; then
-    python3 -c '
-import json
-try:
-    with open("/etc/sing-box/config.json", "r") as f:
-        conf = json.load(f)
-    changed = False
-    inbounds = conf.get("inbounds", [])
-    new_inbs = [ib for ib in inbounds if ib.get("tag") != "cf-tunnel-in" and ib.get("type") != "cloudflared"]
-    if len(new_inbs) != len(inbounds):
-        conf["inbounds"] = new_inbs
-        changed = True
-    rules = conf.get("route", {}).get("rules", [])
-    new_rules = [r for r in rules if not ("cf-tunnel-in" in r.get("inbound", []))]
-    if len(new_rules) != len(rules):
-        conf["route"]["rules"] = new_rules
-        changed = True
-    if changed:
-        with open("/etc/sing-box/config.json", "w") as f:
-            json.dump(conf, f, indent=2)
-except Exception:
-    pass
-' 2>/dev/null || true
+    if command -v sout-server >/dev/null 2>&1; then
+      sout-server tool singbox-clean-cf /etc/sing-box/config.json 2>/dev/null || true
+    elif [[ -x "$BIN" ]]; then
+      "$BIN" tool singbox-clean-cf /etc/sing-box/config.json 2>/dev/null || true
+    fi
     systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true
   fi
 
@@ -1885,44 +1688,12 @@ get_sout_warp_proxy() {
   local st_file="${WORK_DIR}/state.json"
   [[ ! -f "$st_file" ]] && return 1
 
-  local proxy_str
-  proxy_str=$(python3 -c "
-import json, sys
-try:
-    with open('${st_file}', 'r') as f:
-        data = json.load(f)
-    tunnels = data.get('tunnels', [])
-    for t in tunnels:
-        if t.get('is_chain_upstream') and t.get('status') == 'up' and t.get('port', 0) > 0:
-            user = t.get('socks_user', '')
-            pw = t.get('socks_pass', '')
-            port = t.get('port')
-            auth = f'{user}:{pw}@' if user else ''
-            print(f'{auth}127.0.0.1:{port}')
-            sys.exit(0)
-    for t in tunnels:
-        c = str(t.get('country', '')).upper()
-        rem = str(t.get('remark', '')).upper()
-        h = str(t.get('hostname', '')).lower()
-        if ('WARP' in c or 'WARP' in rem or 'cloudflare' in h or 'cs-wg' in h) and t.get('status') == 'up' and t.get('port', 0) > 0:
-            user = t.get('socks_user', '')
-            pw = t.get('socks_pass', '')
-            port = t.get('port')
-            auth = f'{user}:{pw}@' if user else ''
-            print(f'{auth}127.0.0.1:{port}')
-            sys.exit(0)
-    for t in tunnels:
-        if t.get('status') == 'up' and t.get('port', 0) > 0:
-            user = t.get('socks_user', '')
-            pw = t.get('socks_pass', '')
-            port = t.get('port')
-            auth = f'{user}:{pw}@' if user else ''
-            print(f'{auth}127.0.0.1:{port}')
-            sys.exit(0)
-except Exception:
-    pass
-sys.exit(1)
-" 2>/dev/null || true)
+  local proxy_str=""
+  if command -v sout-server >/dev/null 2>&1; then
+    proxy_str=$(sout-server tool warp-proxy "${st_file}" 2>/dev/null || true)
+  elif [[ -x "$BIN" ]]; then
+    proxy_str=$("$BIN" tool warp-proxy "${st_file}" 2>/dev/null || true)
+  fi
 
   if [[ -n "$proxy_str" ]]; then
     local p_port
@@ -2008,15 +1779,13 @@ check_and_update() {
   echo -e "  GitHub 最新版: ${G}${tag_name}${N}"
 
   local is_newer=0
-  if python3 -c "
-import sys, re
-def p(v):
-    nums = re.findall(r'\d+', v)
-    return tuple(map(int, nums)) if nums else (0,)
-cur = p('${cur_ver}')
-latest = p('${tag_name}')
-sys.exit(0 if latest > cur else 1)
-" 2>/dev/null; then
+  local cmp=""
+  if command -v sout-server >/dev/null 2>&1; then
+    cmp=$(sout-server tool ver-cmp "$cur_ver" "$tag_name" 2>/dev/null || true)
+  elif [[ -x "$BIN" ]]; then
+    cmp=$("$BIN" tool ver-cmp "$cur_ver" "$tag_name" 2>/dev/null || true)
+  fi
+  if [[ "$cmp" == "<" ]]; then
     is_newer=1
   fi
 
@@ -2380,8 +2149,8 @@ setup_caddy_proxy() {
   if [[ -f "$meta_f" ]]; then
     if [[ -z "$tunnel_token" || "$tunnel_token" == *"..."* || "$tunnel_token" == *"***"* ]]; then
       local exist_token exist_dom
-      exist_token=$(python3 -c 'import json, sys; d=json.load(open(sys.argv[1])); print(d.get("tunnel_token", ""))' "$meta_f" 2>/dev/null || true)
-      exist_dom=$(python3 -c 'import json, sys; d=json.load(open(sys.argv[1])); print(d.get("domain", ""))' "$meta_f" 2>/dev/null || true)
+      exist_token=$(json_get "$meta_f" "tunnel_token")
+      exist_dom=$(json_get "$meta_f" "domain")
       if [[ -n "$exist_token" ]]; then
         tunnel_token="$exist_token"
         [[ -z "$domain" ]] && domain="$exist_dom"
@@ -2430,28 +2199,11 @@ setup_caddy_proxy() {
     sui_token=$(get_or_create_sui_token "$sui_db")
 
     if [[ ! -f "$sui_backup" ]]; then
-      python3 -c "
-import sqlite3, json
-try:
-    con = sqlite3.connect('$sui_db')
-    cur = con.cursor()
-    keys = [
-        'webPort', 'webListen', 'webPath', 'webDomain', 'webCertFile', 'webKeyFile', 'webURI',
-        'subPort', 'subListen', 'subPath', 'subDomain', 'subCertFile', 'subKeyFile', 'subURI', 'subUpdates',
-        'subEncode', 'subShowInfo', 'subClashExt', 'subJsonExt', 'subClashSprtAll', 'subClashNoDefGrp'
-    ]
-    backup = {}
-    for k in keys:
-        cur.execute('SELECT value FROM settings WHERE key=?', (k,))
-        row = cur.fetchone()
-        if row and row[0] is not None:
-            backup[k] = row[0]
-    con.close()
-    with open('$sui_backup', 'w') as f:
-        json.dump(backup, f, indent=2)
-except Exception:
-    pass
-" 2>/dev/null || true
+      if command -v sout-server >/dev/null 2>&1; then
+        sout-server tool sui-backup "$sui_db" "$sui_backup" 2>/dev/null || true
+      elif [[ -x "$BIN" ]]; then
+        "$BIN" tool sui-backup "$sui_db" "$sui_backup" 2>/dev/null || true
+      fi
     fi
   fi
 
@@ -2462,57 +2214,24 @@ except Exception:
   local old_sout_path="" old_sui_path="" old_sub_path="" old_ws_path=""
   local meta_f="${WORK_DIR}/caddy_meta.json"
   if [[ -f "$meta_f" ]]; then
-    eval $(python3 -c '
-import json, sys
-try:
-    with open(sys.argv[1]) as f:
-        d = json.load(f)
-    if isinstance(d, dict):
-        sp = d.get("sout_port", 0)
-        sup = d.get("sui_port", 0)
-        subp = d.get("sub_port", 0)
-        np = d.get("node_port", 0)
-        rp = d.get("reality_port", 0)
-        spa = d.get("sout_path", "")
-        suia = d.get("sui_path", "")
-        suba = d.get("sub_path", "")
-        wsa = d.get("ws_path", "")
-        if sp: print(f"old_sout_port={sp}")
-        if sup: print(f"old_sui_port={sup}")
-        if subp: print(f"old_sub_port={subp}")
-        if np: print(f"old_node_port={np}")
-        if rp: print(f"old_reality_port={rp}")
-        if spa: print(f"old_sout_path={spa}")
-        if suia: print(f"old_sui_path={suia}")
-        if suba: print(f"old_sub_path={suba}")
-        if wsa: print(f"old_ws_path={wsa}")
-except Exception:
-    pass
-' "$meta_f" 2>/dev/null || true)
+    old_sout_port=$(json_get "$meta_f" "sout_port")
+    old_sui_port=$(json_get "$meta_f" "sui_port")
+    old_sub_port=$(json_get "$meta_f" "sub_port")
+    old_node_port=$(json_get "$meta_f" "node_port")
+    old_reality_port=$(json_get "$meta_f" "reality_port")
+    old_sout_path=$(json_get "$meta_f" "sout_path")
+    old_sui_path=$(json_get "$meta_f" "sui_path")
+    old_sub_path=$(json_get "$meta_f" "sub_path")
+    old_ws_path=$(json_get "$meta_f" "ws_path")
   fi
 
   # 原生 sing-box 模式：强制以 /etc/sing-box/config.json 中真实运行的入站端口与路径为最高优先级
   if [[ -f /etc/sing-box/config.json ]]; then
-    eval $(python3 -c '
-import json
-try:
-    with open("/etc/sing-box/config.json") as f:
-        c = json.load(f)
-    for ib in c.get("inbounds", []):
-        t = ib.get("tag", "")
-        tp = ib.get("type", "")
-        lp = ib.get("listen_port", 0)
-        if ("argo" in t or (tp in ("vless", "vmess") and isinstance(ib.get("transport"), dict) and ib["transport"].get("type") == "ws")) and lp:
-            print(f"old_node_port={lp}")
-            tr_p = ib.get("transport", {}).get("path", "")
-            if tr_p:
-                tr_p = tr_p.strip("/")
-                print(f"old_ws_path={tr_p}")
-        elif ("reality" in t or (isinstance(ib.get("tls"), dict) and "reality" in ib["tls"])) and lp:
-            print(f"old_reality_port={lp}")
-except Exception:
-    pass
-' 2>/dev/null || true)
+    if command -v sout-server >/dev/null 2>&1; then
+      eval $(sout-server tool singbox-parse-ports /etc/sing-box/config.json 2>/dev/null || true)
+    elif [[ -x "$BIN" ]]; then
+      eval $("$BIN" tool singbox-parse-ports /etc/sing-box/config.json 2>/dev/null || true)
+    fi
   fi
 
   sout_port="${old_sout_port:-$(rand_local_port)}"
@@ -2597,659 +2316,7 @@ except Exception:
   TUNNEL_TOKEN="$tunnel_token" \
   TUNNEL_PROTOCOL="$protocol" \
   IS_PURE_IPV6="$is_pure_v6" \
-  python3 <<'PYEOF'
-import json, os, sys, time, uuid, urllib.request, urllib.parse, string, random, base64
-
-has_sui = (os.environ.get('HAS_SUI') == 'true') and os.path.exists(os.environ.get('SUI_DB', '')) and bool(os.environ.get('SUI_TOKEN'))
-
-if has_sui:
-    import sqlite3
-    con = sqlite3.connect(os.environ['SUI_DB'])
-    cur = con.cursor()
-    cur.execute("SELECT value FROM settings WHERE key='webPort'")
-    cur_port_row = cur.fetchone()
-    cur_port = cur_port_row[0] if cur_port_row and cur_port_row[0] else '8443'
-    cur.execute("SELECT value FROM settings WHERE key='webPath'")
-    cur_path_row = cur.fetchone()
-    cur_path = cur_path_row[0] if cur_path_row and cur_path_row[0] else '/app/'
-    if not cur_path.startswith('/'): cur_path = '/' + cur_path
-    if not cur_path.endswith('/'): cur_path += '/'
-    con.close()
-    BASE = f'http://127.0.0.1:{cur_port}{cur_path}apiv2'
-    TOKEN = os.environ['SUI_TOKEN']
-
-    def api(method, endpoint, form=None, retries=3, timeout=35):
-        url = BASE.rstrip('/') + '/' + endpoint.lstrip('/')
-        data = urllib.parse.urlencode(form).encode() if form else None
-        headers = {'Token': TOKEN}
-        if data is not None:
-            headers['Content-Type'] = 'application/x-www-form-urlencoded'
-        for attempt in range(retries):
-            try:
-                req = urllib.request.Request(url, data=data, headers=headers, method=method)
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    return json.loads(resp.read().decode('utf-8'))
-            except Exception as e:
-                if attempt < retries - 1:
-                    time.sleep(1.2)
-                    continue
-                raise e
-else:
-    class SingboxAPICompat:
-        def __init__(self, config_path='/etc/sing-box/config.json', addrs_path='/var/lib/sout/singbox_inbound_addrs.json'):
-            self.config_path = config_path
-            self.addrs_path = addrs_path
-            self.tls_list = []
-            self.inbounds_list = []
-            self.clients_list = []
-            self._load()
-
-        def _load(self):
-            try:
-                with open(self.config_path, 'r') as f:
-                    conf = json.load(f)
-            except Exception:
-                conf = {}
-            for idx, ib in enumerate(conf.get('inbounds', [])):
-                self.inbounds_list.append({
-                    'id': (idx + 1) * 1000,
-                    'type': ib.get('type', ''),
-                    'tag': ib.get('tag', ''),
-                    'listen_port': ib.get('listen_port', 0),
-                    'addrs': ib.get('addrs', []),
-                    'raw': ib
-                })
-
-        def request(self, method, endpoint, form=None):
-            ep = endpoint.strip('/')
-            if method == 'GET':
-                if ep == 'inbounds': return {'success': True, 'obj': {'inbounds': self.inbounds_list}}
-                elif ep == 'tls': return {'success': True, 'obj': {'tls': self.tls_list}}
-                elif ep == 'clients': return {'success': True, 'obj': {'clients': self.clients_list}}
-                return {'success': True, 'obj': {}}
-            elif method == 'POST' and ep == 'save':
-                obj = form.get('object')
-                action = form.get('action')
-                data = json.loads(form.get('data', '{}'))
-                if obj == 'tls':
-                    if action == 'new':
-                        data['id'] = len(self.tls_list) + 1
-                        self.tls_list.append(data)
-                        return {'success': True, 'obj': {'id': data['id']}}
-                    elif action == 'edit':
-                        for i, t in enumerate(self.tls_list):
-                            if t.get('id') == data.get('id') or t.get('name') == data.get('name'):
-                                self.tls_list[i] = data
-                                break
-                        return {'success': True}
-                elif obj == 'inbounds':
-                    if action == 'new':
-                        data['id'] = (len(self.inbounds_list) + 1) * 1000
-                        self.inbounds_list.append(data)
-                        return {'success': True, 'obj': {'id': data['id']}}
-                    elif action == 'edit':
-                        for i, ib in enumerate(self.inbounds_list):
-                            if ib.get('id') == data.get('id') or ib.get('tag') == data.get('tag'):
-                                self.inbounds_list[i] = data
-                                break
-                        return {'success': True}
-                elif obj == 'clients':
-                    if action == 'new':
-                        data['id'] = 1
-                        self.clients_list.append(data)
-                        return {'success': True, 'obj': {'id': 1}}
-                    elif action == 'edit':
-                        for i, c in enumerate(self.clients_list):
-                            if c.get('id') == data.get('id') or c.get('name') == data.get('name'):
-                                self.clients_list[i] = data
-                                break
-                        else:
-                            self.clients_list.append(data)
-                        return {'success': True}
-                elif obj == 'settings':
-                    return {'success': True}
-            return {'success': True}
-
-        def flush(self):
-            try:
-                with open(self.config_path, 'r') as f: conf = json.load(f)
-            except Exception: conf = {}
-            admin_cfg = self.clients_list[0].get('config', {}) if self.clients_list else {}
-            admin_name = self.clients_list[0].get('name', 'default') if self.clients_list else 'default'
-            tls_map = {t['id']: t for t in self.tls_list}
-            final_inbs = []
-            addrs_store = {}
-
-            seen_tags = set()
-            for ib in self.inbounds_list:
-                tag = ib.get('tag')
-                proto = ib.get('type')
-                if not tag or not proto or tag in seen_tags: continue
-                seen_tags.add(tag)
-
-                # 特殊处理 cloudflared 原生隧道入站：保留 token/protocol/edge_ip_version，绝不添加 users 字段
-                if proto == 'cloudflared' or tag == 'cf-tunnel-in':
-                    cf_ib = {
-                        'type': 'cloudflared',
-                        'tag': tag or 'cf-tunnel-in',
-                    }
-                    token_val = ib.get('token') or ib.get('raw', {}).get('token', '')
-                    if token_val:
-                        cf_ib['token'] = token_val
-                    proto_val = ib.get('protocol') or ib.get('raw', {}).get('protocol', 'quic')
-                    if proto_val:
-                        cf_ib['protocol'] = proto_val
-                    edge_ip_ver = ib.get('edge_ip_version') or ib.get('raw', {}).get('edge_ip_version')
-                    if not edge_ip_ver and (os.environ.get('IS_PURE_IPV6') == '1' or (os.path.exists('/var/lib/sout/network_mode') and open('/var/lib/sout/network_mode').read().strip() == 'ipv6_only')):
-                        edge_ip_ver = 6
-                    if edge_ip_ver:
-                        try:
-                            cf_ib['edge_ip_version'] = int(edge_ip_ver)
-                        except Exception:
-                            pass
-                    final_inbs.append(cf_ib)
-                    continue
-
-                if ib.get('addrs'): addrs_store[tag] = ib['addrs']
-                s_ib = {
-                    'type': proto,
-                    'tag': tag,
-                    'listen': ib.get('listen', '::'),
-                    'listen_port': int(ib.get('listen_port', 0))
-                }
-                p_cfg = admin_cfg.get(proto, {})
-                u_uuid = p_cfg.get('uuid') or str(uuid.uuid4())
-                u_pass = p_cfg.get('password') or ''
-                u_flow = p_cfg.get('flow', '')
-                if proto == 'vmess':
-                    user_obj = {'name': admin_name, 'uuid': u_uuid}
-                elif proto == 'vless':
-                    user_obj = {'name': admin_name, 'uuid': u_uuid}
-                    is_ws = (isinstance(ib.get('transport'), dict) and ib['transport'].get('type') == 'ws')
-                    if u_flow and not is_ws: user_obj['flow'] = u_flow
-                elif proto == 'tuic':
-                    user_obj = {'name': admin_name, 'uuid': u_uuid, 'password': u_pass or os.urandom(8).hex()}
-                elif proto in ['hysteria2', 'shadowsocks', 'trojan']:
-                    user_obj = {'name': admin_name, 'password': u_pass or os.urandom(8).hex()}
-                else:
-                    user_obj = {'name': admin_name, 'uuid': u_uuid}
-                    if u_pass: user_obj['password'] = u_pass
-                s_ib['users'] = [user_obj]
-
-                if proto == 'tuic':
-                    s_ib['congestion_control'] = 'bbr'
-                elif proto == 'hysteria2':
-                    s_ib['ignore_client_bandwidth'] = True
-
-                tid = ib.get('tls_id')
-                if tid and tid in tls_map:
-                    t_obj = tls_map[tid]
-                    t_srv = t_obj.get('server', {})
-                    if 'reality' in t_srv:
-                        r_conf = dict(t_srv.get('reality', {}))
-                        r_conf.pop('public_key', None)
-                        s_ib['tls'] = {
-                            'enabled': True,
-                            'server_name': t_srv.get('server_name', 'apple.com'),
-                            'reality': r_conf
-                        }
-                    elif t_obj.get('certificate_path') or t_srv.get('certificate_path'):
-                        cert_p = t_obj.get('certificate_path') or t_srv.get('certificate_path')
-                        key_p = t_obj.get('key_path') or t_srv.get('key_path')
-                        s_name = t_obj.get('server_name') or t_srv.get('server_name', '')
-                        tls_entry = {
-                            'enabled': True,
-                            'server_name': s_name,
-                            'certificate_path': cert_p,
-                            'key_path': key_p
-                        }
-                        if proto in ('tuic', 'hysteria2'):
-                            tls_entry['alpn'] = ['h3']
-                        s_ib['tls'] = tls_entry
-                elif isinstance(ib.get('tls'), dict):
-                    raw_tls = dict(ib['tls'])
-                    if proto in ('tuic', 'hysteria2'):
-                        raw_tls['alpn'] = ['h3']
-                    s_ib['tls'] = raw_tls
-
-                if ib.get('transport'): s_ib['transport'] = ib['transport']
-                final_inbs.append(s_ib)
-
-            conf['inbounds'] = final_inbs
-
-            # 确保 route.rules 首部存在 cf-tunnel-in 直连规则
-            has_cf_tunnel = any(ib.get('tag') == 'cf-tunnel-in' or ib.get('type') == 'cloudflared' for ib in final_inbs)
-            if has_cf_tunnel:
-                if 'route' not in conf or not isinstance(conf['route'], dict):
-                    conf['route'] = {}
-                if 'rules' not in conf['route'] or not isinstance(conf['route']['rules'], list):
-                    conf['route']['rules'] = []
-                new_rules = [r for r in conf['route']['rules'] if not (isinstance(r, dict) and 'cf-tunnel-in' in r.get('inbound', []))]
-                new_rules.insert(0, {
-                    'inbound': ['cf-tunnel-in'],
-                    'outbound': 'direct'
-                })
-                conf['route']['rules'] = new_rules
-
-            os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
-            with open(self.config_path, 'w') as f: json.dump(conf, f, indent=2)
-
-            os.makedirs(os.path.dirname(self.addrs_path), exist_ok=True)
-            try:
-                with open(self.addrs_path, 'r') as f: cur_addrs = json.load(f)
-            except Exception: cur_addrs = {}
-            cur_addrs.update(addrs_store)
-            with open(self.addrs_path, 'w') as f: json.dump(cur_addrs, f, indent=2)
-
-    compat = SingboxAPICompat()
-    def api(method, endpoint, form=None):
-        return compat.request(method, endpoint, form)
-
-# 1. 更新 s-ui settings，全部走 s-ui API
-print("  [1/4] 正在配置面板安全监听与轻量网关分流路径...")
-sys.stdout.flush()
-settings_data = {
-    'webPort': str(os.environ.get('SUI_PORT', '')),
-    'webListen': '127.0.0.1',
-    'webPath': os.environ['SUI_PATH'],
-    'webURI': f'https://{os.environ["DOMAIN"]}{os.environ["SUI_PATH"]}',
-    'subPort': str(os.environ.get('SUB_PORT', '')),
-    'subListen': '127.0.0.1',
-    'subPath': os.environ['SUB_PATH'],
-    'subURI': f'https://{os.environ["DOMAIN"]}{os.environ["SUB_PATH"]}',
-    'webCertFile': '',
-    'webKeyFile': '',
-    'subCertFile': '',
-    'subKeyFile': '',
-}
-api('POST', 'save', {
-    'object': 'settings',
-    'action': 'set',
-    'data': json.dumps(settings_data),
-})
-time.sleep(0.3)
-
-# 2. 准备辅助函数与已有入站数据
-def gen_rand_suffix():
-    chars = string.ascii_lowercase + string.digits
-    return "".join(random.choices(chars, k=4))
-
-inbounds_resp = api('GET', 'inbounds') or {}
-inbounds_obj = inbounds_resp.get('obj') or []
-if isinstance(inbounds_obj, dict):
-    inbound_rows = inbounds_obj.get('inbounds') or []
-else:
-    inbound_rows = inbounds_obj or []
-inbound_rows = [r for r in inbound_rows if isinstance(r, dict)]
-
-def get_or_create_tag_and_id(prefix):
-    for row in inbound_rows:
-        t = row.get('tag', '')
-        if t.startswith(prefix + '-') and len(t) == len(prefix) + 5:
-            return t, row.get('id')
-    return f"{prefix}-{gen_rand_suffix()}", None
-
-def gen_x25519_keypair():
-    try:
-        from cryptography.hazmat.primitives.asymmetric import x25519
-        k = x25519.X25519PrivateKey.generate()
-        priv = base64.urlsafe_b64encode(k.private_bytes_raw()).decode().rstrip('=')
-        pub = base64.urlsafe_b64encode(k.public_key().public_bytes_raw()).decode().rstrip('=')
-        return priv, pub
-    except Exception:
-        P = 2**255 - 19
-        A24 = 121665
-        def cswap(swap, x_2, x_3):
-            dummy = swap * ((x_2 - x_3) % P)
-            return (x_2 - dummy) % P, (x_3 + dummy) % P
-        def clamp(n):
-            n &= ~7
-            n &= ~(128 << 8 * 31)
-            n |= 64 << 8 * 31
-            return n
-        raw_priv = os.urandom(32)
-        k = clamp(int.from_bytes(raw_priv, 'little'))
-        x_1 = 9; x_2 = 1; z_2 = 0; x_3 = x_1; z_3 = 1; swap = 0
-        for t in reversed(range(255)):
-            k_t = (k >> t) & 1
-            swap ^= k_t
-            x_2, x_3 = cswap(swap, x_2, x_3)
-            z_2, z_3 = cswap(swap, z_2, z_3)
-            swap = k_t
-            A = (x_2 + z_2) % P; AA = (A * A) % P; B = (x_2 - z_2) % P; BB = (B * B) % P
-            E = (AA - BB) % P; C = (x_3 + z_3) % P; D = (x_3 - z_3) % P
-            DA = (D * A) % P; CB = (C * B) % P
-            x_3 = ((DA + CB) ** 2) % P; z_3 = (x_1 * ((DA - CB) ** 2)) % P
-            x_2 = (AA * BB) % P; z_2 = (E * ((AA + A24 * E) % P)) % P
-        x_2, x_3 = cswap(swap, x_2, x_3); z_2, z_3 = cswap(swap, z_2, z_3)
-        pub_int = (x_2 * pow(z_2, P - 2, P)) % P
-        raw_pub = pub_int.to_bytes(32, 'little')
-        priv_b64 = base64.urlsafe_b64encode(raw_priv).decode().rstrip('=')
-        pub_b64 = base64.urlsafe_b64encode(raw_pub).decode().rstrip('=')
-        return priv_b64, pub_b64
-
-domain = os.environ['DOMAIN']
-created_inbound_tags = []
-
-# 固定启用 vless-argo 与 vless-reality 基础节点
-existing_argo = None
-for r in inbound_rows:
-    t = r.get('tag', '')
-    if t.startswith('vless-argo') or (r.get('type') == 'vless' and 'argo' in t):
-        existing_argo = r
-        break
-
-argo_id = None
-argo_tag = None
-if existing_argo:
-    argo_id = existing_argo.get('id')
-    old_tag = existing_argo.get('tag', '')
-    if old_tag.startswith('vless-argo-') and len(old_tag) == len('vless-argo-') + 4:
-        argo_tag = old_tag
-    else:
-        argo_tag = f"vless-argo-{gen_rand_suffix()}"
-else:
-    argo_tag = f"vless-argo-{gen_rand_suffix()}"
-
-reality_tag, reality_id = get_or_create_tag_and_id('vless-reality')
-
-node_port = int(os.environ['NODE_PORT'])
-ws_path = os.environ['WS_PATH']
-if existing_argo:
-    if existing_argo.get('listen_port'):
-        node_port = int(existing_argo['listen_port'])
-    old_tr = existing_argo.get('transport')
-    if isinstance(old_tr, dict) and old_tr.get('path'):
-        ws_path = old_tr['path']
-    elif existing_argo.get('raw', {}).get('transport', {}).get('path'):
-        ws_path = existing_argo['raw']['transport']['path']
-
-argo_addrs = []
-old_addrs = existing_argo.get('addrs') if existing_argo else None
-if not old_addrs:
-    try:
-        with open('/var/lib/sout/singbox_inbound_addrs.json', 'r') as af:
-            ad_map = json.load(af)
-            old_addrs = ad_map.get(argo_tag)
-    except Exception:
-        pass
-
-if old_addrs and isinstance(old_addrs, list) and len(old_addrs) > 0:
-    for item in old_addrs:
-        if not isinstance(item, dict): continue
-        new_item = dict(item)
-        tls_info = new_item.get('tls')
-        if not isinstance(tls_info, dict):
-            tls_info = {'enabled': True, 'insecure': False, 'utls': {'enabled': True, 'fingerprint': 'chrome'}}
-        tls_info['server_name'] = domain
-        tls_info['enabled'] = True
-        new_item['tls'] = tls_info
-        if len(old_addrs) == 1 and (new_item.get('server') == '' or '.trycloudflare.com' in str(new_item.get('server'))):
-            new_item['server'] = domain
-        argo_addrs.append(new_item)
-
-if not argo_addrs:
-    argo_addrs = [{
-        'server': domain,
-        'server_port': 443,
-        'tls': {
-            'disable_sni': False,
-            'enabled': True,
-            'insecure': False,
-            'server_name': domain,
-            'utls': {'enabled': True, 'fingerprint': 'chrome'}
-        }
-    }]
-
-print(f"  [2/4] 正在配置 vless-argo (路径分流: {ws_path}) 节点...")
-sys.stdout.flush()
-vless_payload = {
-    'id': argo_id or 0,
-    'type': 'vless',
-    'tag': argo_tag,
-    'tls_id': 0,
-    'listen': '127.0.0.1',
-    'listen_port': node_port,
-    'addrs': argo_addrs,
-    'transport': {
-        'early_data_header_name': 'Sec-WebSocket-Protocol',
-        'max_early_data': 2560,
-        'headers': {'Host': domain},
-        'path': ws_path,
-        'type': 'ws'
-    }
-}
-api('POST', 'save', {
-    'object': 'inbounds',
-    'action': 'edit' if argo_id else 'new',
-    'data': json.dumps(vless_payload)
-})
-created_inbound_tags.append(argo_tag)
-time.sleep(0.4)
-
-# 先检查/创建 reality tls 对象
-all_tls_resp = api('GET', 'tls') or {}
-all_tls_obj = all_tls_resp.get('obj') or {}
-all_tls = all_tls_obj.get('tls', []) if isinstance(all_tls_obj, dict) else (all_tls_obj or [])
-reality_tid = None
-for t in all_tls:
-    if t.get('name') == 'reality' or 'reality' in t.get('server', {}):
-        reality_tid = t.get('id')
-        break
-
-priv_k, pub_k = gen_x25519_keypair()
-sid = os.urandom(4).hex()
-if not reality_tid:
-    reality_tls_payload = {
-        'id': 0,
-        'name': 'reality',
-        'server': {
-            'enabled': True,
-            'server_name': 'apple.com',
-            'reality': {
-                'enabled': True,
-                'handshake': {
-                    'server_port': 443,
-                    'server': 'apple.com'
-                },
-                'short_id': [sid],
-                'private_key': priv_k
-            }
-        },
-        'client': {
-            'reality': {
-                'public_key': pub_k,
-                'short_id': sid
-            },
-            'utls': {
-                'enabled': True,
-                'fingerprint': 'chrome'
-            }
-        }
-    }
-    api('POST', 'save', {
-        'object': 'tls',
-        'action': 'new',
-        'data': json.dumps(reality_tls_payload)
-    })
-    time.sleep(0.3)
-    all_tls_resp = api('GET', 'tls') or {}
-    all_tls_obj = all_tls_resp.get('obj') or {}
-    all_tls = all_tls_obj.get('tls', []) if isinstance(all_tls_obj, dict) else (all_tls_obj or [])
-    for t in all_tls:
-        if t.get('name') == 'reality' or 'reality' in t.get('server', {}):
-            reality_tid = t.get('id')
-            break
-
-reality_port = int(os.environ['REALITY_PORT'])
-if reality_id:
-    for r in inbound_rows:
-        if (r.get('id') == reality_id or r.get('tag') == reality_tag) and r.get('listen_port'):
-            reality_port = int(r['listen_port'])
-            break
-pub_host = os.environ.get('PUBLIC_IP') or domain
-v6_host = os.environ.get('HOST_PUBLIC_IPV6') or os.environ.get('PUBLIC_IPV6') or ''
-if not v6_host and os.path.exists('/var/lib/sout/host_ipv6'):
-    try:
-        with open('/var/lib/sout/host_ipv6', 'r') as vf:
-            v6_host = vf.read().strip()
-    except Exception:
-        pass
-
-reality_addrs = []
-if pub_host and pub_host != '127.0.0.1' and not pub_host.startswith('240') and ':' not in pub_host:
-    reality_addrs.append({'server': pub_host, 'server_port': reality_port})
-if v6_host and v6_host != '127.0.0.1':
-    reality_addrs.append({'server': v6_host, 'server_port': reality_port})
-if not reality_addrs:
-    reality_addrs.append({'server': pub_host or domain or '127.0.0.1', 'server_port': reality_port})
-
-print(f"  [3/4] 正在配置 vless-reality (端口: {reality_port}) 节点与密钥对...")
-sys.stdout.flush()
-reality_payload = {
-    'id': reality_id or 0,
-    'type': 'vless',
-    'tag': reality_tag,
-    'tls_id': reality_tid or 0,
-    'listen': '::',
-    'listen_port': reality_port,
-    'addrs': reality_addrs
-}
-api('POST', 'save', {
-    'object': 'inbounds',
-    'action': 'edit' if reality_id else 'new',
-    'data': json.dumps(reality_payload)
-})
-created_inbound_tags.append(reality_tag)
-time.sleep(0.4)
-
-# 若存在 TUNNEL_TOKEN，不论是 s-ui 还是原生 sing-box，均添加/更新 cf-tunnel-in 原生内置入站
-tunnel_token = os.environ.get('TUNNEL_TOKEN', '').strip()
-tunnel_proto = os.environ.get('TUNNEL_PROTOCOL', 'quic').strip() or 'quic'
-if tunnel_token:
-    cf_tag = 'cf-tunnel-in'
-    existing_cf = next((r for r in inbound_rows if r.get('tag') == cf_tag or r.get('type') == 'cloudflared'), None)
-    cf_payload = {
-        'id': existing_cf.get('id') if existing_cf else 0,
-        'type': 'cloudflared',
-        'tag': cf_tag,
-        'token': tunnel_token,
-        'protocol': tunnel_proto
-    }
-    is_p6 = (os.environ.get('IS_PURE_IPV6') == '1' or (os.path.exists('/var/lib/sout/network_mode') and open('/var/lib/sout/network_mode').read().strip() == 'ipv6_only'))
-    if is_p6:
-        cf_payload['edge_ip_version'] = 6
-    try:
-        api('POST', 'save', {
-            'object': 'inbounds',
-            'action': 'edit' if existing_cf else 'new',
-            'data': json.dumps(cf_payload)
-        })
-    except Exception as e:
-        print(f"  [!] 写入 cf-tunnel-in 入站: {e}")
-
-# 3. 重新查询最新所有入站 ID (100% 原生 API)
-inbounds_resp = api('GET', 'inbounds') or {}
-inbounds_obj = inbounds_resp.get('obj') or []
-if isinstance(inbounds_obj, dict):
-    inbound_rows = inbounds_obj.get('inbounds') or []
-else:
-    inbound_rows = inbounds_obj or []
-inbound_rows = [r for r in inbound_rows if isinstance(r, dict)]
-all_current_ib_ids = [r.get('id') for r in inbound_rows if r.get('id') is not None and r.get('type') != 'cloudflared']
-
-# 4. 配置 admin 客户端，关联全部入站 (100% 原生 API)
-clients_resp = api('GET', 'clients') or {}
-clients_obj = clients_resp.get('obj') or []
-if isinstance(clients_obj, dict):
-    clients_rows = clients_obj.get('clients') or []
-else:
-    clients_rows = clients_obj or []
-clients_rows = [r for r in clients_rows if isinstance(r, dict)]
-
-admin_name = os.environ.get('SUI_ADMIN_USER', 'admin')
-admin = next((c for c in clients_rows if c.get('id') == 1), None)
-if not admin:
-    admin = next((c for c in clients_rows if c.get('name') == admin_name), None)
-if not admin and len(clients_rows) > 0:
-    admin = clients_rows[0]
-if admin:
-    admin_name = admin.get('name', admin_name)
-
-client_uuid = str(uuid.uuid4())
-client_pass = os.urandom(8).hex()
-
-existing_cfg = admin.get('config') if (admin and isinstance(admin.get('config'), dict)) else {}
-client_config = {
-    'vless': {
-        'name': admin_name,
-        'uuid': existing_cfg.get('vless', {}).get('uuid') or client_uuid,
-        'flow': 'xtls-rprx-vision'
-    },
-    'vmess': {
-        'name': admin_name,
-        'uuid': existing_cfg.get('vmess', {}).get('uuid') or client_uuid
-    },
-    'tuic': {
-        'name': admin_name,
-        'uuid': existing_cfg.get('tuic', {}).get('uuid') or client_uuid,
-        'password': existing_cfg.get('tuic', {}).get('password') or client_pass
-    },
-    'hysteria2': {
-        'name': admin_name,
-        'password': existing_cfg.get('hysteria2', {}).get('password') or client_pass
-    }
-}
-existing_cfg.update(client_config)
-
-existing_inbs = admin.get('inbounds') if (admin and isinstance(admin.get('inbounds'), list)) else []
-combined_inbs = list(set(existing_inbs + all_current_ib_ids))
-
-client_payload = {
-    'id': admin.get('id', 0) if admin else 0,
-    'enable': True,
-    'name': admin_name,
-    'remark': '默认用户',
-    'config': existing_cfg,
-    'inbounds': combined_inbs,
-    'links': admin.get('links', []) if admin else [],
-    'volume': admin.get('volume', 0) if admin else 0,
-    'expiry': admin.get('expiry', 0) if admin else 0,
-    'down': admin.get('down', 0) if admin else 0,
-    'up': admin.get('up', 0) if admin else 0,
-    'desc': admin.get('desc', '') if admin else '',
-    'group': admin.get('group', '') if admin else '',
-    'delayStart': False,
-    'autoReset': False,
-    'resetDays': 0,
-    'nextReset': 0,
-    'totalUp': admin.get('totalUp', 0) if admin else 0,
-    'totalDown': admin.get('totalDown', 0) if admin else 0,
-    'createdAt': admin.get('createdAt', 0) if admin else 0,
-    'onlineAt': 0
-}
-
-print("  [4/4] 正在关联主用户并同步节点凭据...")
-sys.stdout.flush()
-try:
-    api('POST', 'save', {
-        'object': 'clients',
-        'action': 'edit' if admin else 'new',
-        'data': json.dumps(client_payload)
-    })
-    print("  [✓] 基础节点与轻量分流已配置就绪！")
-except Exception as e:
-    print(f"  [!] 客户端节点关联稍后可在面板确认: {e}")
-
-if not has_sui:
-    compat.flush()
-
-try:
-    with open('/var/lib/sout/.caddy_meta_vars', 'w') as mf:
-        mf.write(f"node_port={node_port}\nws_path={ws_path.strip('/')}\nreality_port={reality_port}\n")
-except Exception:
-    pass
-PYEOF
+  sout_tool sui-init-base-nodes
   then
     echo -e "  ${Y}[!] 节点 API 自动配置未完成，请稍后手动检查。${N}"
   fi
@@ -3271,21 +2338,10 @@ PYEOF
   echo "$sout_path" > "${WORK_DIR}/basepath"
   chmod 600 "${WORK_DIR}/basepath"
 
-  python3 -c "
-import json, os
-path = '$WORK_DIR/settings.json'
-data = {}
-if os.path.exists(path):
-    try:
-        with open(path) as f: data = json.load(f)
-    except: pass
-data['port'] = $sout_port
-data['listen_addr'] = '127.0.0.1'
-data['panel_url'] = 'https://$domain'
-data['ssl_enabled'] = False
-with open(path, 'w') as f:
-    json.dump(data, f, indent=2)
-" 2>/dev/null || true
+  json_set "$WORK_DIR/settings.json" "port" "$sout_port" --type int
+  json_set "$WORK_DIR/settings.json" "listen_addr" "127.0.0.1"
+  json_set "$WORK_DIR/settings.json" "panel_url" "https://$domain"
+  json_set "$WORK_DIR/settings.json" "ssl_enabled" "false" --type bool
 
   # 6. 保存反代元数据
   local meta_mode="tunnel"
@@ -3409,66 +2465,22 @@ disable_caddy_proxy() {
 
   # 从 /etc/sing-box/config.json 安全移除 cf-tunnel-in 入站以及 route.rules 中的直连规则
   if [[ -f /etc/sing-box/config.json ]]; then
-    python3 -c '
-import json
-try:
-    with open("/etc/sing-box/config.json", "r") as f:
-        conf = json.load(f)
-    changed = False
-    inbounds = conf.get("inbounds", [])
-    new_inbs = [ib for ib in inbounds if ib.get("tag") != "cf-tunnel-in" and ib.get("type") != "cloudflared"]
-    if len(new_inbs) != len(inbounds):
-        conf["inbounds"] = new_inbs
-        changed = True
-    
-    rules = conf.get("route", {}).get("rules", [])
-    new_rules = [r for r in rules if not ("cf-tunnel-in" in r.get("inbound", []))]
-    if len(new_rules) != len(rules):
-        conf["route"]["rules"] = new_rules
-        changed = True
-
-    if changed:
-        with open("/etc/sing-box/config.json", "w") as f:
-            json.dump(conf, f, indent=2)
-except Exception:
-    pass
-' 2>/dev/null || true
+    sout_tool singbox-clean-cf /etc/sing-box/config.json 2>/dev/null || true
     systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || service sing-box restart 2>/dev/null || true
   fi
 
   # 从 s-ui 数据库安全移除 cf-tunnel-in 原生入站
   if [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
-    python3 -c "
-import sqlite3
-try:
-    con = sqlite3.connect('/usr/local/s-ui/db/s-ui.db')
-    cur = con.cursor()
-    cur.execute(\"DELETE FROM inbounds WHERE tag='cf-tunnel-in' OR type='cloudflared'\")
-    con.commit()
-    con.close()
-except Exception:
-    pass
-" 2>/dev/null || true
+    sout_tool sui-clean-cf /usr/local/s-ui/db/s-ui.db 2>/dev/null || true
     systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || service s-ui restart 2>/dev/null || true
   fi
 
   rm -f "${WORK_DIR}/gateway_meta.json" "${WORK_DIR}/caddy_meta.json" 2>/dev/null || true
 
   # 恢复 sout 为默认端口 8899 和 0.0.0.0 监听
-  python3 -c "
-import json, os
-path = '$WORK_DIR/settings.json'
-data = {}
-if os.path.exists(path):
-    try:
-        with open(path) as f: data = json.load(f)
-    except: pass
-data['port'] = 8899
-data['listen_addr'] = '0.0.0.0'
-data.pop('panel_url', None)
-with open(path, 'w') as f:
-    json.dump(data, f, indent=2)
-" 2>/dev/null || true
+  json_set "$WORK_DIR/settings.json" "port" "8899" --type int
+  json_set "$WORK_DIR/settings.json" "listen_addr" "0.0.0.0"
+  json_set "$WORK_DIR/settings.json" "panel_url" ""
 
   # 恢复 s-ui 监听与配置 (优先从备份还原，若端口被占用则自动随机空闲端口)
   local public_ip
@@ -3481,102 +2493,7 @@ with open(path, 'w') as f:
   local final_wp="8443" final_wpath="/app/" final_sp="8444" final_spath="/sub/"
   if [[ -f "$sui_db" ]]; then
     local restore_info
-    restore_info=$(python3 -c "
-import sqlite3, json, os, socket
-
-db = '$sui_db'
-backup_file = '$sui_backup'
-pub_ip = '$public_ip'
-
-def is_port_free(port):
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.5)
-        res = s.connect_ex(('127.0.0.1', int(port)))
-        s.close()
-        return res != 0
-    except:
-        return True
-
-def get_free_port(start=8443):
-    import random
-    if is_port_free(start):
-        return start
-    for _ in range(50):
-        p = random.randint(10000, 60000)
-        if is_port_free(p):
-            return p
-    return start
-
-con = sqlite3.connect(db)
-cur = con.cursor()
-
-b = {}
-if os.path.exists(backup_file):
-    try:
-        with open(backup_file) as f:
-            b = json.load(f)
-    except:
-        pass
-
-# 1. 恢复 webPort / webPath
-orig_wp = b.get('webPort', '8443')
-final_wp = orig_wp if is_port_free(orig_wp) else get_free_port(8443)
-orig_wpath = b.get('webPath', '/app/')
-if not orig_wpath.startswith('/'): orig_wpath = '/' + orig_wpath
-if not orig_wpath.endswith('/'): orig_wpath += '/'
-
-# 2. 恢复 subPort / subPath
-orig_sp = b.get('subPort', '8444')
-final_sp = orig_sp if is_port_free(orig_sp) else get_free_port(8444)
-orig_spath = b.get('subPath', '/sub/')
-if not orig_spath.startswith('/'): orig_spath = '/' + orig_spath
-if not orig_spath.endswith('/'): orig_spath += '/'
-
-    # 3. 恢复证书配置 (如果有)
-    orig_wcert = b.get('webCertFile', '')
-    orig_wkey = b.get('webKeyFile', '')
-    orig_scert = b.get('subCertFile', '')
-    orig_skey = b.get('subKeyFile', '')
-    orig_wdom = b.get('webDomain', '')
-    orig_sdom = b.get('subDomain', '')
-    orig_supd = b.get('subUpdates', '12')
-
-    cur.execute('UPDATE settings SET value=? WHERE key=\"webCertFile\"', (orig_wcert,))
-    cur.execute('UPDATE settings SET value=? WHERE key=\"webKeyFile\"', (orig_wkey,))
-    cur.execute('UPDATE settings SET value=? WHERE key=\"subCertFile\"', (orig_scert,))
-    cur.execute('UPDATE settings SET value=? WHERE key=\"subKeyFile\"', (orig_skey,))
-    cur.execute('UPDATE settings SET value=? WHERE key=\"webDomain\"', (orig_wdom,))
-    cur.execute('UPDATE settings SET value=? WHERE key=\"subDomain\"', (orig_sdom,))
-    cur.execute('UPDATE settings SET value=? WHERE key=\"subUpdates\"', (orig_supd,))
-
-    # 恢复其他高级订阅项
-    for ext_k in ['subEncode', 'subShowInfo', 'subClashExt', 'subJsonExt', 'subClashSprtAll', 'subClashNoDefGrp']:
-        if ext_k in b:
-            cur.execute('UPDATE settings SET value=? WHERE key=?', (str(b[ext_k]), ext_k))
-
-    proto = 'https' if (orig_wcert and orig_wkey) else 'http'
-    sub_proto = 'https' if (orig_scert and orig_skey) else 'http'
-
-    host_web = orig_wdom if orig_wdom else f'{pub_ip}:{final_wp}'
-    host_sub = orig_sdom if orig_sdom else f'{pub_ip}:{final_sp}'
-
-    # 4. 恢复监听地址为 0.0.0.0 (空字符串) 并更新公网直连 URI
-    cur.execute('UPDATE settings SET value=? WHERE key=\"webPort\"', (str(final_wp),))
-    cur.execute('UPDATE settings SET value=\"\" WHERE key=\"webListen\"')
-    cur.execute('UPDATE settings SET value=? WHERE key=\"webPath\"', (orig_wpath,))
-    cur.execute('UPDATE settings SET value=? WHERE key=\"webURI\"', (f'{proto}://{host_web}{orig_wpath}',))
-
-    cur.execute('UPDATE settings SET value=? WHERE key=\"subPort\"', (str(final_sp),))
-    cur.execute('UPDATE settings SET value=\"\" WHERE key=\"subListen\"')
-    cur.execute('UPDATE settings SET value=? WHERE key=\"subPath\"', (orig_spath,))
-    cur.execute('UPDATE settings SET value=? WHERE key=\"subURI\"', (f'{sub_proto}://{host_sub}{orig_spath}',))
-
-    con.commit()
-    con.close()
-
-    print(f'{final_wp}|{orig_wpath}|{final_sp}|{orig_spath}|{proto}|{sub_proto}|{orig_wdom}|{orig_sdom}')
-" 2>/dev/null || echo "8443|/app/|8444|/sub/|http|http||")
+    restore_info=$(sout_tool sui-restore "$sui_db" "$sui_backup" "$public_ip" 2>/dev/null || echo "8443|/app/|8444|/sub/|http|http||")
 
     final_wp=$(echo "$restore_info" | cut -d'|' -f1)
     final_wpath=$(echo "$restore_info" | cut -d'|' -f2)
@@ -3687,33 +2604,9 @@ reload_caddy_proxy() {
   local sout_needs_restart=0
   if [[ -f "${WORK_DIR}/settings.json" ]]; then
     local sout_info
-    sout_info=$(python3 -c "
-import json
-try:
-    with open('${WORK_DIR}/settings.json') as f:
-        d = json.load(f)
-    p = d.get('port', 8899)
-    la = d.get('listen_addr', '')
-    purl = d.get('panel_url', '')
-    target_url = 'https://${domain}'
-    changed = False
-    needs_restart = False
-    if la != '127.0.0.1':
-        d['listen_addr'] = '127.0.0.1'
-        changed = True
-        needs_restart = True
-    if purl != target_url:
-        d['panel_url'] = target_url
-        changed = True
-    if changed:
-        with open('${WORK_DIR}/settings.json', 'w') as f:
-            json.dump(d, f, indent=2)
-    print(f'{p}|{needs_restart}')
-except Exception:
-    print('8899|False')
-" 2>/dev/null || echo "8899|False")
+    sout_info=$(sout_tool gateway-sout-sync "${WORK_DIR}/settings.json" "${domain}" 2>/dev/null || echo "8899|false")
     sout_port=$(echo "$sout_info" | cut -d'|' -f1)
-    if [[ "$(echo "$sout_info" | cut -d'|' -f2)" == "True" ]]; then
+    if [[ "$(echo "$sout_info" | cut -d'|' -f2 | tr '[:upper:]' '[:lower:]')" == "true" ]]; then
       sout_needs_restart=1
     fi
   fi
@@ -3746,74 +2639,7 @@ except Exception:
     sui_p=$(json_get "$CADDY_META" sui_path)
     [[ -z "$sui_p" ]] && sui_p="sui"
     local sui_info
-    sui_info=$(python3 -c "
-import sqlite3, os, json, urllib.request, urllib.parse
-con = sqlite3.connect('/usr/local/s-ui/db/s-ui.db')
-cur = con.cursor()
-cur.execute(\"SELECT value FROM settings WHERE key='webPort'\")
-r1 = cur.fetchone()
-port = r1[0] if r1 and r1[0] else '2096'
-cur.execute(\"SELECT value FROM settings WHERE key='webPath'\")
-r2 = cur.fetchone()
-path = r2[0] if r2 and r2[0] else 'sui'
-cur.execute(\"SELECT value FROM settings WHERE key='webListen'\")
-r3 = cur.fetchone()
-w_listen = r3[0] if r3 and r3[0] else ''
-cur.execute(\"SELECT value FROM settings WHERE key='subListen'\")
-r4 = cur.fetchone()
-s_listen = r4[0] if r4 and r4[0] else ''
-cur.execute(\"SELECT value FROM settings WHERE key='subPort'\")
-r5 = cur.fetchone()
-sp_val = r5[0] if r5 and r5[0] else '2097'
-
-target_web_uri = 'https://${domain}/' + path.strip('/') + '/'
-target_sub_uri = 'https://${domain}/${sub_p}/'
-
-changed = False
-api_success = False
-try:
-    token_file = '/var/lib/sout/sui-token'
-    token = ''
-    if os.path.exists(token_file):
-        with open(token_file, 'r') as tf:
-            token = tf.read().strip()
-    if token:
-        clean_p = '/' + path.strip('/') + '/'
-        base_api = f'http://127.0.0.1:{port}{clean_p}apiv2'
-        s_payload = {
-            'webListen': '127.0.0.1',
-            'subListen': '127.0.0.1',
-            'webURI': target_web_uri,
-            'subURI': target_sub_uri,
-        }
-        form_data = urllib.parse.urlencode({
-            'object': 'settings',
-            'action': 'set',
-            'data': json.dumps(s_payload),
-        }).encode()
-        req_save = urllib.request.Request(base_api.rstrip('/') + '/save', data=form_data, headers={'Token': token, 'Content-Type': 'application/x-www-form-urlencoded'})
-        with urllib.request.urlopen(req_save, timeout=5) as r_save:
-            r_save.read()
-        api_success = True
-except Exception:
-    pass
-
-if not api_success:
-    if w_listen != '127.0.0.1':
-        cur.execute(\"UPDATE settings SET value='127.0.0.1' WHERE key='webListen'\")
-        changed = True
-    if s_listen != '127.0.0.1':
-        cur.execute(\"UPDATE settings SET value='127.0.0.1' WHERE key='subListen'\")
-        changed = True
-    cur.execute(\"UPDATE settings SET value=? WHERE key='webURI'\", (target_web_uri,))
-    cur.execute(\"UPDATE settings SET value=? WHERE key='subURI'\", (target_sub_uri,))
-    if changed:
-        con.commit()
-
-con.close()
-path = path.strip('/')
-print(f'{port}|{path}|{changed}|{sp_val}')
-" 2>/dev/null || true)
+    sui_info=$(sout_tool sui-sync-listen "/usr/local/s-ui/db/s-ui.db" "$domain" "$sub_p" 2>/dev/null || echo "2096|sui|false|2097")
     if [[ -n "$sui_info" ]]; then
       local probed_port probed_path probed_changed probed_sub_port
       probed_port=$(echo "$sui_info" | cut -d'|' -f1)
@@ -3823,7 +2649,7 @@ print(f'{port}|{path}|{changed}|{sp_val}')
       [[ -n "$probed_port" ]] && sui_port="$probed_port"
       [[ -n "$probed_path" ]] && sui_p="$probed_path"
       [[ -n "$probed_sub_port" ]] && sub_port="$probed_sub_port"
-      if [[ "$probed_changed" == "True" ]]; then
+      if [[ "$(echo "$probed_changed" | tr '[:upper:]' '[:lower:]')" == "true" ]]; then
         sui_needs_restart=1
       fi
     fi
@@ -3840,56 +2666,7 @@ print(f'{port}|{path}|{changed}|{sp_val}')
 
   if is_sui_backend && [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
     local node_result
-    node_result=$(python3 -c "
-import sqlite3, json
-
-def to_str(v):
-    if isinstance(v, bytes): return v.decode('utf-8', errors='replace')
-    return str(v) if v is not None else ''
-
-db_path = '/usr/local/s-ui/db/s-ui.db'
-con = sqlite3.connect(db_path)
-cur = con.cursor()
-cur.execute('SELECT id, type, tag, options, addrs FROM inbounds')
-rows = cur.fetchall()
-
-found_port = ''
-found_path = ''
-
-# 遍历寻找 listen 为 127.0.0.1 的隧道入站节点
-for r in rows:
-    ib_id = r[0]
-    typ = to_str(r[1])
-    tag = to_str(r[2])
-    opt_raw = to_str(r[3])
-    addrs_raw = to_str(r[4])
-    
-    try:
-        opt = json.loads(opt_raw) if opt_raw else {}
-    except Exception:
-        opt = {}
-        
-    listen_ip = opt.get('listen', '')
-    port = opt.get('listen_port', 0)
-    tr = opt.get('transport', {})
-    path = tr.get('path', '') if isinstance(tr, dict) else ''
-    
-    # 只要节点监听在 127.0.0.1 且端口有效
-    if listen_ip == '127.0.0.1' and port > 0:
-        found_port = str(port)
-        if path:
-            found_path = path.strip('/')
-        else:
-            found_path = 'vlws'
-            
-        break
-
-con.close()
-if found_port:
-    print(f'FOUND|{found_port}|{found_path}')
-else:
-    print('CREATE')
-" 2>/dev/null || echo "CREATE")
+    node_result=$(sout_tool sui-find-local-inbound "/usr/local/s-ui/db/s-ui.db" 2>/dev/null || echo "CREATE")
 
     if [[ "$node_result" == FOUND* ]]; then
       local n_port n_path
@@ -3916,132 +2693,7 @@ else:
       NODE_PORT="$node_port" \
       WS_PATH="/${ws_p}" \
       SUI_ADMIN_USER="$sui_admin_user" \
-      python3 <<'PYEOF'
-import json, os, uuid, urllib.request, urllib.parse
-
-BASE = os.environ['SUI_API']
-TOKEN = os.environ.get('SUI_TOKEN', '')
-
-def api(method, endpoint, form=None, retries=2, timeout=25):
-    url = BASE.rstrip('/') + '/' + endpoint.lstrip('/')
-    data = urllib.parse.urlencode(form).encode() if form else None
-    headers = {'Token': TOKEN}
-    if data is not None:
-        headers['Content-Type'] = 'application/x-www-form-urlencoded'
-    for attempt in range(retries):
-        try:
-            req = urllib.request.Request(url, data=data, headers=headers, method=method)
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode('utf-8'))
-        except Exception as e:
-            if attempt < retries - 1:
-                import time; time.sleep(1.0)
-                continue
-            raise e
-
-try:
-    inbounds_resp = api('GET', 'inbounds') or {}
-    inbounds_obj = inbounds_resp.get('obj') or []
-    if isinstance(inbounds_obj, dict):
-        inbound_rows = inbounds_obj.get('inbounds') or []
-    else:
-        inbound_rows = inbounds_obj or []
-    inbound_rows = [r for r in inbound_rows if isinstance(r, dict)]
-
-    node_tag = None
-    existing_id = None
-    existing_row = None
-    for r in inbound_rows:
-        t = r.get('tag', '')
-        if t == 'vless-argo' or t.startswith('vless-argo-'):
-            node_tag = t
-            existing_id = r.get('id')
-            existing_row = r
-            break
-
-    if not node_tag:
-        for r in inbound_rows:
-            t = r.get('tag', '')
-            if t == 'vmess-argo' or t.startswith('vmess-argo-') or (r.get('type') == 'vmess' and 'argo' in t):
-                existing_id = r.get('id')
-                existing_row = r
-                if t.startswith('vmess-argo-') and len(t) == len('vmess-argo-') + 4:
-                    node_tag = 'vless-argo-' + t[len('vmess-argo-'):]
-                else:
-                    import string, random
-                    chars = string.ascii_lowercase + string.digits
-                    node_tag = f"vless-argo-{''.join(random.choices(chars, k=4))}"
-                break
-
-    if not node_tag:
-        import string, random
-        chars = string.ascii_lowercase + string.digits
-        rand_suffix = "".join(random.choices(chars, k=4))
-        node_tag = f"vless-argo-{rand_suffix}"
-
-    client_uuid = str(uuid.uuid4())
-    node_port = int(os.environ['NODE_PORT'])
-    ws_path = os.environ['WS_PATH']
-    if existing_row:
-        if existing_row.get('listen_port'):
-            node_port = int(existing_row['listen_port'])
-        old_tr = existing_row.get('transport')
-        if isinstance(old_tr, dict) and old_tr.get('path'):
-            ws_path = old_tr['path']
-
-    addrs_data = []
-    old_addrs = existing_row.get('addrs') if existing_row else None
-    if old_addrs and isinstance(old_addrs, list) and len(old_addrs) > 0:
-        for item in old_addrs:
-            if not isinstance(item, dict): continue
-            new_item = dict(item)
-            tls_info = new_item.get('tls')
-            if not isinstance(tls_info, dict):
-                tls_info = {'enabled': True, 'insecure': False, 'utls': {'enabled': True, 'fingerprint': 'chrome'}}
-            tls_info['server_name'] = os.environ['DOMAIN']
-            tls_info['enabled'] = True
-            new_item['tls'] = tls_info
-            if len(old_addrs) == 1 and (new_item.get('server') == '' or '.trycloudflare.com' in str(new_item.get('server'))):
-                new_item['server'] = os.environ['DOMAIN']
-            addrs_data.append(new_item)
-
-    if not addrs_data:
-        addrs_data = [{
-            'server': os.environ['DOMAIN'],
-            'server_port': 443,
-            'tls': {
-                'disable_sni': False,
-                'enabled': True,
-                'insecure': False,
-                'server_name': os.environ['DOMAIN'],
-                'utls': {'enabled': True, 'fingerprint': 'chrome'}
-            }
-        }]
-
-    inbound_payload = {
-        'id': existing_id or 0,
-        'type': 'vless',
-        'tag': node_tag,
-        'tls_id': 0,
-        'listen': '127.0.0.1',
-        'listen_port': node_port,
-        'addrs': addrs_data,
-        'transport': {
-            'early_data_header_name': 'Sec-WebSocket-Protocol',
-            'max_early_data': 2560,
-            'headers': {'Host': os.environ['DOMAIN']},
-            'path': ws_path,
-            'type': 'ws'
-        }
-    }
-    api('POST', 'save', {
-        'object': 'inbounds',
-        'action': 'edit' if existing_id else 'new',
-        'data': json.dumps(inbound_payload),
-    })
-except Exception:
-    pass
-PYEOF
+      sout_tool sui-create-local-inbound
       systemctl restart s-ui 2>/dev/null || true
       echo -e "  ${G}[✓] 127.0.0.1 隧道节点创建完成 (端口: ${node_port}, 路径: /${ws_p}/)${N}"
     fi
@@ -4068,29 +2720,26 @@ PYEOF
   save_ws_path=$(echo "$save_ws_path" | sed -e 's|^/*||' -e 's|/*$||')
   save_sui_path=$(echo "$save_sui_path" | sed -e 's|^/*||' -e 's|/*$||')
 
-  python3 -c "
-import json
-p = '${CADDY_META}'
-try:
-    with open(p, 'r') as f:
-        d = json.load(f)
-except:
-    d = {}
-d['domain'] = '${domain}'
-d['tunnel_port'] = int('${tunnel_port}')
-d['sout_port'] = int('${sout_port}')
-d['sout_path'] = '${save_sout_path}'
-d['sui_port'] = int('${sui_port}') if '${has_sui}' == 'true' else 0
-d['sui_path'] = '${save_sui_path}' if '${has_sui}' == 'true' else ''
-d['sub_port'] = int('${sub_port}')
-d['sub_path'] = '${save_sub_path}'
-d['ws_path'] = '${save_ws_path}'
-d['node_port'] = int('${node_port}')
-if d.get('mode', 'tunnel') != 'quick_tunnel':
-    d['tunnel_engine'] = 'sing-box'
-with open(p, 'w') as f:
-    json.dump(d, f, indent=2)
-" 2>/dev/null || true
+  json_set "$CADDY_META" "domain" "$domain"
+  json_set "$CADDY_META" "tunnel_port" "$tunnel_port" --type int
+  json_set "$CADDY_META" "sout_port" "$sout_port" --type int
+  json_set "$CADDY_META" "sout_path" "$save_sout_path"
+  if [[ "$has_sui" == "true" ]]; then
+    json_set "$CADDY_META" "sui_port" "$sui_port" --type int
+    json_set "$CADDY_META" "sui_path" "$save_sui_path"
+  else
+    json_set "$CADDY_META" "sui_port" "0" --type int
+    json_set "$CADDY_META" "sui_path" ""
+  fi
+  json_set "$CADDY_META" "sub_port" "$sub_port" --type int
+  json_set "$CADDY_META" "sub_path" "$save_sub_path"
+  json_set "$CADDY_META" "ws_path" "$save_ws_path"
+  json_set "$CADDY_META" "node_port" "$node_port" --type int
+  local cur_mode
+  cur_mode=$(json_get "$CADDY_META" "mode" "tunnel")
+  if [[ "$cur_mode" != "quick_tunnel" ]]; then
+    json_set "$CADDY_META" "tunnel_engine" "sing-box"
+  fi
 
 
   # 重启/重载 sout 服务以激活内置网关
@@ -4181,51 +2830,7 @@ do_apply_cf_ssl_cert() {
 
   echo -e "  ${B}[3/4] 正在通过 Cloudflare DNS-01 验证向 Let's Encrypt 发起申请...${N}"
   local cf_domains_meta="${WORK_DIR}/cf_ssl_domains.json"
-  python3 -c '
-import json, os, time, sys, urllib.request
-p = sys.argv[1]
-dom = sys.argv[2]
-tok = sys.argv[3]
-cdir = sys.argv[4]
-try:
-    headers = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
-    parts = dom.split(".")
-    if len(parts) >= 2:
-        root_zone = ".".join(parts[-2:])
-        req = urllib.request.Request(f"https://api.cloudflare.com/client/v4/zones?name={root_zone}", headers=headers)
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            zdata = json.loads(resp.read().decode())
-            if zdata.get("result"):
-                zid = zdata["result"][0]["id"]
-                req2 = urllib.request.Request(f"https://api.cloudflare.com/client/v4/zones/{zid}/dns_records?name=_acme-challenge.{dom}", headers=headers)
-                with urllib.request.urlopen(req2, timeout=8) as resp2:
-                    rdata = json.loads(resp2.read().decode())
-                    for rec in rdata.get("result", []):
-                        rid = rec["id"]
-                        req_del = urllib.request.Request(f"https://api.cloudflare.com/client/v4/zones/{zid}/dns_records/{rid}", headers=headers, method="DELETE")
-                        urllib.request.urlopen(req_del, timeout=8)
-except Exception:
-    pass
-
-d = {}
-if os.path.exists(p):
-    try:
-        with open(p) as f:
-            d = json.load(f)
-    except Exception:
-        pass
-d[dom] = {
-    "token": tok,
-    "applied_at": int(time.time()),
-    "cert_dir": cdir
-}
-with open(p, "w") as f:
-    json.dump(d, f, indent=2)
-try:
-    os.chmod(p, 0o600)
-except Exception:
-    pass
-' "$cf_domains_meta" "$domain" "$cf_token" "$cert_dir" 2>/dev/null || true
+  sout_tool cf-dns-clean "$cf_domains_meta" "$domain" "$cf_token" "$cert_dir" 2>/dev/null || true
 
   export CF_Token="${cf_token}"
   "$acme_cmd" --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
@@ -4515,32 +3120,7 @@ apply_tuic_hy2_to_singbox() {
   local exist_tuic_p exist_hy2_p exist_tuic_uuid exist_tuic_pwd exist_hy2_pwd
   if [[ -f "$sb_conf" ]]; then
     local probed_th
-    probed_th=$(python3 -c "
-import json
-try:
-    with open('$sb_conf') as f: c = json.load(f)
-    t_p = ''
-    h_p = ''
-    t_uid = ''
-    t_pass = ''
-    h_pass = ''
-    for ib in c.get('inbounds', []):
-        if not isinstance(ib, dict): continue
-        if ib.get('type') == 'tuic' and not t_p:
-            t_p = str(ib.get('listen_port', ''))
-            users = ib.get('users', [])
-            if users and isinstance(users[0], dict):
-                t_uid = users[0].get('uuid', '')
-                t_pass = users[0].get('password', '')
-        elif ib.get('type') == 'hysteria2' and not h_p:
-            h_p = str(ib.get('listen_port', ''))
-            users = ib.get('users', [])
-            if users and isinstance(users[0], dict):
-                h_pass = users[0].get('password', '')
-    print(f'{t_p}|{h_p}|{t_uid}|{t_pass}|{h_pass}')
-except Exception:
-    print('||||')
-" 2>/dev/null || echo "||||")
+    probed_th=$(sout_tool singbox-parse-tuic-hy2 "$sb_conf" 2>/dev/null || echo "||||")
     exist_tuic_p=$(echo "$probed_th" | cut -d'|' -f1)
     exist_hy2_p=$(echo "$probed_th" | cut -d'|' -f2)
     exist_tuic_uuid=$(echo "$probed_th" | cut -d'|' -f3)
@@ -4582,174 +3162,7 @@ except Exception:
   NODE_SERVER="$node_server" \
   IS_INSECURE="$is_insecure" \
   CONGESTION_CTRL="$cur_cc" \
-  python3 <<'PYEOF'
-import json, os, random, string
-
-def gen_suffix():
-    return "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
-
-p = os.environ['SB_CONF']
-try:
-    with open(p, 'r') as f:
-        conf = json.load(f)
-except Exception:
-    conf = {}
-
-inbounds = conf.setdefault('inbounds', [])
-tuic_p = int(os.environ['TUIC_PORT'])
-hy2_p = int(os.environ['HY2_PORT'])
-
-tuic_uuid = os.environ['TUIC_UUID']
-tuic_pass = os.environ['TUIC_PASS']
-hy2_pass = os.environ['HY2_PASS']
-
-tuic_tag = None
-hy2_tag = None
-for ib in inbounds:
-    if not isinstance(ib, dict): continue
-    t = ib.get('type')
-    tg = ib.get('tag', '')
-    users = ib.get('users', [])
-    if t == 'tuic' and not tuic_tag:
-        tuic_tag = tg
-        if ib.get('listen_port'): tuic_p = int(ib['listen_port'])
-        if users and isinstance(users[0], dict):
-            if users[0].get('uuid'): tuic_uuid = users[0]['uuid']
-            if users[0].get('password'): tuic_pass = users[0]['password']
-    elif t == 'hysteria2' and not hy2_tag:
-        hy2_tag = tg
-        if ib.get('listen_port'): hy2_p = int(ib['listen_port'])
-        if users and isinstance(users[0], dict):
-            if users[0].get('password'): hy2_pass = users[0]['password']
-
-if not tuic_tag or tuic_tag == 'tuic-in':
-    tuic_tag = f"tuic-{gen_suffix()}"
-if not hy2_tag or hy2_tag == 'hy2-in':
-    hy2_tag = f"hysteria2-{gen_suffix()}"
-
-cleaned = []
-for ib in inbounds:
-    if not isinstance(ib, dict): continue
-    t = ib.get('type')
-    port = ib.get('listen_port', 0)
-    tag = ib.get('tag', '')
-    if t in ('tuic', 'hysteria2') or port in (tuic_p, hy2_p) or tag.startswith('tuic-') or tag.startswith('hysteria2-') or tag in ('tuic-in', 'hy2-in'):
-        continue
-    cleaned.append(ib)
-
-cleaned.append({
-    "type": "tuic",
-    "tag": tuic_tag,
-    "listen": "::",
-    "listen_port": tuic_p,
-    "users": [
-        {
-            "name": "admin",
-            "uuid": tuic_uuid,
-            "password": tuic_pass
-        }
-    ],
-    "congestion_control": os.environ.get('CONGESTION_CTRL', 'cubic'),
-    "tls": {
-        "enabled": True,
-        "server_name": os.environ['CERT_DOM'],
-        "alpn": ["h3"],
-        "certificate_path": os.environ['CERT_FILE'],
-        "key_path": os.environ['KEY_FILE']
-    }
-})
-
-cleaned.append({
-    "type": "hysteria2",
-    "tag": hy2_tag,
-    "listen": "::",
-    "listen_port": hy2_p,
-    "ignore_client_bandwidth": True,
-    "users": [
-        {
-            "name": "admin",
-            "password": hy2_pass
-        }
-    ],
-    "tls": {
-        "enabled": True,
-        "server_name": os.environ['CERT_DOM'],
-        "alpn": ["h3"],
-        "certificate_path": os.environ['CERT_FILE'],
-        "key_path": os.environ['KEY_FILE']
-    }
-})
-
-conf['inbounds'] = cleaned
-with open(p, 'w') as f:
-    json.dump(conf, f, indent=2)
-
-addrs_path = '/var/lib/sout/singbox_inbound_addrs.json'
-try:
-    with open(addrs_path, 'r') as af:
-        addrs_data = json.load(af)
-except Exception:
-    addrs_data = {}
-
-srv_host = os.environ.get('NODE_SERVER') or os.environ.get('CERT_DOM') or ''
-cert_dom = os.environ.get('CERT_DOM', '')
-v4_host = os.environ.get('PUBLIC_IP') or ''
-v6_host = os.environ.get('HOST_PUBLIC_IPV6') or os.environ.get('PUBLIC_IPV6') or ''
-if not v6_host and os.path.exists('/var/lib/sout/host_ipv6'):
-    try:
-        with open('/var/lib/sout/host_ipv6', 'r') as vf:
-            v6_host = vf.read().strip()
-    except Exception:
-        pass
-if not v4_host and os.path.exists('/var/lib/sout/host_ipv4'):
-    try:
-        with open('/var/lib/sout/host_ipv4', 'r') as vf:
-            v4_host = vf.read().strip()
-    except Exception:
-        pass
-
-base_direct_hosts = []
-if srv_host and srv_host != v4_host and srv_host != v6_host:
-    base_direct_hosts.append(srv_host)
-if v4_host and v4_host != '127.0.0.1' and v4_host not in base_direct_hosts:
-    base_direct_hosts.append(v4_host)
-if v6_host and v6_host != '127.0.0.1' and v6_host not in base_direct_hosts:
-    base_direct_hosts.append(v6_host)
-if not base_direct_hosts:
-    base_direct_hosts = [srv_host or '127.0.0.1']
-
-addrs_data[tuic_tag] = [{
-    'server': h,
-    'server_port': tuic_p,
-    'tls': {
-        'enabled': True,
-        'insecure': os.environ.get('IS_INSECURE') == 'true',
-        'server_name': cert_dom
-    }
-} for h in base_direct_hosts]
-addrs_data[hy2_tag] = [{
-    'server': h,
-    'server_port': hy2_p,
-    'tls': {
-        'enabled': True,
-        'insecure': os.environ.get('IS_INSECURE') == 'true',
-        'server_name': cert_dom
-    }
-} for h in base_direct_hosts]
-
-try:
-    os.makedirs(os.path.dirname(addrs_path), exist_ok=True)
-    with open(addrs_path, 'w') as af:
-        json.dump(addrs_data, af, indent=2)
-except Exception:
-    pass
-
-try:
-    with open('/var/lib/sout/.tuic_hy2_vars', 'w') as tf:
-        tf.write(f"tuic_uuid='{tuic_uuid}'\ntuic_pass='{tuic_pass}'\nhy2_pass='{hy2_pass}'\ntuic_port={tuic_p}\nhy2_port={hy2_p}\n")
-except Exception:
-    pass
-PYEOF
+  sout_tool singbox-apply-tuic-hy2
 
   if [[ -f "${WORK_DIR}/.tuic_hy2_vars" ]]; then
     source "${WORK_DIR}/.tuic_hy2_vars"
@@ -5006,25 +3419,7 @@ create_tuic_hy2_nodes() {
 
   # 查询当前是否已存在 TUIC / Hysteria2 节点
   local existing_nodes
-  existing_nodes=$(python3 -c "
-import urllib.request, urllib.parse, json
-BASE = '${sui_api}'
-TOKEN = '${sui_token}'
-headers = {'Token': TOKEN}
-req = urllib.request.Request(BASE.rstrip('/') + '/inbounds', headers=headers)
-try:
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        d = json.loads(resp.read().decode('utf-8'))
-        inbs = d.get('obj', {}).get('inbounds', [])
-        tuic_n = next((x for x in inbs if x.get('type') == 'tuic'), None)
-        hy2_n = next((x for x in inbs if x.get('type') == 'hysteria2'), None)
-        out = []
-        if tuic_n: out.append(f\"TUIC|{tuic_n.get('tag')}|{tuic_n.get('listen_port')}|{tuic_n.get('tls_id')}\")
-        if hy2_n: out.append(f\"Hysteria2|{hy2_n.get('tag')}|{hy2_n.get('listen_port')}|{hy2_n.get('tls_id')}\")
-        print(';'.join(out))
-except Exception:
-    pass
-" 2>/dev/null || true)
+  existing_nodes=$(sout_tool sui-check-tuic-hy2 "$sui_api" "$sui_token" 2>/dev/null || true)
 
   local action_mode="create_both"
   if [[ -n "$existing_nodes" ]]; then
@@ -5114,335 +3509,7 @@ except Exception:
   CONGESTION_CONTROL="$cur_cc" \
   TUIC_PORT="$tuic_p" \
   HY2_PORT="$hy2_p" \
-  python3 <<'PYEOF'
-import json, os, sys, urllib.request, urllib.parse, re, random, string, time
-
-BASE = os.environ['SUI_API']
-TOKEN = os.environ['SUI_TOKEN']
-cert_domain = os.environ['CERT_DOMAIN']
-cert_file = os.environ['CERT_FILE']
-key_file = os.environ['KEY_FILE']
-is_insecure = (os.environ.get('IS_INSECURE', 'false').lower() == 'true')
-action_mode = os.environ.get('ACTION_MODE', 'create_both')
-admin_name = os.environ.get('SUI_ADMIN_USER', 'admin')
-pub_ip = os.environ.get('PUBLIC_IP', cert_domain)
-cc = os.environ.get('CONGESTION_CONTROL', 'bbr')
-
-def api(method, endpoint, form=None, retries=3, timeout=35):
-    url = BASE.rstrip('/') + '/' + endpoint.lstrip('/')
-    data = urllib.parse.urlencode(form).encode() if form else None
-    headers = {'Token': TOKEN}
-    if data is not None:
-        headers['Content-Type'] = 'application/x-www-form-urlencoded'
-    for attempt in range(retries):
-        try:
-            req = urllib.request.Request(url, data=data, headers=headers, method=method)
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode('utf-8'))
-        except Exception as e:
-            if attempt < retries - 1:
-                time.sleep(1.5)
-                continue
-            raise e
-
-# 1. 检查现有 TLS 并复用或更新匹配的 TLS 模板（彻底防止重复生成 mytls1, mytls2, mytls3 残留）
-tls_resp = api('GET', 'tls') or {}
-tls_obj = tls_resp.get('obj') or {}
-tls_list = tls_obj.get('tls', []) if isinstance(tls_obj, dict) else (tls_obj or [])
-
-target_tls = None
-for t in tls_list:
-    srv = t.get('server', {})
-    if srv.get('server_name') == cert_domain or srv.get('certificate_path') == cert_file:
-        target_tls = t
-        break
-
-if target_tls:
-    new_tls_id = target_tls.get('id')
-    new_tls_name = target_tls.get('name', 'mytls1')
-    tls_payload = {
-        'id': new_tls_id,
-        'name': new_tls_name,
-        'server': {
-            'enabled': True,
-            'certificate_path': cert_file,
-            'key_path': key_file,
-            'server_name': cert_domain,
-            'alpn': ['h3']
-        },
-        'client': {
-            'insecure': is_insecure,
-            'utls': {
-                'enabled': True,
-                'fingerprint': 'chrome'
-            }
-        }
-    }
-    api('POST', 'save', {'object': 'tls', 'action': 'edit', 'data': json.dumps(tls_payload)})
-    print(f"\033[32m[✓] 复用现有 TLS 配置: {new_tls_name} (ID: {new_tls_id}, 允许不安全连接: {is_insecure})\033[0m")
-else:
-    max_num = 0
-    for t in tls_list:
-        name = t.get('name', '')
-        m = re.match(r'^mytls(\d+)$', name)
-        if m:
-            max_num = max(max_num, int(m.group(1)))
-    new_tls_name = f"mytls{max_num + 1}"
-    new_tls_payload = {
-        'id': 0,
-        'name': new_tls_name,
-        'server': {
-            'enabled': True,
-            'certificate_path': cert_file,
-            'key_path': key_file,
-            'server_name': cert_domain,
-            'alpn': ['h3']
-        },
-        'client': {
-            'insecure': is_insecure,
-            'utls': {
-                'enabled': True,
-                'fingerprint': 'chrome'
-            }
-        }
-    }
-    save_tls_res = api('POST', 'save', {'object': 'tls', 'action': 'new', 'data': json.dumps(new_tls_payload)})
-    if not save_tls_res.get('success'):
-        print(f"\033[31m[!] 注册 TLS 对象失败: {save_tls_res.get('msg')}\033[0m")
-        sys.exit(1)
-
-    tls_resp2 = api('GET', 'tls') or {}
-    tls_obj2 = tls_resp2.get('obj') or {}
-    tls_list2 = tls_obj2.get('tls', []) if isinstance(tls_obj2, dict) else (tls_obj2 or [])
-    new_tls_id = None
-    for t in tls_list2:
-        if t.get('name') == new_tls_name:
-            new_tls_id = t.get('id')
-            break
-
-    if not new_tls_id:
-        print(f"\033[31m[!] 未能检索到新创建的 TLS ID ({new_tls_name})\033[0m")
-        sys.exit(1)
-
-    print(f"\033[32m[✓] 成功注册 TLS 配置: {new_tls_name} (ID: {new_tls_id}, 允许不安全连接: {is_insecure})\033[0m")
-
-# 顺便清理未被任何入站关联的同域名历史冗余 TLS 模板，保持模板列表纯净
-try:
-    inb_check = api('GET', 'inbounds') or {}
-    inb_rows_c = (inb_check.get('obj') or {}).get('inbounds', []) if isinstance(inb_check.get('obj'), dict) else (inb_check.get('obj') or [])
-    used_tids = set(ib.get('tls_id') for ib in inb_rows_c if isinstance(ib, dict) and ib.get('tls_id'))
-    for t in tls_list:
-        tid = t.get('id')
-        tname = t.get('name', '')
-        if tname.startswith('mytls') and tid != new_tls_id and tid not in used_tids:
-            api('POST', 'save', {'object': 'tls', 'action': 'del', 'data': str(tid)})
-except Exception:
-    pass
-
-# 2. 查询当前入站节点并根据 action_mode 执行变更或补齐
-inb_resp = api('GET', 'inbounds') or {}
-inb_obj_first = inb_resp.get('obj') or {}
-inbound_rows = inb_obj_first.get('inbounds', []) if isinstance(inb_obj_first, dict) else (inb_obj_first or [])
-inbound_rows = [ib for ib in inbound_rows if isinstance(ib, dict)]
-existing_tuic = next((ib for ib in inbound_rows if ib.get('type') == 'tuic'), None)
-existing_hy2 = next((ib for ib in inbound_rows if ib.get('type') == 'hysteria2'), None)
-
-def gen_suffix():
-    return "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
-
-# 处理 TUIC 节点 (确保拥塞控制与多域名完整写入)
-tuic_addrs = [{'server': pub_ip, 'server_port': int(os.environ['TUIC_PORT'])}]
-if existing_tuic:
-    tuic_port = existing_tuic.get('listen_port') or int(os.environ['TUIC_PORT'])
-    tuic_addrs = [{'server': pub_ip, 'server_port': tuic_port}]
-    if action_mode in ('change_existing_only', 'change_and_fill'):
-        tuic_t = existing_tuic.get('tag') or ''
-        if not (tuic_t.startswith('tuic-') and len(tuic_t) == 9):
-            tuic_t = f"tuic-{gen_suffix()}"
-        tuic_payload = {
-            'id': existing_tuic['id'],
-            'type': 'tuic',
-            'tag': tuic_t,
-            'tls_id': new_tls_id,
-            'listen': '::',
-            'listen_port': tuic_port,
-            'congestion_control': cc,
-            'addrs': tuic_addrs
-        }
-        api('POST', 'save', {'object': 'inbounds', 'action': 'edit', 'data': json.dumps(tuic_payload)})
-        print(f"\033[32m[✓] TUIC 节点 [{tuic_t}] 已成功更新 (TLS_ID: {new_tls_id}, 拥塞控制: {cc}, 多域名: {pub_ip}:{tuic_port})\033[0m")
-else:
-    if action_mode in ('create_both', 'change_and_fill'):
-        tuic_port = int(os.environ['TUIC_PORT'])
-        tuic_tag = f"tuic-{gen_suffix()}"
-        tuic_payload = {
-            'id': 0,
-            'type': 'tuic',
-            'tag': tuic_tag,
-            'tls_id': new_tls_id,
-            'listen': '::',
-            'listen_port': tuic_port,
-            'congestion_control': cc,
-            'addrs': tuic_addrs
-        }
-        api('POST', 'save', {'object': 'inbounds', 'action': 'new', 'data': json.dumps(tuic_payload)})
-        print(f"\033[32m[✓] 已成功创建并上线 TUIC 节点: tag={tuic_tag}, 端口={tuic_port}, 拥塞控制={cc}, 多域名={pub_ip}:{tuic_port}\033[0m")
-time.sleep(0.5)
-
-# 处理 Hysteria2 节点 (确保忽略客户端带宽与多域名完整写入)
-hy2_addrs = [{'server': pub_ip, 'server_port': int(os.environ['HY2_PORT'])}]
-if existing_hy2:
-    hy2_port = existing_hy2.get('listen_port') or int(os.environ['HY2_PORT'])
-    hy2_addrs = [{'server': pub_ip, 'server_port': hy2_port}]
-    if action_mode in ('change_existing_only', 'change_and_fill'):
-        hy2_t = existing_hy2.get('tag') or ''
-        if not (hy2_t.startswith('hysteria2-') and len(hy2_t) == 14):
-            hy2_t = f"hysteria2-{gen_suffix()}"
-        hy2_payload = {
-            'id': existing_hy2['id'],
-            'type': 'hysteria2',
-            'tag': hy2_t,
-            'tls_id': new_tls_id,
-            'listen': '::',
-            'listen_port': hy2_port,
-            'ignore_client_bandwidth': True,
-            'addrs': hy2_addrs
-        }
-        api('POST', 'save', {'object': 'inbounds', 'action': 'edit', 'data': json.dumps(hy2_payload)})
-        print(f"\033[32m[✓] Hysteria2 节点 [{hy2_t}] 已成功更新 (TLS_ID: {new_tls_id}, 忽略客户端带宽: 开启, 多域名: {pub_ip}:{hy2_port})\033[0m")
-else:
-    if action_mode in ('create_both', 'change_and_fill'):
-        hy2_port = int(os.environ['HY2_PORT'])
-        hy2_tag = f"hysteria2-{gen_suffix()}"
-        hy2_payload = {
-            'id': 0,
-            'type': 'hysteria2',
-            'tag': hy2_tag,
-            'tls_id': new_tls_id,
-            'listen': '::',
-            'listen_port': hy2_port,
-            'ignore_client_bandwidth': True,
-            'addrs': hy2_addrs
-        }
-        api('POST', 'save', {'object': 'inbounds', 'action': 'new', 'data': json.dumps(hy2_payload)})
-        print(f"\033[32m[✓] 已成功创建并上线 Hysteria2 节点: tag={hy2_tag}, 端口={hy2_port}, 忽略客户端带宽=开启, 多域名={pub_ip}:{hy2_port}\033[0m")
-time.sleep(0.5)
-
-# 3. 重新获取所有最新的 inbound ID
-inb_resp2 = api('GET', 'inbounds') or {}
-inb_obj2 = inb_resp2.get('obj') or []
-if isinstance(inb_obj2, dict):
-    inb_rows2 = inb_obj2.get('inbounds') or []
-else:
-    inb_rows2 = inb_obj2 or []
-inb_rows2 = [r for r in inb_rows2 if isinstance(r, dict)]
-all_ib_ids = [ib['id'] for ib in inb_rows2 if ib.get('id') is not None]
-
-# 4. 四级优先级精准定位主用户（彻底防止改名后识别不到或新建重名用户）
-cli_resp = api('GET', 'clients') or {}
-cli_obj = cli_resp.get('obj') or []
-if isinstance(cli_obj, dict):
-    clients = cli_obj.get('clients') or []
-else:
-    clients = cli_obj or []
-clients = [c for c in clients if isinstance(c, dict)]
-
-target_client = None
-# 级别 1: 查找内部数据库 id == 1 的核心账号（用户改名后 ID 仍固定为 1）
-target_client = next((c for c in clients if c.get('id') == 1), None)
-
-# 级别 2: 查找名称匹配 admin_name (默认 admin) 的用户
-if not target_client:
-    target_client = next((c for c in clients if c.get('name') == admin_name), None)
-
-# 级别 3: 若均无，选用当前客户端列表中的首位活跃用户
-if not target_client and len(clients) > 0:
-    target_client = clients[0]
-
-# 确定最终用户名与客户端 ID
-if target_client:
-    user_name = target_client.get('name', admin_name)
-    user_id = target_client.get('id', 1)
-    is_new_user = False
-else:
-    user_name = admin_name
-    user_id = 0
-    is_new_user = True
-
-# 合并入站列表（并集，无损保留已绑定的所有节点）
-raw_user_inbs = target_client.get('inbounds') if target_client else []
-existing_ib_ids = set(raw_user_inbs or [])
-merged_inbounds = sorted(list(existing_ib_ids | set(all_ib_ids)))
-
-import uuid
-
-# 补齐或更新全协议凭据
-client_pass = os.urandom(8).hex()
-client_uuid = str(uuid.uuid4())
-client_cfg = target_client.get('config', {}) if (target_client and isinstance(target_client.get('config'), dict)) else {}
-
-if 'vless' not in client_cfg:
-    client_cfg['vless'] = {'name': user_name, 'uuid': client_uuid, 'flow': 'xtls-rprx-vision'}
-else:
-    if isinstance(client_cfg['vless'], dict):
-        client_cfg['vless']['name'] = user_name
-        if len(str(client_cfg['vless'].get('uuid', ''))) != 36:
-            client_cfg['vless']['uuid'] = client_uuid
-
-if 'vmess' not in client_cfg:
-    client_cfg['vmess'] = {'name': user_name, 'uuid': client_uuid}
-else:
-    if isinstance(client_cfg['vmess'], dict):
-        client_cfg['vmess']['name'] = user_name
-        if len(str(client_cfg['vmess'].get('uuid', ''))) != 36:
-            client_cfg['vmess']['uuid'] = client_uuid
-
-if 'tuic' not in client_cfg:
-    client_cfg['tuic'] = {'name': user_name, 'uuid': str(uuid.uuid4()), 'password': client_pass}
-else:
-    if isinstance(client_cfg['tuic'], dict):
-        client_cfg['tuic']['name'] = user_name
-        if len(str(client_cfg['tuic'].get('uuid', ''))) != 36:
-            client_cfg['tuic']['uuid'] = str(uuid.uuid4())
-
-if 'hysteria2' not in client_cfg:
-    client_cfg['hysteria2'] = {'name': user_name, 'password': client_pass}
-else:
-    if isinstance(client_cfg['hysteria2'], dict):
-        client_cfg['hysteria2']['name'] = user_name
-
-client_payload = {
-    'id': user_id,
-    'enable': True,
-    'name': user_name,
-    'remark': target_client.get('remark', '默认用户') if target_client else '默认用户',
-    'config': client_cfg,
-    'inbounds': merged_inbounds,
-    'links': target_client.get('links', []) if target_client else [],
-    'volume': target_client.get('volume', 0) if target_client else 0,
-    'expiry': target_client.get('expiry', 0) if target_client else 0,
-    'down': target_client.get('down', 0) if target_client else 0,
-    'up': target_client.get('up', 0) if target_client else 0,
-    'desc': target_client.get('desc', '') if target_client else '',
-    'group': target_client.get('group', '') if target_client else '',
-    'delayStart': target_client.get('delayStart', False) if target_client else False,
-    'autoReset': target_client.get('autoReset', False) if target_client else False,
-    'resetDays': target_client.get('resetDays', 0) if target_client else 0,
-    'nextReset': target_client.get('nextReset', 0) if target_client else 0,
-    'totalUp': target_client.get('totalUp', 0) if target_client else 0,
-    'totalDown': target_client.get('totalDown', 0) if target_client else 0,
-    'createdAt': target_client.get('createdAt', 0) if target_client else 0,
-    'onlineAt': target_client.get('onlineAt', 0) if target_client else 0
-}
-try:
-    save_cli_res = api('POST', 'save', {'object': 'clients', 'action': 'new' if is_new_user else 'edit', 'data': json.dumps(client_payload)})
-    if not save_cli_res.get('success'):
-        print(f"\033[33m[!] 关联用户提示: {save_cli_res.get('msg')}\033[0m")
-    else:
-        print(f"\033[32m[✓] 主用户 [{user_name}] (ID: {user_id or 1}) 已成功关联绑定全部入站节点。\033[0m")
-except Exception as e:
-    print(f"\033[33m[!] 主用户关联入站节点操作已下发，可稍后在 s-ui 面板中确认 ({e})\033[0m")
-PYEOF
+  sout_tool sui-apply-tuic-hy2
 }
 
 caddy_menu() {

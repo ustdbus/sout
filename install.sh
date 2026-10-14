@@ -12,27 +12,24 @@ WEB_PORT=8899
 # 统一 JSON 字段读取：替代 grep -oE/cut/awk 解析（键不存在或解析失败时输出空，由调用点 :- 兜底）
 # ==============================================================================
 json_get() {
-  JSON_FILE="${1:-}" JSON_KEY="${2:-}" python3 -c '
-import json, os
-f = os.environ.get("JSON_FILE", "")
-key = os.environ.get("JSON_KEY", "")
-try:
-    with open(f) as fp:
-        data = json.load(fp)
-    val = data.get(key)
-    if val is None:
-        print("")
-    elif isinstance(val, bool):
-        print("true" if val else "false")
-    elif isinstance(val, (int, float)):
-        print(val)
-    elif isinstance(val, str):
-        print(val)
-    else:
-        print("")
-except Exception:
-    print("")
-' 2>/dev/null || printf '%s\n' ""
+  local f="${1:-}"
+  local k="${2:-}"
+  local def="${3:-}"
+  if command -v sout-server >/dev/null 2>&1; then
+    sout-server tool json-get "$f" "$k" "$def" 2>/dev/null || true
+    return
+  elif [[ -x "$BIN" ]]; then
+    "$BIN" tool json-get "$f" "$k" "$def" 2>/dev/null || true
+    return
+  fi
+  [[ ! -f "$f" ]] && { echo "$def"; return; }
+  local val
+  val=$(grep -oE "\"${k}\"[[:space:]]*:[[:space:]]*(\"[^\"]*\"|[0-9.]+|true|false|null)" "$f" 2>/dev/null | head -1 | awk -F: '{print $2}' | tr -d ' "\r\n' || true)
+  if [[ -n "$val" && "$val" != "null" ]]; then
+    echo "$val"
+  else
+    echo "$def"
+  fi
 }
 if [[ $EUID -ne 0 ]]; then
   echo "请使用 root 权限运行此脚本 (sudo ./install.sh 或 sudo bash ...)" >&2
@@ -328,7 +325,7 @@ check_and_install_deps() {
   local mgr
   mgr=$(detect_pkg_mgr)
   local needed=()
-  local base_cmds=(curl tar ip ss python3)
+  local base_cmds=(curl tar ip ss)
   if check_sui; then
     base_cmds+=(sqlite3)
   fi
@@ -361,7 +358,6 @@ check_and_install_deps() {
         ip)   pkgs+=("iproute2") ;;
         ss)   pkgs+=("iproute2") ;;
         bash) pkgs+=("bash") ;;
-        python3) pkgs+=("python3") ;;
         sqlite3) [[ "$mgr" == "apk" ]] && pkgs+=("sqlite") || pkgs+=("sqlite3") ;;
       esac
     done
@@ -1502,8 +1498,10 @@ else
       [[ -n "$local_p_val" ]] && sui_port="$local_p_val"
       local_path_val=$(sqlite3 "$sui_db" "SELECT value FROM settings WHERE key='webPath' LIMIT 1;" 2>/dev/null || true)
       [[ -n "$local_path_val" ]] && sui_path="$local_path_val"
-    elif command -v python3 >/dev/null 2>&1; then
-      sui_u=$(python3 -c "import sqlite3; con=sqlite3.connect('$sui_db'); cur=con.cursor(); r=cur.execute('SELECT username FROM users LIMIT 1').fetchone(); print(r[0] if r else 'admin'); con.close()" 2>/dev/null || echo "admin")
+    elif command -v sout-server >/dev/null 2>&1; then
+      sui_u=$(sout-server tool sui-query "$sui_db" username 2>/dev/null || echo "admin")
+    elif [[ -x "$BIN" ]]; then
+      sui_u=$("$BIN" tool sui-query "$sui_db" username 2>/dev/null || echo "admin")
     fi
   fi
   [[ -z "$sui_u" ]] && sui_u="admin"
