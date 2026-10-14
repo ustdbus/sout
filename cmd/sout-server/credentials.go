@@ -145,6 +145,8 @@ func GetOrCreateSlotCredentials(slot int, remark string) (string, string) {
 	globalCreds.SlotCredentials[key] = sc
 	_ = saveCredentialsLocked()
 	return newUUID, newPass
+}
+
 // AdoptLegacySlotCredentials 若指定 slot 尚无凭据，或者凭据与旧凭据不同，支持将其收纳固化覆盖到 credentials.json 中并持久化保存。
 // 确保旧客户端的 UUID 能够被 slot 继承并永久保持。
 func AdoptLegacySlotCredentials(slot int, uuid, password, remark string) bool {
