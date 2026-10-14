@@ -188,11 +188,6 @@ func newEmbeddedEngine(listenIP string) (*embeddedEngine, error) {
 		return nil, fmt.Errorf("创建初始 outboundBox 失败: %w", err)
 	}
 
-	globalEngineMu.Lock()
-	if globalEngine == nil {
-		globalEngine = engine
-	}
-	globalEngineMu.Unlock()
 
 	return engine, nil
 }
