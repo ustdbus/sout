@@ -652,7 +652,7 @@ func (m *Manager) Stop(slot int) error {
 	for h := range hostSet {
 		hosts = append(hosts, h)
 	}
-	go m.cleanupBoundBranches(hosts...)
+	go m.cleanupBoundBranches(slot, hosts...)
 
 	return nil
 }
@@ -865,10 +865,13 @@ func (m *Manager) resync(t *Tunnel) error {
 	return x.ResyncOutbound(t, m.Tunnels())
 }
 
-func (m *Manager) cleanupBoundBranches(hosts ...string) {
+func (m *Manager) cleanupBoundBranches(slot int, hosts ...string) {
 	p, err := openPanel()
 	if err != nil {
 		return
+	}
+	if slot > 0 {
+		_ = p.DeleteBranchesBySlot(slot, m.Tunnels())
 	}
 	for _, h := range hosts {
 		if h != "" {

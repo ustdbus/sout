@@ -1781,17 +1781,33 @@ func removeBranchBinding(workDir string, templateID int, host string, slot int) 
 	for _, b := range list {
 		match := false
 		if templateID > 0 && b.TemplateID == templateID {
-			if host != "" && (b.Host == host || sanitizeTag(b.Host) == sanitizeTag(host)) {
+			if slot > 0 && b.Slot == slot {
 				match = true
 			}
-			if slot > 0 && b.Slot == slot {
+			if host != "" {
+				hClean := strings.TrimSpace(host)
+				if b.Host == hClean || sanitizeTag(b.Host) == sanitizeTag(hClean) ||
+					hClean == fmt.Sprintf("_s%d", b.Slot) || hClean == fmt.Sprintf("s%d", b.Slot) ||
+					(isSplitUser(hClean) && parseSlotFromClientName(hClean) == b.Slot) {
+					match = true
+				}
+			}
+			if slot <= 0 && host == "" {
 				match = true
 			}
 		} else if templateID <= 0 {
-			if host != "" && (b.Host == host || sanitizeTag(b.Host) == sanitizeTag(host)) {
+			if slot > 0 && b.Slot == slot {
 				match = true
 			}
-			if slot > 0 && b.Slot == slot {
+			if host != "" {
+				hClean := strings.TrimSpace(host)
+				if b.Host == hClean || sanitizeTag(b.Host) == sanitizeTag(hClean) ||
+					hClean == fmt.Sprintf("_s%d", b.Slot) || hClean == fmt.Sprintf("s%d", b.Slot) ||
+					(isSplitUser(hClean) && parseSlotFromClientName(hClean) == b.Slot) {
+					match = true
+				}
+			}
+			if slot <= 0 && host == "" {
 				match = true
 			}
 		}
@@ -2344,6 +2360,28 @@ func (s *SUI) DeleteBranchesByHost(host string, tunnels []*Tunnel) error {
 	return nil
 }
 
+// DeleteBranchesBySlot 当出口槽位被删除/停止时，级联删除绑定到该槽位上的所有 s-ui 分流 Client 及路由规则
+func (s *SUI) DeleteBranchesBySlot(slot int, tunnels []*Tunnel) error {
+	if slot <= 0 {
+		return nil
+	}
+	clients, err := s.apiClients(0)
+	if err == nil {
+		for _, c := range clients {
+			name, _ := c["name"].(string)
+			if isSplitUser(name) && parseSlotFromClientName(name) == slot {
+				if idVal, ok := c["id"].(float64); ok {
+					_ = s.apiDeleteClient(int(idVal))
+				}
+				_ = s.BindUserRoute(name, "", tunnels)
+			}
+		}
+	}
+	removeBranchBinding(s.workDir, 0, "", slot)
+	invalidateInbounds()
+	return nil
+}
+
 func (s *SUI) ResyncOutbound(t *Tunnel, tunnels []*Tunnel) error {
 	return s.syncOutbounds(tunnels)
 }
@@ -2356,9 +2394,11 @@ func (s *SUI) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
 			c := clients[0]
 			cName, _ := c["name"].(string)
 			if isSplitUser(cName) {
+				slot := parseSlotFromClientName(cName)
+				tplID := parseTemplateIDFromClientName(cName)
 				_ = s.apiDeleteClient(id)
 				_ = s.BindUserRoute(cName, "", tunnels)
-				removeBranchBinding(s.workDir, 0, cName, 0)
+				removeBranchBinding(s.workDir, tplID, cName, slot)
 				continue
 			}
 		}

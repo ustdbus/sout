@@ -133,13 +133,24 @@ func (sb *SingBox) saveAllBranchBindings(list []branchBinding) {
 	}
 }
 
-func (sb *SingBox) removeBranchBinding(templateID int, hostTag string) {
+func (sb *SingBox) removeBranchBinding(templateID int, hostTag string, slot int) {
 	list := sb.loadBranchBindings()
 	var updated []branchBinding
 	for _, b := range list {
 		match := false
-		if b.TemplateID == templateID {
-			if hostTag == "" || b.Host == hostTag || sanitizeTag(b.Host) == sanitizeTag(hostTag) {
+		tplMatch := (templateID <= 0 || b.TemplateID == templateID)
+		if tplMatch {
+			if slot > 0 && b.Slot == slot {
+				match = true
+			}
+			if hostTag != "" {
+				hClean := strings.TrimSpace(hostTag)
+				if b.Host == hClean || sanitizeTag(b.Host) == sanitizeTag(hClean) ||
+					hClean == fmt.Sprintf("_s%d", b.Slot) || hClean == fmt.Sprintf("s%d", b.Slot) {
+					match = true
+				}
+			}
+			if slot <= 0 && hostTag == "" {
 				match = true
 			}
 		}
@@ -2470,10 +2481,12 @@ func (sb *SingBox) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
 						routeRaw["rules"] = keptRules
 					}
 
-					// 清理持久化绑定记录 (提取特定 client 关联的 hostTag 进行精准清理)
+					// 清理持久化绑定记录 (提取特定 client 关联的 hostTag 与 slot 进行精准清理)
 					prefix := fmt.Sprintf("soutu%d", (tplIdx+1)*1000)
 					delHostTag := strings.TrimPrefix(delName, prefix)
-					sb.removeBranchBinding((tplIdx+1)*1000, delHostTag)
+					slot := parseSlotFromClientName(delName)
+					sb.removeBranchBinding((tplIdx+1)*1000, delHostTag, slot)
+					removeBranchBinding(sb.workDir, (tplIdx+1)*1000, delHostTag, slot)
 				}
 			}
 		}
@@ -2491,7 +2504,8 @@ func (sb *SingBox) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
 		for idx, ib := range inboundsRaw {
 			bID := (idx + 1) * 1000
 			if baseDeleteSet[bID] {
-				sb.removeBranchBinding(bID, "")
+				sb.removeBranchBinding(bID, "", 0)
+				removeBranchBinding(sb.workDir, bID, "", 0)
 				continue
 			}
 			remainingInbounds = append(remainingInbounds, ib)
@@ -2580,10 +2594,87 @@ func (sb *SingBox) DeleteBranchesByHost(host string, tunnels []*Tunnel) error {
 		}
 	}
 
-	sb.removeBranchBinding(0, hClean)
-	sb.removeBranchBinding(0, hTag)
+	sb.removeBranchBinding(0, hClean, 0)
+	sb.removeBranchBinding(0, hTag, 0)
 	removeBranchBinding(sb.workDir, 0, hClean, 0)
 	removeBranchBinding(sb.workDir, 0, hTag, 0)
+
+	sb.syncOutboundsInternal(cfg, tunnels)
+	invalidateInbounds()
+	return sb.saveConfig(cfg)
+}
+
+// DeleteBranchesBySlot 当出口槽位被删除/停止时，级联删除绑定到该槽位上的所有分流分支客户端及路由规则，彻底杜绝自愈残留
+func (sb *SingBox) DeleteBranchesBySlot(slot int, tunnels []*Tunnel) error {
+	if slot <= 0 {
+		return nil
+	}
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+
+	cfg, err := sb.loadConfig()
+	if err != nil {
+		return err
+	}
+
+	slotSuffix := fmt.Sprintf("_s%d", slot)
+	targetUsers := make(map[string]bool)
+
+	// 1. 从 route.rules 中移除所有属于该 slot 的分流规则
+	routeRaw, _ := cfg["route"].(map[string]any)
+	if routeRaw != nil {
+		rulesRaw, _ := routeRaw["rules"].([]any)
+		var keptRules []any
+		for _, r := range rulesRaw {
+			if rMap, ok := r.(map[string]any); ok {
+				if authUsers, ok := rMap["auth_user"].([]any); ok {
+					var keptAuth []any
+					for _, au := range authUsers {
+						if uStr, ok := au.(string); ok {
+							if strings.HasSuffix(uStr, slotSuffix) || parseSlotFromClientName(uStr) == slot {
+								targetUsers[uStr] = true
+							} else {
+								keptAuth = append(keptAuth, au)
+							}
+						}
+					}
+					if len(keptAuth) > 0 {
+						rMap["auth_user"] = keptAuth
+						keptRules = append(keptRules, r)
+					}
+				} else {
+					keptRules = append(keptRules, r)
+				}
+			}
+		}
+		routeRaw["rules"] = keptRules
+	}
+
+	// 2. 从所有 inbounds 中移除属于该 slot 的 Client
+	inboundsRaw, _ := cfg["inbounds"].([]any)
+	for _, ib := range inboundsRaw {
+		if ibMap, ok := ib.(map[string]any); ok {
+			usersRaw, hasUsers := ibMap["users"].([]any)
+			if !hasUsers || usersRaw == nil {
+				continue
+			}
+			var keptUsers []any
+			for _, u := range usersRaw {
+				if uMap, ok := u.(map[string]any); ok {
+					uName, _ := uMap["name"].(string)
+					if targetUsers[uName] || strings.HasSuffix(uName, slotSuffix) || parseSlotFromClientName(uName) == slot {
+						continue
+					}
+					keptUsers = append(keptUsers, u)
+				}
+			}
+			ibMap["users"] = keptUsers
+		}
+	}
+
+	// 3. 彻底从持久化文件中擦除该 slot 的所有分流绑定
+	sb.removeBranchBinding(0, "", slot)
+	removeBranchBinding(sb.workDir, 0, "", slot)
 
 	sb.syncOutboundsInternal(cfg, tunnels)
 	invalidateInbounds()
