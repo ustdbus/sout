@@ -304,6 +304,14 @@ _openrc_clean_ports() {
         [[ -n "$sp" ]] && p="$sp"
       fi
       kill_port "$p"
+      # 全面扫描并强制释放所有入站节点监听端口与 SOCKS5 端口，防止端口霸占
+      for cf_path in "/etc/sing-box/config.json" "/var/lib/sout/singbox_inbounds.json"; do
+        if [[ -f "$cf_path" ]]; then
+          for port_val in $(grep -oE '"listen_port"[[:space:]]*:[[:space:]]*[0-9]+' "$cf_path" 2>/dev/null | grep -oE '[0-9]+' | sort -u); do
+            kill_port "$port_val"
+          done
+        fi
+      done
       ;;
   esac
 }
@@ -316,6 +324,8 @@ _openrc_force_stop() {
       pkill -9 -f "/usr/local/s-ui/sui" 2>/dev/null || true
       ;;
     sout|fanout)
+      pkill -9 -f "sout-server" 2>/dev/null || true
+      pkill -9 -x "sout-server" 2>/dev/null || true
       pkill -9 -f "/usr/local/bin/sout-server" 2>/dev/null || true
       pkill -9 -f "/usr/local/bin/fanout" 2>/dev/null || true
       ;;
@@ -381,20 +391,37 @@ systemctl() {
       if [[ -x /etc/init.d/${name} ]]; then
         if [[ "$action" == "restart" ]]; then
           rc-service "$name" stop >/dev/null 2>&1 || true
-          rc-service "$name" zap >/dev/null 2>&1 || true
           _openrc_force_stop "$name"
           _openrc_clean_ports "$name"
-          sleep 0.3
+          for _ in {1..15}; do
+            if ! pgrep -f "sout-server" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.2
+          done
+          rc-service "$name" zap >/dev/null 2>&1 || true
           rc-service "$name" start
         elif [[ "$action" == "stop" ]]; then
           rc-service "$name" stop >/dev/null 2>&1 || true
-          rc-service "$name" zap >/dev/null 2>&1 || true
-          _openrc_force_stop "$name"
-        else
-          rc-service "$name" zap >/dev/null 2>&1 || true
           _openrc_force_stop "$name"
           _openrc_clean_ports "$name"
-          sleep 0.2
+          for _ in {1..10}; do
+            if ! pgrep -f "sout-server" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.2
+          done
+          rc-service "$name" zap >/dev/null 2>&1 || true
+        else
+          _openrc_force_stop "$name"
+          _openrc_clean_ports "$name"
+          for _ in {1..10}; do
+            if ! pgrep -f "sout-server" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.2
+          done
+          rc-service "$name" zap >/dev/null 2>&1 || true
           rc-service "$name" start
         fi
       else
