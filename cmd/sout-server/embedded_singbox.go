@@ -239,11 +239,29 @@ func (e *embeddedEngine) rebuildInboundBoxLocked() error {
 		"inbounds": inboundsRaw,
 		"outbounds": []any{
 			map[string]any{
+				"type": "direct",
+				"tag":  "direct",
+			},
+			map[string]any{
 				"type": soutDynamicOutboundType,
 				"tag":  soutDynamicOutboundType,
 			},
 		},
 		"route": map[string]any{
+			"rules": []any{
+				map[string]any{
+					"domain":   []any{"localhost"},
+					"outbound": "direct",
+				},
+				map[string]any{
+					"ip_is_private": true,
+					"outbound":      "direct",
+				},
+				map[string]any{
+					"inbound":  []any{"cf-tunnel-in"},
+					"outbound": "direct",
+				},
+			},
 			"final": soutDynamicOutboundType,
 		},
 	}
@@ -634,6 +652,16 @@ func (o *soutDynamicOutbound) endpointFor(ctx context.Context, destination M.Soc
 		return N.SystemDialer, destination, nil
 	}
 
+	// 特殊入站豁免：Cloudflare 隧道入站是纯反向代理回源流量，必须直连本机/局域网服务，严禁走代理出口
+	if strings.EqualFold(metadata.Inbound, "cf-tunnel-in") || strings.HasPrefix(metadata.Inbound, "cf-tunnel") || strings.HasPrefix(metadata.Inbound, "cloudflared") {
+		return N.SystemDialer, destination, nil
+	}
+
+	// 本地回环与局域网私有地址直接走本机系统直连
+	if isLocalOrPrivateDestination(destination) {
+		return N.SystemDialer, destination, nil
+	}
+
 	o.engine.mu.Lock()
 	var route embeddedRoute
 	var found bool
@@ -655,6 +683,11 @@ func (o *soutDynamicOutbound) endpointFor(ctx context.Context, destination M.Soc
 
 	isDirect := !found || route.direct || route.endpoint == "" || route.endpoint == "direct"
 	if isDirect {
+		// 本地回环与局域网私有地址兜底直连，严禁被全局前置链截胡
+		if isLocalOrPrivateDestination(destination) {
+			return N.SystemDialer, destination, nil
+		}
+
 		// 全局前置链式出站自适应：
 		// 若存在已激活且运行中的全局前置链隧道 (例如 WARP)，未被专门分流的直连流量自动通过该前置链发出；
 		// 若未开启前置链或前置链未就绪，走 VPS 原生直连出站。
@@ -790,6 +823,24 @@ func (d *socksFallbackDialer) ListenPacket(ctx context.Context, destination M.So
 
 func isEmbeddedEndpointInbound(tag string) bool {
 	return strings.HasPrefix(tag, "soutopenvpn") || strings.HasPrefix(tag, "sout-openvpn-") || strings.HasPrefix(tag, "fanoutopenvpn") || strings.HasPrefix(tag, "fanout-openvpn-") || strings.HasPrefix(tag, "soutwireguard") || strings.HasPrefix(tag, "sout-wireguard-")
+}
+
+func isLocalOrPrivateDestination(dst M.Socksaddr) bool {
+	if dst.IsDomain() {
+		host := strings.ToLower(strings.TrimSuffix(dst.Fqdn, "."))
+		if host == "localhost" || strings.HasSuffix(host, ".local") {
+			return true
+		}
+		if ip, err := netip.ParseAddr(host); err == nil {
+			return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()
+		}
+		return false
+	}
+	if dst.IsIP() {
+		addr := dst.Addr
+		return addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() || addr.IsUnspecified()
+	}
+	return false
 }
 
 func (e *embeddedEngine) dialTunnel(ctx context.Context, tunnel *Tunnel, network, address string) (net.Conn, error) {
