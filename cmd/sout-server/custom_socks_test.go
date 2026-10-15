@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	M "github.com/sagernet/sing/common/metadata"
 )
 
 func TestParseProxyURL(t *testing.T) {
@@ -669,3 +673,144 @@ func TestParseSubscriptionContent_SingBoxOutbounds(t *testing.T) {
 		t.Fatalf("expected wireguard and socks5, got %s and %s", nodes3[0].Protocol, nodes3[1].Protocol)
 	}
 }
+
+type mockTunnelProvider struct {
+	tunnels map[int]*Tunnel
+}
+
+func (m *mockTunnelProvider) GetTunnel(slot int) *Tunnel {
+	return m.tunnels[slot]
+}
+
+func (m *mockTunnelProvider) AllTunnels() []*Tunnel {
+	res := make([]*Tunnel, 0, len(m.tunnels))
+	for _, t := range m.tunnels {
+		res = append(res, t)
+	}
+	return res
+}
+
+func TestCustomNodeFallbackDialer(t *testing.T) {
+	engine, err := newEmbeddedEngine("127.0.0.1")
+	if err != nil {
+		t.Fatalf("newEmbeddedEngine failed: %v", err)
+	}
+	defer engine.close()
+
+	// 1. 模拟自定义节点隧道（例如 Trojan/VLESS/SOCKS5）
+	customTunnel := &Tunnel{
+		Slot:   10,
+		Port:   18888,
+		Kind:   "custom",
+		Status: "up",
+		Cred:   SocksCred{User: "user10", Pass: "pass10"},
+		Node: Node{
+			HostName: "cs-trojan-hk-node",
+			IP:       "1.2.3.4",
+			Port:     443,
+			Protocol: "trojan",
+		},
+	}
+	customTunnel.setEngine(engine)
+
+	// 直接通过 addTunnel 注册
+	if err := engine.addTunnel(customTunnel); err != nil {
+		t.Fatalf("engine.addTunnel failed: %v", err)
+	}
+
+	dynOutbound := &soutDynamicOutbound{
+		engine: engine,
+	}
+
+	// 用户路由 soutu1000_s10 指向 soutcstrojanhknode
+	endpointTag := "sout" + sanitizeTag(customTunnel.Node.HostName)
+	userRoutes := map[string]embeddedRoute{
+		"soutu1000_s10": {endpoint: endpointTag},
+	}
+	engine.SyncRoutes(nil, userRoutes)
+
+	inboundCtx := &adapter.InboundContext{
+		Inbound: "vless-in",
+		User:    "soutu1000_s10",
+	}
+	ctx := adapter.WithContext(context.Background(), inboundCtx)
+	dest := M.ParseSocksaddr("1.1.1.1:80")
+
+	// 验证 endpointFor 能够正常找到 fallbackTunnel 并返回 socksFallbackDialer
+	dialer, _, err := dynOutbound.endpointFor(ctx, dest)
+	if err != nil {
+		t.Fatalf("endpointFor failed: %v", err)
+	}
+	fbDialer, ok := dialer.(*socksFallbackDialer)
+	if !ok {
+		t.Fatalf("expected dialer to be *socksFallbackDialer, got %T", dialer)
+	}
+	expectedAddr := fmt.Sprintf("127.0.0.1:%d", customTunnel.Port)
+	if fbDialer.serverAddr != expectedAddr {
+		t.Errorf("expected serverAddr %s, got %s", expectedAddr, fbDialer.serverAddr)
+	}
+	if fbDialer.username != "user10" || fbDialer.password != "pass10" {
+		t.Errorf("expected cred user10/pass10, got %s/%s", fbDialer.username, fbDialer.password)
+	}
+
+	// 2. 验证通过 provider 回填机制自愈
+	engine2, err := newEmbeddedEngine("127.0.0.1")
+	if err != nil {
+		t.Fatalf("newEmbeddedEngine failed: %v", err)
+	}
+	defer engine2.close()
+
+	providerTunnel := &Tunnel{
+		Slot:   11,
+		Port:   18889,
+		Kind:   "custom",
+		Status: "up",
+		Cred:   SocksCred{User: "user11", Pass: "pass11"},
+		Node: Node{
+			HostName: "cs-vless-us-node",
+			IP:       "5.6.7.8",
+			Port:     443,
+			Protocol: "vless",
+		},
+	}
+
+	mockProvider := &mockTunnelProvider{
+		tunnels: map[int]*Tunnel{11: providerTunnel},
+	}
+	engine2.SetTunnelProvider(mockProvider)
+
+	dynOutbound2 := &soutDynamicOutbound{
+		engine: engine2,
+	}
+	userRoutes2 := map[string]embeddedRoute{
+		"soutu1000_s11": {endpoint: "sout" + sanitizeTag(providerTunnel.Node.HostName)},
+	}
+	engine2.SyncRoutes(nil, userRoutes2)
+
+	inboundCtx2 := &adapter.InboundContext{
+		Inbound: "vless-in",
+		User:    "soutu1000_s11",
+	}
+	ctx2 := adapter.WithContext(context.Background(), inboundCtx2)
+
+	dialer2, _, err := dynOutbound2.endpointFor(ctx2, dest)
+	if err != nil {
+		t.Fatalf("endpointFor with provider failed: %v", err)
+	}
+	fbDialer2, ok := dialer2.(*socksFallbackDialer)
+	if !ok {
+		t.Fatalf("expected dialer to be *socksFallbackDialer, got %T", dialer2)
+	}
+	if fbDialer2.serverAddr != fmt.Sprintf("127.0.0.1:%d", providerTunnel.Port) {
+		t.Errorf("expected serverAddr 127.0.0.1:18889, got %s", fbDialer2.serverAddr)
+	}
+
+	// 验证已自动回填至 activeTunnels
+	engine2.mu.Lock()
+	backfilled, exists := engine2.activeTunnels[11]
+	engine2.mu.Unlock()
+	if !exists || backfilled != providerTunnel {
+		t.Errorf("expected tunnel to be backfilled into engine2.activeTunnels")
+	}
+}
+

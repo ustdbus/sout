@@ -87,7 +87,7 @@ func NewManager(maxSlots int, workDir string) *Manager {
 		}
 	}
 
-	return &Manager{
+	mgr := &Manager{
 		tunnels:      map[int]*Tunnel{},
 		nodes:        initNodes,
 		fetched:      initFetched,
@@ -96,6 +96,10 @@ func NewManager(maxSlots int, workDir string) *Manager {
 		engine:       engine,
 		syncedExitIP: map[int]string{},
 	}
+	if engine != nil {
+		engine.SetTunnelProvider(mgr)
+	}
+	return mgr
 }
 
 
@@ -183,6 +187,16 @@ func (m *Manager) Tunnels() []*Tunnel {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Slot < out[j].Slot })
 	return out
+}
+
+func (m *Manager) GetTunnel(slot int) *Tunnel {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.tunnels[slot]
+}
+
+func (m *Manager) AllTunnels() []*Tunnel {
+	return m.Tunnels()
 }
 
 // freeSlot 找一个未占用的槽位（顺延递增分配，避免删除旧槽位后再建时立即回填引发混淆与串号）
@@ -367,6 +381,9 @@ func (m *Manager) tryCandidates(t *Tunnel, notify bool) bool {
 		}
 
 		if err == nil {
+			if m.engine != nil {
+				_ = m.engine.addTunnel(t)
+			}
 			// 若出口仍在后台等待 OpenVPN 握手就绪，保持 starting，
 			// 由就绪监控接手升级为 up 并同步出站；否则立即置 up。
 			t.mu.Lock()
@@ -415,7 +432,11 @@ func (m *Manager) tryNode(t *Tunnel) error {
 		t.CustomUser = t.Node.User
 		t.CustomPass = t.Node.Pass
 		t.CustomProto = t.Node.Protocol
-		return t.startCustom()
+		err := t.startCustom()
+		if err == nil && m.engine != nil {
+			_ = m.engine.addTunnel(t)
+		}
+		return err
 	}
 	if t.Kind == "custom" && (t.Node.Protocol == "wireguard" || t.CustomProto == "wireguard") {
 		t.CustomProto = "wireguard"

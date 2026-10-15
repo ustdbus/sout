@@ -77,6 +77,12 @@ func getOrInitEmbeddedEngine(listenIP string) (*embeddedEngine, error) {
 }
 
 // embeddedEngine 管理双 sing-box 内核实例架构（Inbound Box 与 Outbound Box 物理生命周期彻底解耦）。
+// TunnelProvider 抽象隧道源，供内嵌引擎反向查询槽位与候选隧道
+type TunnelProvider interface {
+	GetTunnel(slot int) *Tunnel
+	AllTunnels() []*Tunnel
+}
+
 // inboundBox 承载所有公网入站业务与 Cloudflare QUIC 隧道，出口固定指向 sout-dynamic，永久不重启；
 // outboundBox 专职承载 OpenVPN/WireGuard 出口与本地认证 SOCKS5，随节点状态增删切换独立重建。
 type embeddedEngine struct {
@@ -88,14 +94,21 @@ type embeddedEngine struct {
 	inboundBox  *sbox.Box
 	outboundBox *sbox.Box
 
-	routes           map[string]embeddedRoute
-	userRoutes       map[string]embeddedRoute
-	inboundConfigs   map[string]map[string]any
-	inboundHash      [32]byte
-	activeTunnels    map[int]*Tunnel
+	routes            map[string]embeddedRoute
+	userRoutes        map[string]embeddedRoute
+	inboundConfigs    map[string]map[string]any
+	inboundHash       [32]byte
+	activeTunnels     map[int]*Tunnel
+	provider          TunnelProvider
 	chainUpstreamTag  string
 	chainUpstreamSlot int
-	listenIP         string
+	listenIP          string
+}
+
+func (e *embeddedEngine) SetTunnelProvider(p TunnelProvider) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.provider = p
 }
 
 type embeddedRoute struct {
@@ -762,19 +775,43 @@ func (o *soutDynamicOutbound) endpointFor(ctx context.Context, destination M.Soc
 		if t, ok := o.engine.activeTunnels[slotFromUser]; ok && t != nil && t.Port > 0 {
 			fallbackTunnel = t
 		}
+		if fallbackTunnel == nil && o.engine.provider != nil {
+			if t := o.engine.provider.GetTunnel(slotFromUser); t != nil && t.Port > 0 {
+				fallbackTunnel = t
+				o.engine.activeTunnels[slotFromUser] = t
+			}
+		}
 	}
 	if fallbackTunnel == nil {
-		for _, t := range o.engine.activeTunnels {
+		// 先收集所有候选隧道（合并 activeTunnels 和 provider.AllTunnels）
+		candidates := make(map[int]*Tunnel)
+		for s, t := range o.engine.activeTunnels {
 			if t != nil && t.Port > 0 {
-				epTag := fmt.Sprintf("soutopenvpn%d", t.Slot)
-				if t.CustomProto == "wireguard" || t.Node.Protocol == "wireguard" {
-					epTag = fmt.Sprintf("soutwireguard%d", t.Slot)
+				candidates[s] = t
+			}
+		}
+		if o.engine.provider != nil {
+			for _, t := range o.engine.provider.AllTunnels() {
+				if t != nil && t.Port > 0 {
+					candidates[t.Slot] = t
 				}
-				customTag := "sout" + sanitizeTag(t.Node.HostName)
-				if epTag == route.endpoint || customTag == route.endpoint || (t.Kind == "custom" && t.Node.HostName != "" && strings.Contains(route.endpoint, sanitizeTag(t.Node.HostName))) {
-					fallbackTunnel = t
-					break
+			}
+		}
+		for _, t := range candidates {
+			epTag := fmt.Sprintf("soutopenvpn%d", t.Slot)
+			if t.CustomProto == "wireguard" || t.Node.Protocol == "wireguard" {
+				epTag = fmt.Sprintf("soutwireguard%d", t.Slot)
+			}
+			customTag := "sout" + sanitizeTag(t.Node.HostName)
+			cleanHost := sanitizeTag(t.Node.HostName)
+			if epTag == route.endpoint || customTag == route.endpoint ||
+				(t.Kind == "custom" && cleanHost != "" && strings.Contains(route.endpoint, cleanHost)) ||
+				(cleanHost != "" && strings.Contains(sanitizeTag(route.endpoint), cleanHost)) {
+				fallbackTunnel = t
+				if _, ok := o.engine.activeTunnels[t.Slot]; !ok {
+					o.engine.activeTunnels[t.Slot] = t
 				}
+				break
 			}
 		}
 	}

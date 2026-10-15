@@ -440,6 +440,9 @@ func (t *Tunnel) startSingBoxCustom() error {
 	t.Since = time.Now()
 	t.Err = ""
 	t.mu.Unlock()
+	if t.engine != nil {
+		_ = t.engine.addTunnel(t)
+	}
 	return nil
 }
 
@@ -481,6 +484,9 @@ func (t *Tunnel) startCustom() error {
 	t.Status = "up"
 	t.Since = time.Now()
 	t.Err = ""
+	if t.engine != nil {
+		_ = t.engine.addTunnel(t)
+	}
 	return nil
 }
 
