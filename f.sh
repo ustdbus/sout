@@ -3588,13 +3588,11 @@ caddy_menu() {
       echo -e "${D}----------------------------------------${N}"
       echo "  1) 查看轻量反代与分流详情"
       echo "  2) 重新配置隧道与域名 (修改 Token/域名/端口)"
-      echo "  3) 查看 Cloudflare 隧道运行日志"
-      echo "  4) 重启 Cloudflare 隧道"
-      echo "  5) 重新应用分流配置 (重启网关)"
-      echo "  6) 关闭隧道反代 (恢复独立端口模式)"
+      echo "  3) 查看 Cloudflare 隧道连接日志"
+      echo "  4) 重启 Cloudflare 隧道服务"
       echo "  0) 返回上级菜单"
       echo
-      read -rp "  请选择 [0-6]: " opt
+      read -rp "  请选择 [0-4]: " opt
       case "$opt" in
         1)
           if [[ -f "$CADDY_META" ]]; then
@@ -3682,10 +3680,6 @@ caddy_menu() {
           fi
           [[ "$cf_re_ok" == "true" ]] && echo -e "  ${G}[✓] Cloudflare 隧道服务已成功重启${N}" || echo -e "  ${R}[×] 隧道服务重启失败${N}"
           pause ;;
-        5)
-          reload_caddy_proxy
-          pause ;;
-        6) disable_caddy_proxy; pause; break ;;
         0) break ;;
         *) ;;
       esac
@@ -3695,14 +3689,12 @@ caddy_menu() {
       echo -e "${D}----------------------------------------${N}"
       echo "  1) 开启 Cloudflare 官方免费临时隧道 (免域名/免Token)"
       echo "  2) 使用固定域名 + 隧道 Token 配置"
-      echo "  3) 重新应用分流配置 (重启网关)"
       echo "  0) 返回上级菜单"
       echo
-      read -rp "  请选择 [0-3]: " opt
+      read -rp "  请选择 [0-2]: " opt
       case "$opt" in
         1) setup_caddy_proxy "" "" ""; pause ;;
         2) caddy_interactive_setup; pause ;;
-        3) reload_caddy_proxy; pause ;;
         0) break ;;
         *) ;;
       esac
