@@ -122,17 +122,17 @@ func applyLowMemoryProtectionWithStop(limitBytes int64, stopCh <-chan struct{}) 
 	)
 
 	if limitBytes <= 80*1024*1024 {
-		// <= 80MB (典型 64MB 容器)
-		memLimit = 38 * 1024 * 1024
-		gcPercent = 40
-		freeInterval = 60 * time.Second
-		tierName = "<=80MB (极低内存模式, 典型 64MB 容器)"
+		// <= 80MB (典型 64MB 容器, 防 OOM 优先)
+		memLimit = 45 * 1024 * 1024
+		gcPercent = 80
+		freeInterval = 300 * time.Second
+		tierName = "<=80MB (极低内存模式, 典型 64MB 容器, 防 OOM 优先)"
 	} else if limitBytes <= 160*1024*1024 {
-		// <= 160MB (典型 128MB 容器)
-		memLimit = 75 * 1024 * 1024
-		gcPercent = 60
-		freeInterval = 120 * time.Second
-		tierName = "<=160MB (低内存模式, 典型 128MB 容器)"
+		// <= 160MB (典型 128MB 容器, 满血吞吐与低 CPU 优先)
+		memLimit = 100 * 1024 * 1024
+		gcPercent = 100
+		freeInterval = 0 // 128MB 内存充裕，完全不触发定期强制归还，杜绝内存页抖动与 GC 惩罚
+		tierName = "<=160MB (标准轻量模式, 典型 128MB 容器, 满血吞吐优先)"
 	} else {
 		// 大于 160MB：保持 Go 默认行为，不设额外限制
 		return false, 0, 0, 0
@@ -141,19 +141,21 @@ func applyLowMemoryProtectionWithStop(limitBytes int64, stopCh <-chan struct{}) 
 	debug.SetMemoryLimit(memLimit)
 	debug.SetGCPercent(gcPercent)
 
-	// 启动后台轻量 goroutine，周期性主动将未使用堆内存归还给内核
-	go func() {
-		ticker := time.NewTicker(freeInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				debug.FreeOSMemory()
-			case <-stopCh:
-				return
+	if freeInterval > 0 {
+		// 仅在极低内存（如 64MB）下启动后台协程，温和归还空闲物理内存
+		go func() {
+			ticker := time.NewTicker(freeInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					debug.FreeOSMemory()
+				case <-stopCh:
+					return
+				}
 			}
-		}
-	}()
+		}()
+	}
 
 	log.Printf("[内存保护] 检测到内存限制: %.2f MB (%d 字节)，已启用 %s [SetMemoryLimit=%d MB, GOGC=%d, FreeOSMemory 周期=%v]",
 		float64(limitBytes)/(1024*1024), limitBytes, tierName, memLimit/(1024*1024), gcPercent, freeInterval)
