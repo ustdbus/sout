@@ -23,7 +23,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v4.9.1"
+var version = "v4.9.2"
 
 var (
 	cgroupV2Path    = "/sys/fs/cgroup/memory.max"
@@ -242,6 +242,7 @@ func main() {
 
 	go mgr.WatchHealth()
 	go mgr.WatchExitReady()
+	go startCertRenewalDaemon(*workDir)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)

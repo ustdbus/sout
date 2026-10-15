@@ -77,6 +77,12 @@ func runTool(args []string) {
 		toolSUIApplyTuicHy2(subArgs)
 	case "sui-init-base-nodes":
 		toolSUIInitBaseNodes(subArgs)
+	case "cf-cert-apply":
+		toolCFCertApply(subArgs)
+	case "cert-info":
+		toolCertInfo(subArgs)
+	case "cert-renew-all":
+		toolCertRenewAll(subArgs)
 	default:
 		fmt.Fprintf(os.Stderr, "未知子命令: %s\n", subcmd)
 		os.Exit(1)
@@ -2830,3 +2836,63 @@ func toolSUIInitBaseNodes(args []string) {
 	_ = os.WriteFile("/var/lib/sout/.caddy_meta_vars", []byte(metaVars), 0600)
 	fmt.Println("  [✓] 基础节点与轻量分流已配置就绪！")
 }
+
+func toolCFCertApply(args []string) {
+	if len(args) < 2 {
+		fmt.Fprintf(os.Stderr, "用法: sout-server tool cf-cert-apply <domain> <cf_token> [force:true|false] [cert_dir] [work_dir]\n")
+		os.Exit(1)
+	}
+	domain := args[0]
+	token := args[1]
+	force := false
+	if len(args) > 2 && (args[2] == "true" || args[2] == "1") {
+		force = true
+	}
+	certDir := fmt.Sprintf("/home/acme/%s", domain)
+	if len(args) > 3 && args[3] != "" {
+		certDir = args[3]
+	}
+	workDir := "/var/lib/sout"
+	if len(args) > 4 && args[4] != "" {
+		workDir = args[4]
+	} else if os.Getenv("WORK_DIR") != "" {
+		workDir = os.Getenv("WORK_DIR")
+	}
+
+	if err := IssueCFCert(domain, token, certDir, workDir, force); err != nil {
+		fmt.Fprintf(os.Stderr, "申请证书失败: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func toolCertInfo(args []string) {
+	if len(args) < 1 {
+		return
+	}
+	certPath := args[0]
+	info, err := ParseCertInfo(certPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "解析证书失败: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("domain=%v\n", info["domain"])
+	fmt.Printf("issuer=%v\n", info["issuer"])
+	fmt.Printf("not_before=%v\n", info["not_before"])
+	fmt.Printf("not_after=%v\n", info["not_after"])
+	fmt.Printf("days_left=%v\n", info["days_left"])
+	fmt.Printf("is_valid=%v\n", info["is_valid"])
+}
+
+func toolCertRenewAll(args []string) {
+	workDir := "/var/lib/sout"
+	if len(args) > 0 && args[0] != "" {
+		workDir = args[0]
+	} else if os.Getenv("WORK_DIR") != "" {
+		workDir = os.Getenv("WORK_DIR")
+	}
+	if err := RenewAllCerts(workDir); err != nil {
+		fmt.Fprintf(os.Stderr, "批量续期检查失败: %v\n", err)
+		os.Exit(1)
+	}
+}
+

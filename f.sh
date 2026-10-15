@@ -485,7 +485,7 @@ BIN="/usr/local/bin/sout-server"
 WORK_DIR="/var/lib/sout"
 [[ ! -d "$WORK_DIR" && -d "/var/lib/fanout" ]] && WORK_DIR="/var/lib/fanout"
 DEFAULT_PORT=8899
-SOUT_VERSION="4.9.1"
+SOUT_VERSION="4.9.2"
 
 R='\033[31m'; G='\033[32m'; Y='\033[33m'; B='\033[34m'; D='\033[90m'; N='\033[0m'
 
@@ -949,7 +949,7 @@ show_info() {
   elif [[ -f "${WORK_DIR}/version" ]]; then
     cur_ver=$(cat "${WORK_DIR}/version" 2>/dev/null | tr -d ' \r\n')
   fi
-  [[ -z "$cur_ver" ]] && cur_ver="${SOUT_VERSION:-4.9.1}"
+  [[ -z "$cur_ver" ]] && cur_ver="${SOUT_VERSION:-4.9.2}"
 
   echo
   echo -e "  程序版本:    ${G}${cur_ver}${N}"
@@ -2682,145 +2682,27 @@ do_apply_cf_ssl_cert() {
   local cert_file="${cert_dir}/fullchain.pem"
   local key_file="${cert_dir}/privkey.pem"
   if [[ "$force" != "true" && -s "$cert_file" && -s "$key_file" ]]; then
-    echo -e "  ${G}[✓] 本地已存在域名 [${domain}] 的完整证书，直接复用。${N}"
-    return 0
-  fi
-
-  echo -e "  ${B}[1/4] 正在检查并准备 acme.sh 证书引擎...${N}"
-  local acme_cmd="/root/.acme.sh/acme.sh"
-  if [[ ! -x "$acme_cmd" ]]; then
-    if command -v acme.sh >/dev/null 2>&1; then
-      acme_cmd=$(command -v acme.sh)
-    else
-      echo -e "  [+] 正在自动安装轻量开源 acme.sh 证书引擎..."
-      local email="admin@${domain}"
-      if command -v apk >/dev/null 2>&1; then
-        apk add --no-cache curl openssl socat >/dev/null 2>&1 || true
-      elif command -v apt-get >/dev/null 2>&1; then
-        apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq curl openssl socat cron >/dev/null 2>&1 || true
-      fi
-      if ! curl -sSL https://get.acme.sh | sh -s email="${email}" --home /root/.acme.sh; then
-        echo -e "  ${Y}[!] 官方安装源重试，尝试备用源...${N}"
-        curl -sSL https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh | sh -s -- --install-online -m "${email}" --home /root/.acme.sh || true
-      fi
+    local c_info
+    c_info=$(sout_tool cert-info "$cert_file" 2>/dev/null || true)
+    local d_left
+    d_left=$(echo "$c_info" | grep '^days_left=' | cut -d= -f2)
+    if [[ -n "$d_left" && "$d_left" -gt 30 ]]; then
+      echo -e "  ${G}[✓] 本地已存在域名 [${domain}] 的有效证书（剩余 ${d_left} 天），直接复用。${N}"
+      return 0
     fi
   fi
 
-  if [[ ! -x "$acme_cmd" && -f /root/.acme.sh/acme.sh ]]; then
-    chmod +x /root/.acme.sh/acme.sh
-    acme_cmd="/root/.acme.sh/acme.sh"
-  fi
+  echo -e "  ${B}[*] 正在启动纯 Go 原生 ACME 引擎申请证书 (Cloudflare DNS-01)...${N}"
+  echo -e "  ${D}• 零外部包依赖，内存占用 < 5MB，适合极限小内存环境${N}"
 
-  if [[ ! -x "$acme_cmd" ]]; then
-    echo -e "  ${R}[✗] acme.sh 安装受阻，请检查网络连接。${N}"
+  if ! sout_tool cf-cert-apply "$domain" "$cf_token" "$force" "$cert_dir" "$WORK_DIR"; then
+    echo -e "  ${R}[✗] 证书申请未成功，请检查 Cloudflare API 令牌权限是否包含 Zone.DNS:Edit。${N}"
     return 1
   fi
-  echo -e "  ${G}[✓] acme.sh 引擎已就绪${N}"
-
-  echo -e "  ${B}[2/4] 正在创建证书存储目录: ${cert_dir}...${N}"
-  mkdir -p "$cert_dir"
-  chmod 700 /home/acme "$cert_dir"
-
-  echo -e "  ${B}[3/4] 正在通过 Cloudflare DNS-01 验证向 Let's Encrypt 发起申请...${N}"
-  local cf_domains_meta="${WORK_DIR}/cf_ssl_domains.json"
-  sout_tool cf-dns-clean "$cf_domains_meta" "$domain" "$cf_token" "$cert_dir" 2>/dev/null || true
-
-  export CF_Token="${cf_token}"
-  "$acme_cmd" --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
-
-  local issue_args=("--issue" "--dns" "dns_cf" "-d" "${domain}")
-  [[ "$force" == "true" ]] && issue_args+=("--force")
-
-  echo -e "  ${Y}⏳ 预估耗时: 约 20 ~ 50 秒 (Cloudflare 全球 DNS 解析生效与 CA 握手验证)...${N}"
-  echo -e "  [+] 正在与 Cloudflare DNS 握手验证所有权，请稍候..."
-  local issue_out="" issue_rc=0
-  local tmp_issue_log
-  tmp_issue_log=$(mktemp)
-  "$acme_cmd" "${issue_args[@]}" >"$tmp_issue_log" 2>&1 &
-  local acme_pid=$!
-  local elapsed=0
-  while kill -0 "$acme_pid" 2>/dev/null; do
-    sleep 3
-    elapsed=$((elapsed + 3))
-    if [[ $elapsed -ge 6 ]]; then
-      echo -ne "\r  [+] DNS-01 验证进行中... 已耗时 ${elapsed}s (请保持网络畅通)"
-    fi
-  done
-  wait "$acme_pid" || issue_rc=$?
-  issue_out=$(cat "$tmp_issue_log" 2>/dev/null)
-  rm -f "$tmp_issue_log" 2>/dev/null || true
-  [[ $elapsed -ge 6 ]] && echo ""
-
-  local is_skipped=0
-  if echo "$issue_out" | grep -qE "(Skipping|Domains not changed|Next renewal time is)"; then
-    is_skipped=1
-  fi
-
-  if [[ $issue_rc -ne 0 && $is_skipped -eq 0 ]]; then
-    # 若首发失败，尝试带 --force 重试一次以处理状态锁冲突
-    echo -e "  ${Y}[!] 正在尝试强制刷新申请 (预计 20 ~ 40 秒)...${N}"
-    local tmp_force_log
-    tmp_force_log=$(mktemp)
-    "$acme_cmd" "${issue_args[@]}" --force >"$tmp_force_log" 2>&1 &
-    local force_pid=$!
-    local force_elapsed=0
-    while kill -0 "$force_pid" 2>/dev/null; do
-      sleep 3
-      force_elapsed=$((force_elapsed + 3))
-      if [[ $force_elapsed -ge 6 ]]; then
-        echo -ne "\r  [+] 强制申请中... 已耗时 ${force_elapsed}s"
-      fi
-    done
-    wait "$force_pid" || issue_rc=$?
-    issue_out=$(cat "$tmp_force_log" 2>/dev/null)
-    rm -f "$tmp_force_log" 2>/dev/null || true
-    [[ $force_elapsed -ge 6 ]] && echo ""
-    if echo "$issue_out" | grep -qE "(Skipping|Domains not changed|Next renewal time is)"; then
-      is_skipped=1
-    fi
-  fi
-
-  if [[ $issue_rc -ne 0 && $is_skipped -eq 0 ]]; then
-    echo -e "  ${R}[✗] 证书签发失败，请检查 Cloudflare API Token 权限是否包含 Zone.DNS:Edit。${N}"
-    echo "$issue_out" | grep -E "\[.*\]" | tail -5
-    return 1
-  fi
-
-  if [[ $is_skipped -eq 1 ]]; then
-    echo -e "  ${G}[✓] 检测到 acme.sh 证书库已有该域名的有效证书，直接分发安装！${N}"
-  fi
-
-  echo -e "  ${B}[4/4] 正在分发并安装证书到目标路径 (/home/acme/${domain})...${N}"
-  # 同时尝试 ECC 模式与常规模式安装，确保兼容
-  "$acme_cmd" --install-cert -d "${domain}" --ecc \
-    --key-file "${cert_dir}/privkey.pem" \
-    --fullchain-file "${cert_dir}/fullchain.pem" \
-    --reloadcmd "command -v systemctl >/dev/null 2>&1 && systemctl restart sout || (rc-service sout zap 2>/dev/null; rc-service sout restart 2>/dev/null) || true" >/dev/null 2>&1 || true
-
-  if [[ ! -s "${cert_dir}/fullchain.pem" ]]; then
-    "$acme_cmd" --install-cert -d "${domain}" \
-      --key-file "${cert_dir}/privkey.pem" \
-      --fullchain-file "${cert_dir}/fullchain.pem" \
-      --reloadcmd "command -v systemctl >/dev/null 2>&1 && systemctl restart sout || (rc-service sout zap 2>/dev/null; rc-service sout restart 2>/dev/null) || true" >/dev/null 2>&1 || true
-  fi
-
-  # 若通过 acme.sh 自身安装仍然为空，直接从 /root/.acme.sh/${domain}* 目录兜底拷贝
-  if [[ ! -s "${cert_dir}/fullchain.pem" || ! -s "${cert_dir}/privkey.pem" ]]; then
-    for c_cand in "/root/.acme.sh/${domain}_ecc" "/root/.acme.sh/${domain}"; do
-      if [[ -d "$c_cand" ]]; then
-        [[ -s "${c_cand}/fullchain.cer" ]] && cp -f "${c_cand}/fullchain.cer" "${cert_dir}/fullchain.pem" 2>/dev/null || true
-        [[ -s "${c_cand}/${domain}.key" ]] && cp -f "${c_cand}/${domain}.key" "${cert_dir}/privkey.pem" 2>/dev/null || true
-      fi
-    done
-  fi
-
-  cp -f "${cert_dir}/fullchain.pem" "${cert_dir}/cert.crt" 2>/dev/null || true
-  cp -f "${cert_dir}/privkey.pem" "${cert_dir}/private.key" 2>/dev/null || true
-  chmod 600 "${cert_dir}"/* 2>/dev/null || true
 
   if [[ -s "${cert_dir}/fullchain.pem" && -s "${cert_dir}/privkey.pem" ]]; then
     if [[ "$quiet" == "true" ]]; then
-      echo -e "  ${G}[✓] Cloudflare SSL 证书已成功部署 (${domain})${N}"
+      echo -e "  ${G}[✓] Cloudflare SSL 证书已成功签发部署 (${domain})${N}"
     else
       echo -e "  ${G}🎉 恭喜！Cloudflare SSL 证书申请并部署成功！${N}"
       echo -e "${B}========================================${N}"
@@ -2829,12 +2711,12 @@ do_apply_cf_ssl_cert() {
       echo -e "  私钥路径:    ${G}${cert_dir}/privkey.pem${N}"
       echo -e "  备用公钥:    ${G}${cert_dir}/cert.crt${N}"
       echo -e "  备用私钥:    ${G}${cert_dir}/private.key${N}"
-      echo -e "  自动续期:    ${G}已默认开启 (由 acme.sh 每天定时静默检查并自动续期)${N}"
+      echo -e "  自动续期:    ${G}默认开启 (由 sout 后台守护每 12 小时静默自检并在到期前 30 天自动续期)${N}"
       echo -e "${B}========================================${N}"
     fi
     return 0
   else
-    echo -e "  ${R}[✗] 证书文件分发异常，请检查 ${cert_dir} 写入权限。${N}"
+    echo -e "  ${R}[✗] 证书文件写入异常，请检查 ${cert_dir} 写入权限。${N}"
     return 1
   fi
 }
@@ -2842,10 +2724,10 @@ do_apply_cf_ssl_cert() {
 apply_cf_ssl_cert() {
   echo
   echo -e "${B}========================================${N}"
-  echo -e "${B}  申请 Cloudflare SSL 证书 (acme.sh DNS-01)${N}"
+  echo -e "${B}  申请 Cloudflare SSL 证书 (纯 Go 原生 DNS-01)${N}"
   echo -e "${B}========================================${N}"
-  echo -e "  ${D}• 使用 Cloudflare DNS-01 验证，无需开放 80/443 端口即可申请${N}"
-  echo -e "  ${D}• 证书将自动存放在 /home/acme/<域名>/ 目录下，默认开启自动续期${N}"
+  echo -e "  ${D}• 基于 Go 原生 ACME 引擎，无需开放 80/443 端口，零外部依赖${N}"
+  echo -e "  ${D}• 证书将自动存放在 /home/acme/<域名>/ 目录下，后台常驻静默自动续期${N}"
   echo
 
   local domain cf_token
@@ -2866,13 +2748,21 @@ apply_cf_ssl_cert() {
     echo -e "  ${Y}⚠️  检测到本地已存在域名 [${domain}] 的完整证书与私钥：${N}"
     echo -e "      公钥: ${B}${cert_file}${N}"
     echo -e "      私钥: ${B}${key_file}${N}"
-    if command -v openssl >/dev/null 2>&1; then
-      local not_after
-      not_after=$(openssl x509 -in "$cert_file" -noout -enddate 2>/dev/null | sed 's/notAfter=//')
-      [[ -n "$not_after" ]] && echo -e "      有效期至: ${G}${not_after}${N}"
+    local c_info
+    c_info=$(sout_tool cert-info "$cert_file" 2>/dev/null || true)
+    local not_after d_left is_val
+    not_after=$(echo "$c_info" | grep '^not_after=' | cut -d= -f2-)
+    d_left=$(echo "$c_info" | grep '^days_left=' | cut -d= -f2)
+    is_val=$(echo "$c_info" | grep '^is_valid=' | cut -d= -f2)
+    if [[ -n "$not_after" ]]; then
+      if [[ "$is_val" == "true" ]]; then
+        echo -e "      有效期至: ${G}${not_after} (剩余 ${d_left} 天)${N}"
+      else
+        echo -e "      证书状态: ${R}已过期 (到期时间: ${not_after})${N}"
+      fi
     fi
     echo
-    read -rp "  是否要强制申请并覆盖本地所保存的证书？[y/N] (默认 N): " overwrite
+    read -rp "  是否要强制重新申请并覆盖本地证书？[y/N] (默认 N): " overwrite
     overwrite=$(echo "$overwrite" | tr -d ' \r\n')
     if [[ "$overwrite" != "y" && "$overwrite" != "Y" ]]; then
       echo -e "  ${Y}已保留本地现有证书，取消重新申请。${N}"
@@ -2928,25 +2818,23 @@ view_cf_ssl_certs() {
         echo -e "  ${G}[${count}] 域名: ${B}${dom}${N}"
         echo -e "      公钥路径: ${Y}${cert_f}${N}"
         echo -e "      私钥路径: ${Y}${key_f}${N}"
-        if command -v openssl >/dev/null 2>&1; then
-          local issuer not_after
-          issuer=$(openssl x509 -in "$cert_f" -noout -issuer 2>/dev/null | sed 's/issuer=//' | sed 's/.*CN = //' | tr -d '\n')
-          not_after=$(openssl x509 -in "$cert_f" -noout -enddate 2>/dev/null | sed 's/notAfter=//')
-          if [[ -n "$not_after" ]]; then
-            local expire_sec now_sec diff_days
-            expire_sec=$(date -d "$not_after" +%s 2>/dev/null || date -jf "%b %d %T %Y %Z" "$not_after" +%s 2>/dev/null || echo "0")
-            now_sec=$(date +%s)
-            if (( expire_sec > now_sec )); then
-              diff_days=$(( (expire_sec - now_sec) / 86400 ))
-              local disp_issuer="${issuer:-Lets Encrypt}"
-              echo -e "      签发机构: ${C}${disp_issuer}${N}"
-              echo -e "      证书状态: ${G}有效 (剩余 ${diff_days} 天，到期时间: ${not_after})${N}"
-            else
-              echo -e "      证书状态: ${R}已过期 (到期时间: ${not_after})${N}"
-            fi
+        local c_info
+        c_info=$(sout_tool cert-info "$cert_f" 2>/dev/null || true)
+        local issuer not_after d_left is_val
+        issuer=$(echo "$c_info" | grep '^issuer=' | cut -d= -f2-)
+        not_after=$(echo "$c_info" | grep '^not_after=' | cut -d= -f2-)
+        d_left=$(echo "$c_info" | grep '^days_left=' | cut -d= -f2)
+        is_val=$(echo "$c_info" | grep '^is_valid=' | cut -d= -f2)
+        if [[ -n "$not_after" ]]; then
+          local disp_issuer="${issuer:-Let's Encrypt}"
+          echo -e "      签发机构: ${C}${disp_issuer}${N}"
+          if [[ "$is_val" == "true" ]]; then
+            echo -e "      证书状态: ${G}有效 (剩余 ${d_left} 天，到期时间: ${not_after})${N}"
+          else
+            echo -e "      证书状态: ${R}已过期 (到期时间: ${not_after})${N}"
           fi
         fi
-        echo -e "      自动续期: ${G}默认开启 (由 acme.sh 每天定时静默检查并自动续期)${N}"
+        echo -e "      自动续期: ${G}默认开启 (由 sout 后台守护每 12 小时静默自检并在到期前 30 天自动续期)${N}"
         echo -e "  ${D}----------------------------------------${N}"
       fi
     done
@@ -2964,16 +2852,22 @@ cf_ssl_menu() {
   while true; do
     echo
     echo -e "${B}========================================${N}"
-    echo -e "${B}  Cloudflare SSL 证书申请与管理 (acme.sh)${N}"
+    echo -e "${B}  Cloudflare SSL 证书申请与管理 (纯 Go 原生引擎)${N}"
     echo -e "${B}========================================${N}"
     echo -e "   1) 查看当前域名证书"
     echo -e "   2) 申请证书 (Cloudflare DNS-01 API)"
+    echo -e "   3) 手动立即执行全部域名证书续期检查"
     echo -e "   0) 返回上级菜单"
     echo -e "${D}----------------------------------------${N}"
-    read -rp "  请选择 [0-2]: " opt
+    read -rp "  请选择 [0-3]: " opt
     case "$opt" in
       1) view_cf_ssl_certs; pause ;;
       2) apply_cf_ssl_cert; pause ;;
+      3)
+        echo -e "\n  ${B}[*] 正在执行全量域名证书续期自检...${N}"
+        sout_tool cert-renew-all "$WORK_DIR"
+        echo -e "  ${G}[✓] 自检完成！已对所有剩余小于 30 天到期的证书进行静默续期。${N}"
+        pause ;;
       0) break ;;
       *) ;;
     esac
