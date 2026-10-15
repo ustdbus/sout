@@ -243,6 +243,9 @@ func (m *Manager) restoreState() (int, error) {
 		t.setEngine(m.engine)
 		m.mu.Lock()
 		m.tunnels[p.Slot] = t
+		if p.Slot > m.lastAssignedSlot {
+			m.lastAssignedSlot = p.Slot
+		}
 		m.mu.Unlock()
 		go m.bringUpPersist(t, true, true)
 	}

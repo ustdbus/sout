@@ -688,27 +688,36 @@ func (sb *SingBox) syncToEmbedded(cfg map[string]any) error {
 				} else {
 					slot := parseSlotFromClientName(uStr)
 					if slot > 0 {
-						isWG := false
+						var targetTunnel *Tunnel
 						for _, t := range sb.lastTunnels {
 							if t != nil && t.Slot == slot {
-								if t.CustomProto == "wireguard" || t.Node.Protocol == "wireguard" {
-									isWG = true
-								}
+								targetTunnel = t
 								break
 							}
 						}
-						if !isWG && eng != nil {
+						if targetTunnel == nil && eng != nil {
 							eng.mu.Lock()
 							if t, ok := eng.activeTunnels[slot]; ok && t != nil {
-								if t.CustomProto == "wireguard" || t.Node.Protocol == "wireguard" {
-									isWG = true
-								}
+								targetTunnel = t
 							}
 							eng.mu.Unlock()
 						}
-						epTag := fmt.Sprintf("soutopenvpn%d", slot)
-						if isWG {
-							epTag = fmt.Sprintf("soutwireguard%d", slot)
+
+						epTag := outbound
+						if targetTunnel != nil {
+							if targetTunnel.Kind == "custom" && targetTunnel.CustomProto != "wireguard" && targetTunnel.Node.Protocol != "wireguard" {
+								epTag = outbound
+							} else if targetTunnel.CustomProto == "wireguard" || targetTunnel.Node.Protocol == "wireguard" {
+								epTag = fmt.Sprintf("soutwireguard%d", slot)
+							} else {
+								epTag = fmt.Sprintf("soutopenvpn%d", slot)
+							}
+						} else {
+							if !strings.HasPrefix(outbound, "soutopenvpn") && !strings.HasPrefix(outbound, "soutwireguard") {
+								epTag = outbound
+							} else {
+								epTag = fmt.Sprintf("soutopenvpn%d", slot)
+							}
 						}
 						userRoutes[uStr] = embeddedRoute{endpoint: epTag}
 					} else {
@@ -716,7 +725,9 @@ func (sb *SingBox) syncToEmbedded(cfg map[string]any) error {
 						for _, t := range sb.lastTunnels {
 							hTag := "sout" + sanitizeTag(t.Node.HostName)
 							if hTag == outbound || ("sout" + t.Node.HostName) == outbound {
-								if t.CustomProto == "wireguard" || t.Node.Protocol == "wireguard" {
+								if t.Kind == "custom" && t.CustomProto != "wireguard" && t.Node.Protocol != "wireguard" {
+									epTag = outbound
+								} else if t.CustomProto == "wireguard" || t.Node.Protocol == "wireguard" {
 									epTag = fmt.Sprintf("soutwireguard%d", t.Slot)
 								} else {
 									epTag = fmt.Sprintf("soutopenvpn%d", t.Slot)
@@ -727,7 +738,11 @@ func (sb *SingBox) syncToEmbedded(cfg map[string]any) error {
 						if epTag != "" {
 							userRoutes[uStr] = embeddedRoute{endpoint: epTag}
 						} else {
-							userRoutes[uStr] = embeddedRoute{block: true}
+							if outbound != "" && outbound != "direct" && outbound != "block" {
+								userRoutes[uStr] = embeddedRoute{endpoint: outbound}
+							} else {
+								userRoutes[uStr] = embeddedRoute{block: true}
+							}
 						}
 					}
 				}

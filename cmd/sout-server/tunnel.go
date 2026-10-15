@@ -150,7 +150,11 @@ func (t *Tunnel) start(dir string) error {
 	t.mu.Unlock()
 
 	if t.Kind == "custom" && t.CustomProto != "wireguard" && t.Node.Protocol != "wireguard" {
-		return t.startCustom()
+		err := t.startCustom()
+		if err == nil && engine != nil {
+			_ = engine.addTunnel(t)
+		}
+		return err
 	}
 
 	// VPN Gate 用户态 OpenVPN 隧道
@@ -209,10 +213,9 @@ func (t *Tunnel) stop() {
 			_ = t.listener.Close()
 			t.listener = nil
 		}
-	} else {
-		if t.engine != nil {
-			t.engine.removeTunnel(t)
-		}
+	}
+	if t.engine != nil {
+		t.engine.removeTunnel(t)
 	}
 
 	t.Status = "stopped"

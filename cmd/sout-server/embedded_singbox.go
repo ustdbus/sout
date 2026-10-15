@@ -297,6 +297,14 @@ func (e *embeddedEngine) rebuildOutboundBoxLocked() error {
 			endpointTag = fmt.Sprintf("soutwireguard%d", slot)
 		}
 		activeEndpointTags[endpointTag] = true
+		if tunnel.Node.HostName != "" {
+			activeEndpointTags["sout"+sanitizeTag(tunnel.Node.HostName)] = true
+		}
+
+		if tunnel.Kind == "custom" && !isWG {
+			// 自定义节点由独立 sing-box 进程监听本地端口，已登记 tags，不注入 outboundBox endpoints
+			continue
+		}
 		socksTag := fmt.Sprintf("soutsocks%d", slot)
 
 		var endpointConfig map[string]any
@@ -679,19 +687,27 @@ func (o *soutDynamicOutbound) endpointFor(ctx context.Context, destination M.Soc
 		}
 	}
 
-	// 兜底自愈：如果内存 Endpoint 尚未就绪，但该 slot 的隧道在运行，通过本地 SOCKS5 端口直接转发
+	// 兜底自愈 / 本地转发：如果内存 Endpoint 尚未就绪或属于独立监听的自定义节点，通过本地 SOCKS5 端口直接转发
 	o.engine.mu.Lock()
 	var fallbackTunnel *Tunnel
 	slotFromUser := parseSlotFromClientName(metadata.User)
-	for _, t := range o.engine.activeTunnels {
-		if t != nil && t.Port > 0 {
-			epTag := fmt.Sprintf("soutopenvpn%d", t.Slot)
-			if t.CustomProto == "wireguard" || t.Node.Protocol == "wireguard" {
-				epTag = fmt.Sprintf("soutwireguard%d", t.Slot)
-			}
-			if epTag == route.endpoint || (slotFromUser > 0 && t.Slot == slotFromUser) || len(o.engine.activeTunnels) == 1 {
-				fallbackTunnel = t
-				break
+	if slotFromUser > 0 {
+		if t, ok := o.engine.activeTunnels[slotFromUser]; ok && t != nil && t.Port > 0 {
+			fallbackTunnel = t
+		}
+	}
+	if fallbackTunnel == nil {
+		for _, t := range o.engine.activeTunnels {
+			if t != nil && t.Port > 0 {
+				epTag := fmt.Sprintf("soutopenvpn%d", t.Slot)
+				if t.CustomProto == "wireguard" || t.Node.Protocol == "wireguard" {
+					epTag = fmt.Sprintf("soutwireguard%d", t.Slot)
+				}
+				customTag := "sout" + sanitizeTag(t.Node.HostName)
+				if epTag == route.endpoint || customTag == route.endpoint || (t.Kind == "custom" && t.Node.HostName != "" && strings.Contains(route.endpoint, sanitizeTag(t.Node.HostName))) {
+					fallbackTunnel = t
+					break
+				}
 			}
 		}
 	}

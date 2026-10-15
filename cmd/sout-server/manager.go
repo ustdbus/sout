@@ -61,6 +61,7 @@ type Manager struct {
 	jobs     JobStore
 	engine            *embeddedEngine
 	chainUpstreamSlot int
+	lastAssignedSlot  int
 
 	syncMu       sync.Mutex
 	syncedExitIP map[int]string // 记录已同步过 outbounds 的出口状态（slot -> exitIP/status）
@@ -184,10 +185,19 @@ func (m *Manager) Tunnels() []*Tunnel {
 	return out
 }
 
-// freeSlot 找一个未占用的槽位
+// freeSlot 找一个未占用的槽位（顺延递增分配，避免删除旧槽位后再建时立即回填引发混淆与串号）
 func (m *Manager) freeSlot() (int, error) {
+	// 1. 优先从 lastAssignedSlot + 1 往后寻找空闲槽位
+	for i := m.lastAssignedSlot + 1; i <= m.maxSlots; i++ {
+		if _, used := m.tunnels[i]; !used {
+			m.lastAssignedSlot = i
+			return i, nil
+		}
+	}
+	// 2. 若后方已满或已达到 maxSlots，从 1 开始回绕寻找空闲槽位
 	for i := 1; i <= m.maxSlots; i++ {
 		if _, used := m.tunnels[i]; !used {
+			m.lastAssignedSlot = i
 			return i, nil
 		}
 	}
