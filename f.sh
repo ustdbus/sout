@@ -485,7 +485,7 @@ BIN="/usr/local/bin/sout-server"
 WORK_DIR="/var/lib/sout"
 [[ ! -d "$WORK_DIR" && -d "/var/lib/fanout" ]] && WORK_DIR="/var/lib/fanout"
 DEFAULT_PORT=8899
-SOUT_VERSION="4.9.2"
+SOUT_VERSION="4.9.3"
 
 R='\033[31m'; G='\033[32m'; Y='\033[33m'; B='\033[34m'; D='\033[90m'; N='\033[0m'
 
@@ -949,7 +949,7 @@ show_info() {
   elif [[ -f "${WORK_DIR}/version" ]]; then
     cur_ver=$(cat "${WORK_DIR}/version" 2>/dev/null | tr -d ' \r\n')
   fi
-  [[ -z "$cur_ver" ]] && cur_ver="${SOUT_VERSION:-4.9.2}"
+  [[ -z "$cur_ver" ]] && cur_ver="${SOUT_VERSION:-4.9.3}"
 
   echo
   echo -e "  程序版本:    ${G}${cur_ver}${N}"
@@ -2826,7 +2826,7 @@ view_cf_ssl_certs() {
         d_left=$(echo "$c_info" | grep '^days_left=' | cut -d= -f2)
         is_val=$(echo "$c_info" | grep '^is_valid=' | cut -d= -f2)
         if [[ -n "$not_after" ]]; then
-          local disp_issuer="${issuer:-Let's Encrypt}"
+          local disp_issuer="${issuer:-Lets Encrypt}"
           echo -e "      签发机构: ${C}${disp_issuer}${N}"
           if [[ "$is_val" == "true" ]]; then
             echo -e "      证书状态: ${G}有效 (剩余 ${d_left} 天，到期时间: ${not_after})${N}"
