@@ -1221,11 +1221,7 @@ if [[ "$WANT_TUNNEL" == "y" ]]; then
   if [[ -x /usr/local/bin/sout ]]; then
     /usr/local/bin/sout setup_tunnel "$TUNNEL_DOMAIN" "$TUNNEL_TOKEN" "$TUNNEL_PORT" "${APPLY_CERT:-n}" "${CF_DNS_KEY:-}" "$SUI_ADMIN_PASS" "$SUI_PASS_IS_RANDOM"
   fi
-  # 全部流程彻底完成后，安全恢复临时配置的 DNS64 / NAT64
-  restore_nat64_if_temporary
-  # setup_tunnel 已完整打印包含全部隧道、面板与订阅的部署完成日志，直接退出避免重复打印
-  exit 0
-fi
+else
 
 IP=$(cat "${WORK_DIR}/host_ip" 2>/dev/null | tr -d ' \r\n')
 if [[ -z "$IP" ]]; then
@@ -1354,6 +1350,7 @@ else
   fi
   echo "================================================================"
   echo
+fi
 fi
 
 # 安装全流程结束，安全还原临时配置的 DNS64 / NAT64

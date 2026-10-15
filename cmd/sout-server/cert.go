@@ -372,6 +372,15 @@ func isCertValidAndNotExpiring(certPath string, minDaysLeft int) bool {
 
 // ParseCertInfo 纯 Go 解析证书详细信息，无需操作系统 openssl 命令行
 func ParseCertInfo(certPath string) (map[string]any, error) {
+	if fi, err := os.Stat(certPath); err == nil && fi.IsDir() {
+		for _, name := range []string{"fullchain.pem", "cert.crt", "cert.pem"} {
+			candidate := filepath.Join(certPath, name)
+			if cfi, err := os.Stat(candidate); err == nil && !cfi.IsDir() {
+				certPath = candidate
+				break
+			}
+		}
+	}
 	data, err := os.ReadFile(certPath)
 	if err != nil {
 		return nil, err
