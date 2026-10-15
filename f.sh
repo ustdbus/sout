@@ -1649,7 +1649,9 @@ update_singbox_kernel() {
   esac
 
   local tmp_dir
-  tmp_dir=$(mktemp -d)
+  local tmp_base="/tmp"
+  [[ -d "/var/tmp" ]] && tmp_base="/var/tmp"
+  tmp_dir=$(mktemp -d -p "$tmp_base" 2>/dev/null || mktemp -d)
   trap 'rm -rf "$tmp_dir"' RETURN
 
   local is_musl=0
@@ -1843,7 +1845,9 @@ check_and_update() {
 
   local tar_url="https://github.com/ustdbus/sout/releases/download/${tag_name}/sout-linux-${arch}.tar.gz"
   local tmp_dir
-  tmp_dir=$(mktemp -d)
+  local tmp_base="/tmp"
+  [[ -d "/var/tmp" ]] && tmp_base="/var/tmp"
+  tmp_dir=$(mktemp -d -p "$tmp_base" 2>/dev/null || mktemp -d)
   trap 'rm -rf "$tmp_dir"' RETURN
 
   # 1. 优先在服务运行状态下利用内部 WARP 高速出网通道极速拉取并校验发布包
