@@ -485,7 +485,7 @@ BIN="/usr/local/bin/sout-server"
 WORK_DIR="/var/lib/sout"
 [[ ! -d "$WORK_DIR" && -d "/var/lib/fanout" ]] && WORK_DIR="/var/lib/fanout"
 DEFAULT_PORT=8899
-SOUT_VERSION="4.9.0"
+SOUT_VERSION="4.9.1"
 
 R='\033[31m'; G='\033[32m'; Y='\033[33m'; B='\033[34m'; D='\033[90m'; N='\033[0m'
 
@@ -949,7 +949,7 @@ show_info() {
   elif [[ -f "${WORK_DIR}/version" ]]; then
     cur_ver=$(cat "${WORK_DIR}/version" 2>/dev/null | tr -d ' \r\n')
   fi
-  [[ -z "$cur_ver" ]] && cur_ver="${SOUT_VERSION:-4.9.0}"
+  [[ -z "$cur_ver" ]] && cur_ver="${SOUT_VERSION:-4.9.1}"
 
   echo
   echo -e "  程序版本:    ${G}${cur_ver}${N}"
@@ -970,14 +970,6 @@ show_info() {
   fi
 
   if [[ "$cur_backend" == "sing-box" ]]; then
-    local sb_ver=""
-    if [[ -f "${WORK_DIR}/singbox_version" ]]; then
-      sb_ver=$(cat "${WORK_DIR}/singbox_version" 2>/dev/null | tr -d ' \r\n')
-    fi
-    if [[ -z "$sb_ver" ]]; then
-      sb_ver=$(/usr/local/bin/sing-box version 2>/dev/null | head -1 | awk '{print $3}' || echo "")
-      [[ -n "$sb_ver" ]] && echo "$sb_ver" > "${WORK_DIR}/singbox_version" 2>/dev/null || true
-    fi
     local sb_tag="内嵌 sing-box v1.14.3"
     local sb_active=false
     if [[ "$INIT_SYS" == "systemd" ]]; then
@@ -1610,119 +1602,6 @@ do_uninstall() {
   esac
 }
 
-update_singbox_kernel() {
-  echo
-  echo -e "${B}========================================${N}"
-  echo -e "${B}   检查/更新 sing-box 原生内核到最新稳定版${N}"
-  echo -e "${B}========================================${N}"
-
-  local cur_sb_ver="未安装"
-  if command -v sing-box >/dev/null 2>&1; then
-    cur_sb_ver=$(sing-box version 2>/dev/null | head -1 | awk '{print $3}' || echo "已安装")
-  elif [[ -x /usr/local/bin/sing-box ]]; then
-    cur_sb_ver=$(/usr/local/bin/sing-box version 2>/dev/null | head -1 | awk '{print $3}' || echo "已安装")
-  fi
-
-  if ! is_sui_backend; then
-    echo -e "  ${C}[ℹ] 提示: 当前 sout 采用内嵌 sing-box 单核模式（内核内置于 sout-server 中）。${N}"
-    echo -e "  ${C}    选择 [1] 更新 sout 即可同步更新内嵌 sing-box 内核。${N}"
-    echo
-  fi
-
-  echo -e "  ${B}正在连接官方检查最新稳定版本...${N}"
-
-  local tag=""
-  tag=$(curl -sIL -m 8 "https://github.com/SagerNet/sing-box/releases/latest" 2>/dev/null | grep -i '^location:' | tail -1 | grep -oE 'v[0-9]+(\.[0-9]+)+' | tr -d ' \r\n' || true)
-  if [[ -z "$tag" ]]; then
-    tag=$(curl -sSL -m 8 "https://api.github.com/repos/SagerNet/sing-box/releases/latest" 2>/dev/null | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | cut -d'"' -f4 || true)
-  fi
-  [[ -z "$tag" ]] && tag="v1.11.5"
-  local ver="${tag#v}"
-
-  echo -e "  官方最新稳定版本:   ${G}${tag}${N}"
-  echo
-
-  if [[ "$cur_sb_ver" == "$ver" || "$cur_sb_ver" == "$tag" ]]; then
-    echo -e "  ${G}当前 sing-box 已是官方最新稳定版！${N}"
-    read -rp "  是否仍要强制重新下载并覆盖？[y/N]: " force_sb
-    [[ ${force_sb,,} == y ]] || return 0
-  else
-    read -rp "  是否立即更新 sing-box 到 ${tag}？[Y/n]: " do_sb
-    [[ ${do_sb,,} == n ]] && return 0
-  fi
-
-  local arch uname_m
-  uname_m=$(uname -m)
-  case "$uname_m" in
-    x86_64|amd64) arch="amd64" ;;
-    aarch64|arm64) arch="arm64" ;;
-    armv7l|armhf) arch="armv7" ;;
-    *) echo -e "  ${R}不支持的系统架构: $uname_m${N}"; return 1 ;;
-  esac
-
-  local tmp_dir
-  local tmp_base="/tmp"
-  [[ -d "/var/tmp" ]] && tmp_base="/var/tmp"
-  tmp_dir=$(mktemp -d -p "$tmp_base" 2>/dev/null || mktemp -d)
-  trap 'rm -rf "$tmp_dir"' RETURN
-
-  local is_musl=0
-  if [[ -f /etc/alpine-release ]] || (ldd --version 2>&1 | grep -iq musl); then
-    is_musl=1
-  fi
-
-  local pkg_candidates=()
-  if [[ "$is_musl" -eq 1 ]]; then
-    pkg_candidates+=("sing-box-${ver}-linux-${arch}-musl.tar.gz" "sing-box-${ver}-linux-${arch}.tar.gz")
-  else
-    pkg_candidates+=("sing-box-${ver}-linux-${arch}.tar.gz" "sing-box-${ver}-linux-${arch}-glibc.tar.gz")
-  fi
-
-  local download_urls=()
-  for pkg in "${pkg_candidates[@]}"; do
-    download_urls+=(
-      "https://github.com/SagerNet/sing-box/releases/download/${tag}/${pkg}"
-      "https://ghproxy.net/https://github.com/SagerNet/sing-box/releases/download/${tag}/${pkg}"
-    )
-  done
-
-  local dl_ok=0
-  for u in "${download_urls[@]}"; do
-    echo -e "  正在下载: ${u} ..."
-    rm -rf "${tmp_dir:?}"/* /usr/local/bin/sing-box
-    local archive_file="${tmp_dir}/sing-box.tar.gz"
-    if curl -fL -# --connect-timeout 10 --max-time 180 "$u" -o "$archive_file" && [[ -s "$archive_file" ]]; then
-      if tar -xzf "$archive_file" -C "$tmp_dir" --strip-components=1 2>/dev/null || tar -xzf "$archive_file" -C "$tmp_dir" 2>/dev/null; then
-        local extracted_bin=""
-        if [[ -f "${tmp_dir}/sing-box" ]]; then
-          extracted_bin="${tmp_dir}/sing-box"
-        else
-          extracted_bin=$(find "$tmp_dir" -type f -name "sing-box" 2>/dev/null | head -1)
-        fi
-        if [[ -n "$extracted_bin" && -f "$extracted_bin" ]]; then
-          mv -f "$extracted_bin" /usr/local/bin/sing-box
-          chmod 755 /usr/local/bin/sing-box
-          if /usr/local/bin/sing-box version >/dev/null 2>&1; then
-            dl_ok=1
-            break
-          fi
-        fi
-      fi
-    fi
-  done
-
-  if [[ "$dl_ok" -eq 0 ]]; then
-    echo -e "  ${R}[!] 下载并校验 sing-box 失败，请检查网络连接。${N}"
-    rm -f /usr/local/bin/sing-box
-    return 1
-  fi
-  /usr/local/bin/sing-box version 2>/dev/null | head -1 | awk '{print $3}' > "${WORK_DIR}/singbox_version" 2>/dev/null || true
-  echo -e "  ${G}[✓] sing-box 已成功更新到最新稳定版: $(/usr/local/bin/sing-box version 2>/dev/null | head -1)${N}"
-  systemctl restart sing-box 2>/dev/null || rc-service sing-box restart 2>/dev/null || true
-  systemctl restart s-ui 2>/dev/null || rc-service s-ui restart 2>/dev/null || true
-  return 0
-}
-
 get_sout_warp_proxy() {
   local st_file="${WORK_DIR}/state.json"
   [[ ! -f "$st_file" ]] && return 1
@@ -1748,29 +1627,9 @@ get_sout_warp_proxy() {
 check_and_update() {
   echo
   echo -e "${B}========================================${N}"
-  echo -e "${B}       检查与更新组件版本${N}"
+  echo -e "${B}       检查与更新 sout 组件版本${N}"
   echo -e "${B}========================================${N}"
-  echo -e "   1) 检查/更新 sout 插件与管理脚本"
-  echo -e "   2) 检查/更新 sing-box 原生内核到官方最新稳定版"
-  echo -e "   0) 返回上级菜单"
-  echo -e "${D}----------------------------------------${N}"
-  if [[ ! -t 0 ]]; then
-    up_choice="1"
-  else
-    read -rp "  请选择 [0-2] (默认 1): " up_choice
-  fi
-  up_choice=$(echo "$up_choice" | tr -d ' \r\n')
-  [[ -z "$up_choice" ]] && up_choice="1"
-
-  case "$up_choice" in
-    1) ;;
-    2) update_singbox_kernel; return $? ;;
-    0) return 0 ;;
-    *) return 0 ;;
-  esac
-
-  echo
-  echo -e "  ${B}正在连接 GitHub 检查最新版本...${N}"
+  echo -e "  ${B}正在连接 GitHub 检查最新版本（含内嵌 sing-box 内核）...${N}"
   local cur_ver="dev"
   if [[ -f "${WORK_DIR}/version" ]]; then
     cur_ver=$(cat "${WORK_DIR}/version" 2>/dev/null | tr -d ' \r\n')
