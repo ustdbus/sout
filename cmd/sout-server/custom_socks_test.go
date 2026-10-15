@@ -812,5 +812,18 @@ func TestCustomNodeFallbackDialer(t *testing.T) {
 	if !exists || backfilled != providerTunnel {
 		t.Errorf("expected tunnel to be backfilled into engine2.activeTunnels")
 	}
+
+	// 验证对于自定义分流节点，FQDN 域名目标不会在本地被强制解析为 IP，确保 SOCKS5 原生远端解析
+	domainDest := M.ParseSocksaddr("r3---sn-ni57rn7d.googlevideo.com:443")
+	dialer3, retDest, err := dynOutbound2.endpointFor(ctx2, domainDest)
+	if err != nil {
+		t.Fatalf("endpointFor with domain failed: %v", err)
+	}
+	if _, ok := dialer3.(*socksFallbackDialer); !ok {
+		t.Fatalf("expected dialer to be *socksFallbackDialer, got %T", dialer3)
+	}
+	if !retDest.IsDomain() || retDest.Fqdn != "r3---sn-ni57rn7d.googlevideo.com" {
+		t.Errorf("expected destination to retain raw domain, got %+v", retDest)
+	}
 }
 

@@ -737,32 +737,32 @@ func (o *soutDynamicOutbound) endpointFor(ctx context.Context, destination M.Soc
 		}
 	}
 
-	isWG := strings.HasPrefix(route.endpoint, "soutwireguard")
-	if !isWG && destination.IsIPv6() {
-		return nil, destination, fmt.Errorf("当前出口不支持 IPv6，已安全阻断以防真实 IPv6 泄露")
-	}
-	if destination.IsDomain() {
-		addresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip", destination.Fqdn)
-		if err != nil {
-			return nil, destination, err
-		}
-		var chosen netip.Addr
-		for _, address := range addresses {
-			if address.Is4() {
-				chosen = address
-				break
-			} else if isWG && address.Is6() && !chosen.IsValid() {
-				chosen = address
-			}
-		}
-		if chosen.IsValid() {
-			destination = M.SocksaddrFrom(chosen, destination.Port)
-		} else {
-			return nil, destination, fmt.Errorf("域名 %s 仅解析到 IPv6 且当前出口不支持 IPv6，已安全阻断以防真实 IPv6 泄露", destination.Fqdn)
-		}
-	}
 	if outboundBox != nil {
 		if endpoint, found := outboundBox.Endpoint().Get(route.endpoint); found {
+			isWG := strings.HasPrefix(route.endpoint, "soutwireguard")
+			if !isWG && destination.IsIPv6() {
+				return nil, destination, fmt.Errorf("当前出口不支持 IPv6，已安全阻断以防真实 IPv6 泄露")
+			}
+			if destination.IsDomain() {
+				addresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip", destination.Fqdn)
+				if err != nil {
+					return nil, destination, err
+				}
+				var chosen netip.Addr
+				for _, address := range addresses {
+					if address.Is4() {
+						chosen = address
+						break
+					} else if isWG && address.Is6() && !chosen.IsValid() {
+						chosen = address
+					}
+				}
+				if chosen.IsValid() {
+					destination = M.SocksaddrFrom(chosen, destination.Port)
+				} else {
+					return nil, destination, fmt.Errorf("域名 %s 仅解析到 IPv6 且当前出口不支持 IPv6，已安全阻断以防真实 IPv6 泄露", destination.Fqdn)
+				}
+			}
 			return endpoint, destination, nil
 		}
 	}
