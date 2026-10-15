@@ -1132,6 +1132,9 @@ fi
 rm -f /usr/local/bin/f /usr/local/bin/sout-cli 2>/dev/null || true
 mkdir -p "$WORK_DIR"
 chmod 700 "$WORK_DIR"
+if [[ -x "$BIN" ]]; then
+  "$BIN" -version 2>/dev/null | awk '{print $2}' > "${WORK_DIR}/version" 2>/dev/null || true
+fi
 
 # 确保持久化 panel_mode，若非 s-ui 则统一由 sout-server 内嵌 sing-box 单核接管
 if [[ "$backend_kind" == "s-ui" ]] || check_sui; then

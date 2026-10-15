@@ -481,12 +481,11 @@ if systemctl is-active fanout.service >/dev/null 2>&1 && ! systemctl is-active s
   UNIT="fanout.service"
 fi
 BIN="/usr/local/bin/sout-server"
-[[ ! -f "$BIN" && -f "/usr/local/bin/sout" ]] && BIN="/usr/local/bin/sout"
 [[ ! -f "$BIN" && -f "/usr/local/bin/fanout" ]] && BIN="/usr/local/bin/fanout"
 WORK_DIR="/var/lib/sout"
 [[ ! -d "$WORK_DIR" && -d "/var/lib/fanout" ]] && WORK_DIR="/var/lib/fanout"
 DEFAULT_PORT=8899
-SOUT_VERSION="4.5.5"
+SOUT_VERSION="4.9.0"
 
 R='\033[31m'; G='\033[32m'; Y='\033[33m'; B='\033[34m'; D='\033[90m'; N='\033[0m'
 
@@ -933,15 +932,24 @@ show_info() {
   pw=$(web_password)
   st=$(svc_status)
 
-  # 1. 优先从轻量静态文件读取版本，避免每次唤起重型 Go 二进制
-  if [[ -f "${WORK_DIR}/version" ]]; then
+  # 1. 优先从实际已安装的 Go 二进制动态读取真实版本，确保更新后即时生效并同步校准缓存
+  local bin_ver=""
+  if command -v sout-server >/dev/null 2>&1; then
+    bin_ver=$(sout-server -version 2>/dev/null | awk '{print $2}' | tr -d ' \r\n')
+  elif [[ -x "${BIN:-}" ]]; then
+    bin_ver=$("${BIN}" -version 2>/dev/null | awk '{print $2}' | tr -d ' \r\n')
+  fi
+
+  if [[ -n "$bin_ver" ]]; then
+    cur_ver="$bin_ver"
+    if [[ ! -f "${WORK_DIR}/version" ]] || [[ "$(cat "${WORK_DIR}/version" 2>/dev/null | tr -d ' \r\n')" != "$cur_ver" ]]; then
+      mkdir -p "${WORK_DIR}" 2>/dev/null || true
+      echo "$cur_ver" > "${WORK_DIR}/version" 2>/dev/null || true
+    fi
+  elif [[ -f "${WORK_DIR}/version" ]]; then
     cur_ver=$(cat "${WORK_DIR}/version" 2>/dev/null | tr -d ' \r\n')
   fi
-  if [[ -z "$cur_ver" ]] && command -v sout-server >/dev/null 2>&1; then
-    cur_ver=$(sout-server -version 2>/dev/null | awk '{print $2}' | tr -d ' \r\n')
-    [[ -n "$cur_ver" ]] && echo "$cur_ver" > "${WORK_DIR}/version" 2>/dev/null || true
-  fi
-  [[ -z "$cur_ver" ]] && cur_ver="${SOUT_VERSION:-4.5.0}"
+  [[ -z "$cur_ver" ]] && cur_ver="${SOUT_VERSION:-4.9.0}"
 
   echo
   echo -e "  程序版本:    ${G}${cur_ver}${N}"
@@ -1847,7 +1855,10 @@ check_and_update() {
     *) echo -e "  ${R}不支持的系统架构: $uname_m${N}"; return ;;
   esac
 
-  local tar_url="https://github.com/ustdbus/sout/releases/download/${tag_name}/sout-linux-${arch}.tar.gz"
+  local dl_urls=(
+    "https://github.com/ustdbus/sout/releases/download/${tag_name}/sout-linux-${arch}.tar.gz"
+    "https://ghproxy.net/https://github.com/ustdbus/sout/releases/download/${tag_name}/sout-linux-${arch}.tar.gz"
+  )
   local tmp_dir
   local tmp_base="/tmp"
   [[ -d "/var/tmp" ]] && tmp_base="/var/tmp"
@@ -1855,24 +1866,20 @@ check_and_update() {
   trap 'rm -rf "$tmp_dir"' RETURN
 
   # 1. 优先在服务运行状态下利用内部 WARP 高速出网通道极速拉取并校验发布包
-  echo -e "  正在下载发布包: ${tar_url} ..."
   local dl_ok=0
-  if [[ -n "$proxy_auth" ]]; then
-    echo -e "  ${C}[⚡] 启用 WARP 高速通道下载并解压...${N}"
-    if curl -fsSL --socks5-hostname "$proxy_auth" --retry 2 --connect-timeout 8 -m 60 "$tar_url" -o "$tmp_dir/sout.tar.gz" 2>/dev/null && tar -zxf "$tmp_dir/sout.tar.gz" -C "$tmp_dir" 2>/dev/null; then
-      dl_ok=1
-    fi
-  fi
-  if [[ "$dl_ok" -eq 0 ]]; then
-    # 回退到直连下载
-    if ! (curl -fsSL --connect-timeout 10 -m 120 "$tar_url" | tar -zxf - -C "$tmp_dir" 2>/dev/null); then
-      if curl -fsSL --retry 3 --connect-timeout 15 -m 180 "$tar_url" -o "$tmp_dir/sout.tar.gz" && tar -zxf "$tmp_dir/sout.tar.gz" -C "$tmp_dir" 2>/dev/null; then
-        dl_ok=1
+  for tar_url in "${dl_urls[@]}"; do
+    echo -e "  正在下载发布包: ${tar_url} ..."
+    if [[ -n "$proxy_auth" ]]; then
+      echo -e "  ${C}[⚡] 尝试通过 WARP 高速通道下载并解压...${N}"
+      if curl -fsSL --socks5-hostname "$proxy_auth" --retry 1 --connect-timeout 6 -m 45 "$tar_url" -o "$tmp_dir/sout.tar.gz" 2>/dev/null && tar -zxf "$tmp_dir/sout.tar.gz" -C "$tmp_dir" 2>/dev/null; then
+        dl_ok=1; break
       fi
-    else
-      dl_ok=1
     fi
-  fi
+    # 回退到直连/镜像下载
+    if curl -fsSL --connect-timeout 8 -m 90 "$tar_url" -o "$tmp_dir/sout.tar.gz" 2>/dev/null && tar -zxf "$tmp_dir/sout.tar.gz" -C "$tmp_dir" 2>/dev/null; then
+      dl_ok=1; break
+    fi
+  done
 
   if [[ "$dl_ok" -eq 0 ]]; then
     echo -e "  ${R}下载或解压发布包失败，请检查网络！${N}"
@@ -1887,20 +1894,17 @@ check_and_update() {
   pkill -9 -f "sout-server" 2>/dev/null || true
   sleep 0.5
 
-  # 4. 将解包出的二进制用 mv -f 覆盖至 $BIN 并赋予可执行权限
+  # 4. 将解包出的二进制安全覆盖至 /usr/local/bin/sout-server 并赋予可执行权限
+  local target_bin="/usr/local/bin/sout-server"
   if [[ -f "$tmp_dir/sout-server" ]]; then
-    mv -f "$tmp_dir/sout-server" "$BIN"
-    chmod +x "$BIN"
-    ln -sf "$BIN" /usr/local/bin/fanout 2>/dev/null || true
-  elif [[ -f "$tmp_dir/sout" ]]; then
-    mv -f "$tmp_dir/sout" "$BIN"
-    chmod +x "$BIN"
-    ln -sf "$BIN" /usr/local/bin/fanout 2>/dev/null || true
+    mv -f "$tmp_dir/sout-server" "$target_bin"
   elif [[ -f "$tmp_dir/fanout" ]]; then
-    mv -f "$tmp_dir/fanout" "$BIN"
-    chmod +x "$BIN"
-    ln -sf "$BIN" /usr/local/bin/fanout 2>/dev/null || true
+    mv -f "$tmp_dir/fanout" "$target_bin"
+  elif [[ -f "$tmp_dir/sout" ]]; then
+    mv -f "$tmp_dir/sout" "$target_bin"
   fi
+  chmod +x "$target_bin" 2>/dev/null || true
+  ln -sf "$target_bin" /usr/local/bin/fanout 2>/dev/null || true
 
   if [[ -f "$tmp_dir/f.sh" ]]; then
     cat "$tmp_dir/f.sh" > /usr/local/bin/sout.new
@@ -1909,6 +1913,7 @@ check_and_update() {
     rm -f /usr/local/bin/f /usr/local/bin/sout-cli 2>/dev/null || true
   fi
 
+  mkdir -p "${WORK_DIR}" 2>/dev/null || true
   echo "$tag_name" > "${WORK_DIR}/version" 2>/dev/null || true
   rm -rf "$tmp_dir" /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/fanout /tmp/f.sh 2>/dev/null || true
 
