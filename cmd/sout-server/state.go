@@ -236,8 +236,10 @@ func (m *Manager) restoreState() (int, error) {
 				tag := fmt.Sprintf("soutopenvpn%d", p.Slot)
 				if isWG {
 					tag = fmt.Sprintf("soutwireguard%d", p.Slot)
+				} else if p.Kind == "custom" {
+					tag = "sout" + sanitizeTag(p.HostName)
 				}
-				m.engine.setChainUpstream(tag)
+				m.engine.setChainUpstream(p.Slot, tag)
 			}
 		}
 		t.setEngine(m.engine)

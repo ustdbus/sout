@@ -2413,8 +2413,9 @@ func RegisterWARPAccount() (*CustomNode, error) {
 		"server_port":     port,
 		"private_key":     privB64,
 		"peer_public_key": peerPub,
-		"local_address":   addresses,
-		"mtu":             1280,
+		"local_address":                addresses,
+		"mtu":                          1280,
+		"persistent_keepalive_interval": 15,
 	}
 	cfgBlob, _ := json.Marshal(cfgMap)
 

@@ -594,6 +594,8 @@ func (m *Manager) ToggleChainUpstream(slot int) (bool, error) {
 		isWG := t.CustomProto == "wireguard" || t.Node.Protocol == "wireguard"
 		if isWG {
 			newUpstreamTag = fmt.Sprintf("soutwireguard%d", slot)
+		} else if t.Kind == "custom" {
+			newUpstreamTag = "sout" + sanitizeTag(t.Node.HostName)
 		} else {
 			newUpstreamTag = fmt.Sprintf("soutopenvpn%d", slot)
 		}
@@ -602,7 +604,11 @@ func (m *Manager) ToggleChainUpstream(slot int) (bool, error) {
 
 	// 通知内嵌引擎更新全局前置链标签并热重载受影响的隧道
 	if m.engine != nil {
-		m.engine.setChainUpstream(newUpstreamTag)
+		upstreamSlot := 0
+		if newState {
+			upstreamSlot = slot
+		}
+		m.engine.setChainUpstream(upstreamSlot, newUpstreamTag)
 	}
 
 	// 保存状态
@@ -630,7 +636,7 @@ func (m *Manager) Stop(slot int) error {
 	if t.IsChainUpstream || m.chainUpstreamSlot == slot {
 		m.chainUpstreamSlot = 0
 		if m.engine != nil {
-			m.engine.setChainUpstream("")
+			m.engine.setChainUpstream(0, "")
 		}
 	}
 	if err := m.saveState(); err != nil {

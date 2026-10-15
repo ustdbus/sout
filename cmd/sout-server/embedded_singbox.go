@@ -93,7 +93,8 @@ type embeddedEngine struct {
 	inboundConfigs   map[string]map[string]any
 	inboundHash      [32]byte
 	activeTunnels    map[int]*Tunnel
-	chainUpstreamTag string
+	chainUpstreamTag  string
+	chainUpstreamSlot int
 	listenIP         string
 }
 
@@ -321,7 +322,7 @@ func (e *embeddedEngine) rebuildOutboundBoxLocked() error {
 			}
 		}
 
-		if endpointTag != e.chainUpstreamTag && !tunnel.IsChainUpstream && e.chainUpstreamTag != "" {
+		if endpointTag != e.chainUpstreamTag && !tunnel.IsChainUpstream && e.chainUpstreamTag != "" && activeEndpointTags[e.chainUpstreamTag] {
 			endpointConfig["detour"] = e.chainUpstreamTag
 		}
 
@@ -472,12 +473,13 @@ func (e *embeddedEngine) removeTunnel(tunnel *Tunnel) {
 	_ = e.rebuildOutboundBoxLocked()
 }
 
-func (e *embeddedEngine) setChainUpstream(tag string) {
+func (e *embeddedEngine) setChainUpstream(slot int, tag string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.chainUpstreamTag == tag {
+	if e.chainUpstreamSlot == slot && e.chainUpstreamTag == tag {
 		return
 	}
+	e.chainUpstreamSlot = slot
 	e.chainUpstreamTag = tag
 	_ = e.rebuildOutboundBoxLocked()
 }
@@ -647,14 +649,46 @@ func (o *soutDynamicOutbound) endpointFor(ctx context.Context, destination M.Soc
 	outboundBox := o.engine.outboundBox
 	o.engine.mu.Unlock()
 
-	if !found {
-		return N.SystemDialer, destination, nil
-	}
 	if route.block {
 		return nil, destination, fmt.Errorf("入站 %s 绑定的出口当前不可用", metadata.Inbound)
 	}
-	if route.direct || route.endpoint == "" || route.endpoint == "direct" {
-		return N.SystemDialer, destination, nil
+
+	isDirect := !found || route.direct || route.endpoint == "" || route.endpoint == "direct"
+	if isDirect {
+		// 全局前置链式出站自适应：
+		// 若存在已激活且运行中的全局前置链隧道 (例如 WARP)，未被专门分流的直连流量自动通过该前置链发出；
+		// 若未开启前置链或前置链未就绪，走 VPS 原生直连出站。
+		o.engine.mu.Lock()
+		chainSlot := o.engine.chainUpstreamSlot
+		chainTag := o.engine.chainUpstreamTag
+		var chainTunnel *Tunnel
+		if chainSlot > 0 {
+			chainTunnel = o.engine.activeTunnels[chainSlot]
+		}
+		if chainTunnel == nil && chainTag != "" {
+			for _, t := range o.engine.activeTunnels {
+				if t.IsChainUpstream {
+					chainTunnel = t
+					break
+				}
+			}
+		}
+		o.engine.mu.Unlock()
+
+		if chainTunnel != nil && chainTunnel.Status == "up" {
+			if chainTag == "" {
+				if chainTunnel.CustomProto == "wireguard" || chainTunnel.Node.Protocol == "wireguard" {
+					chainTag = fmt.Sprintf("soutwireguard%d", chainTunnel.Slot)
+				} else if chainTunnel.Kind == "custom" {
+					chainTag = "sout" + sanitizeTag(chainTunnel.Node.HostName)
+				} else {
+					chainTag = fmt.Sprintf("soutopenvpn%d", chainTunnel.Slot)
+				}
+			}
+			route = embeddedRoute{endpoint: chainTag}
+		} else {
+			return N.SystemDialer, destination, nil
+		}
 	}
 
 	isWG := strings.HasPrefix(route.endpoint, "soutwireguard")
@@ -897,11 +931,19 @@ func wireguardEndpoint(configJSON, tag string) (map[string]any, error) {
 		}
 	}
 
+	keepalive := 15
+	if kVal, ok := raw["persistent_keepalive_interval"].(float64); ok && kVal > 0 {
+		keepalive = int(kVal)
+	} else if kVal, ok := raw["persistent_keepalive_interval"].(int); ok && kVal > 0 {
+		keepalive = kVal
+	}
+
 	peer := map[string]any{
-		"address":     server,
-		"port":        serverPort,
-		"public_key":  pubKey,
-		"allowed_ips": []string{"0.0.0.0/0", "::/0"},
+		"address":                        server,
+		"port":                           serverPort,
+		"public_key":                     pubKey,
+		"allowed_ips":                    []string{"0.0.0.0/0", "::/0"},
+		"persistent_keepalive_interval": keepalive,
 	}
 	if preSharedKey != "" {
 		peer["pre_shared_key"] = preSharedKey
