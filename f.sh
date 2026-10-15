@@ -639,6 +639,10 @@ optimize_low_memory() {
     sed -i 's/"level"[[:space:]]*:[[:space:]]*"trace"/"level": "warn"/g' /etc/sing-box/config.json 2>/dev/null || true
   fi
 
+  # 1. 彻底清理 /tmp 与 /var/tmp 下的历史升级包与临时残留 (释放 tmpfs 内存)
+  rm -f /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/f.sh 2>/dev/null || true
+  rm -f /var/tmp/sout-linux-*.tar.gz /var/tmp/sout-server /var/tmp/tmp.* 2>/dev/null || true
+
   # 4. 调低 swappiness（从默认 100 降为 30），防止过早向虚拟 Swap 剧烈换页
   sysctl -w vm.swappiness=30 >/dev/null 2>&1 || true
 

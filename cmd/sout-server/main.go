@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,8 +25,145 @@ import (
 // version 由构建时通过 -ldflags 注入。
 var version = "v4.6.0"
 
+var (
+	cgroupV2Path    = "/sys/fs/cgroup/memory.max"
+	cgroupV1Path    = "/sys/fs/cgroup/memory/memory.limit_in_bytes"
+	procMeminfoPath = "/proc/meminfo"
+)
+
+// parseCgroupV2 尝试从 cgroup v2 读取内存上限 (字节)
+// 忽略 "max" 或无效内容，仅在包含有效数字时返回
+func parseCgroupV2(path string) int64 {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	content := strings.TrimSpace(string(data))
+	if content == "" || strings.EqualFold(content, "max") {
+		return 0
+	}
+	val, err := strconv.ParseInt(content, 10, 64)
+	if err == nil && val > 0 && val < (int64(1)<<50) {
+		return val
+	}
+	return 0
+}
+
+// parseCgroupV1 尝试从 cgroup v1 读取 memory.limit_in_bytes (字节)
+// 若无限制通常包含超大数值 (如 9223372036854771712)，仅在小于 1<<50 时认定为有效限额
+func parseCgroupV1(path string) int64 {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		return 0
+	}
+	if uval, err := strconv.ParseUint(content, 10, 64); err == nil && uval > 0 && uval < (uint64(1)<<50) {
+		return int64(uval)
+	}
+	return 0
+}
+
+// parseProcMeminfo 兜底读取 /proc/meminfo 中的 MemTotal (单位 kB 转换为字节数)
+func parseProcMeminfo(path string) int64 {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "MemTotal:") {
+			rest := strings.TrimSpace(strings.TrimPrefix(line, "MemTotal:"))
+			fields := strings.Fields(rest)
+			if len(fields) > 0 {
+				kb, err := strconv.ParseInt(fields[0], 10, 64)
+				if err == nil && kb > 0 && kb < (int64(1)<<53) {
+					return kb * 1024
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// detectMemoryLimitFromPaths 按优先级依次探测 cgroup v2 -> cgroup v1 -> /proc/meminfo
+func detectMemoryLimitFromPaths(v2, v1, meminfo string) int64 {
+	if limit := parseCgroupV2(v2); limit > 0 {
+		return limit
+	}
+	if limit := parseCgroupV1(v1); limit > 0 {
+		return limit
+	}
+	if limit := parseProcMeminfo(meminfo); limit > 0 {
+		return limit
+	}
+	return 0
+}
+
+// detectMemoryLimit 探测宿主机或容器分配的真实物理/硬性内存限制 (字节)
+func detectMemoryLimit() int64 {
+	return detectMemoryLimitFromPaths(cgroupV2Path, cgroupV1Path, procMeminfoPath)
+}
+
+// applyLowMemoryProtectionWithStop 应用自适应低内存保护策略，提供 stopCh 便于单元测试控制生命周期
+func applyLowMemoryProtectionWithStop(limitBytes int64, stopCh <-chan struct{}) (bool, int64, int, time.Duration) {
+	if limitBytes <= 0 {
+		return false, 0, 0, 0
+	}
+
+	var (
+		memLimit     int64
+		gcPercent    int
+		freeInterval time.Duration
+		tierName     string
+	)
+
+	if limitBytes <= 80*1024*1024 {
+		// <= 80MB (典型 64MB 容器)
+		memLimit = 38 * 1024 * 1024
+		gcPercent = 40
+		freeInterval = 60 * time.Second
+		tierName = "<=80MB (极低内存模式, 典型 64MB 容器)"
+	} else if limitBytes <= 160*1024*1024 {
+		// <= 160MB (典型 128MB 容器)
+		memLimit = 75 * 1024 * 1024
+		gcPercent = 60
+		freeInterval = 120 * time.Second
+		tierName = "<=160MB (低内存模式, 典型 128MB 容器)"
+	} else {
+		// 大于 160MB：保持 Go 默认行为，不设额外限制
+		return false, 0, 0, 0
+	}
+
+	debug.SetMemoryLimit(memLimit)
+	debug.SetGCPercent(gcPercent)
+
+	// 启动后台轻量 goroutine，周期性主动将未使用堆内存归还给内核
+	go func() {
+		ticker := time.NewTicker(freeInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				debug.FreeOSMemory()
+			case <-stopCh:
+				return
+			}
+		}
+	}()
+
+	log.Printf("[内存保护] 检测到内存限制: %.2f MB (%d 字节)，已启用 %s [SetMemoryLimit=%d MB, GOGC=%d, FreeOSMemory 周期=%v]",
+		float64(limitBytes)/(1024*1024), limitBytes, tierName, memLimit/(1024*1024), gcPercent, freeInterval)
+	return true, memLimit, gcPercent, freeInterval
+}
+
+// initLowMemoryProtection 初始化自适应极低内存保护与物理内存快速返还机制
 func initLowMemoryProtection() {
-	// 原生全速模式 (GOGC=100，无额外内存上限)
+	limit := detectMemoryLimit()
+	applyLowMemoryProtectionWithStop(limit, nil)
 }
 
 func main() {

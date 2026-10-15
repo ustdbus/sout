@@ -593,8 +593,9 @@ ${k} = ${v}"
 }
 
 optimize_low_memory() {
-  # 1. 清理 /tmp 内存文件系统历史残留的 tar.gz 与二进制
+  # 1. 清理 /tmp 与 /var/tmp 历史残留的 tar.gz 与二进制 (释放内存)
   rm -f /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/f.sh 2>/dev/null || true
+  rm -f /var/tmp/sout-linux-*.tar.gz /var/tmp/sout-server /var/tmp/tmp.* 2>/dev/null || true
 
   # 2. 彻底清除历史强加的 MemorySwapMax=0，避免突发瞬时尖峰因 0 容错直接触发内核 OOM Killer
   sed -i '/MemorySwapMax/d' /etc/systemd/system/*.service.d/override.conf 2>/dev/null || true
