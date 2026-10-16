@@ -964,19 +964,24 @@ SVCEOF
     systemctl daemon-reload
     rm -f /etc/systemd/system/fanout.service 2>/dev/null || true
   else
+    local supervisor_line="command_background=\"yes\""
+    if command -v supervise-daemon >/dev/null 2>&1; then
+      supervisor_line="supervisor=\"supervise-daemon\""
+    fi
     cat > /etc/init.d/sout <<OPENRCEOF
 #!/sbin/openrc-run
 name="sout"
 description="sout - s-ui 动态家宽出口插件"
 ${sout_env_openrc}
+${supervisor_line}
 command="/usr/local/bin/sout-server"
 command_args="-dir /var/lib/sout"
-command_background="yes"
 pidfile="/run/sout.pid"
 retry="TERM/3/KILL/3"
 output_log="/var/log/sout.log"
 error_log="/var/log/sout.log"
-respawn_delay=3
+respawn_delay=2
+respawn_max=0
 
 depend() {
   need net

@@ -485,7 +485,7 @@ BIN="/usr/local/bin/sout-server"
 WORK_DIR="/var/lib/sout"
 [[ ! -d "$WORK_DIR" && -d "/var/lib/fanout" ]] && WORK_DIR="/var/lib/fanout"
 DEFAULT_PORT=8899
-SOUT_VERSION="4.9.4"
+SOUT_VERSION="4.9.5"
 
 R='\033[31m'; G='\033[32m'; Y='\033[33m'; B='\033[34m'; D='\033[90m'; N='\033[0m'
 
@@ -655,6 +655,14 @@ SystemMaxUse=8M
 MaxRetentionSec=3day
 EOF
     systemctl restart systemd-journald >/dev/null 2>&1 || true
+  fi
+
+  # 6. OpenRC 环境下若 /etc/init.d/sout 未开启 supervise-daemon，自动加固为秒级无限自愈守护
+  if [[ -f /etc/init.d/sout ]] && command -v supervise-daemon >/dev/null 2>&1; then
+    if ! grep -q 'supervisor="supervise-daemon"' /etc/init.d/sout 2>/dev/null; then
+      sed -i '/command_background=/d' /etc/init.d/sout 2>/dev/null || true
+      sed -i '/name="sout"/a supervisor="supervise-daemon"\nrespawn_delay=2\nrespawn_max=0' /etc/init.d/sout 2>/dev/null || true
+    fi
   fi
 }
 
@@ -949,7 +957,7 @@ show_info() {
   elif [[ -f "${WORK_DIR}/version" ]]; then
     cur_ver=$(cat "${WORK_DIR}/version" 2>/dev/null | tr -d ' \r\n')
   fi
-  [[ -z "$cur_ver" ]] && cur_ver="${SOUT_VERSION:-4.9.4}"
+  [[ -z "$cur_ver" ]] && cur_ver="${SOUT_VERSION:-4.9.5}"
 
   echo
   echo -e "  程序版本:    ${G}${cur_ver}${N}"

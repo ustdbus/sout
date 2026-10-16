@@ -23,7 +23,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v4.9.4"
+var version = "v4.9.5"
 
 var (
 	cgroupV2Path    = "/sys/fs/cgroup/memory.max"
@@ -128,11 +128,11 @@ func applyLowMemoryProtectionWithStop(limitBytes int64, stopCh <-chan struct{}) 
 		freeInterval = 300 * time.Second
 		tierName = "<=80MB (极低内存模式, 典型 64MB 容器, 防 OOM 优先)"
 	} else if limitBytes <= 160*1024*1024 {
-		// <= 160MB (典型 128MB 容器, 满血吞吐与低 CPU 优先)
-		memLimit = 100 * 1024 * 1024
-		gcPercent = 100
-		freeInterval = 0 // 128MB 内存充裕，完全不触发定期强制归还，杜绝内存页抖动与 GC 惩罚
-		tierName = "<=160MB (标准轻量模式, 典型 128MB 容器, 满血吞吐优先)"
+		// <= 160MB (典型 128MB 容器, 强力防 OOM 优先，留足 67MB 系统缓冲)
+		memLimit = 55 * 1024 * 1024
+		gcPercent = 80
+		freeInterval = 120 * time.Second // 定期主动向操作系统归还空闲物理内存页，消除单向棘轮积累
+		tierName = "<=160MB (标准轻量模式, 典型 128MB 容器, 强力防 OOM)"
 	} else {
 		// 大于 160MB：保持 Go 默认行为，不设额外限制
 		return false, 0, 0, 0

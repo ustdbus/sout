@@ -21,9 +21,33 @@ type RingLogBuffer struct {
 	maxLines int
 }
 
+// isIgnoredLogLine 过滤高频良性噪声（例如客户端断连导致的 EOF 伪报错），避免内存膨胀与日志误导
+func isIgnoredLogLine(line string) bool {
+	if strings.Contains(line, "mux connection closed: read frame header: EOF") {
+		return true
+	}
+	return false
+}
+
+// filterLogNoise 过滤日志文本中的高频良性噪音行
+func filterLogNoise(content string) string {
+	if content == "" {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	filtered := make([]string, 0, len(lines))
+	for _, l := range lines {
+		if isIgnoredLogLine(l) {
+			continue
+		}
+		filtered = append(filtered, l)
+	}
+	return strings.Join(filtered, "\n")
+}
+
 var globalLogBuffer = &RingLogBuffer{
-	maxLines: 2000,
-	lines:    make([]string, 0, 2000),
+	maxLines: 500,
+	lines:    make([]string, 0, 500),
 }
 
 func (b *RingLogBuffer) Write(p []byte) (n int, err error) {
@@ -34,13 +58,15 @@ func (b *RingLogBuffer) Write(p []byte) (n int, err error) {
 	rawLines := strings.Split(text, "\n")
 	for _, l := range rawLines {
 		l = strings.TrimRight(l, "\r")
-		if l == "" {
+		if l == "" || isIgnoredLogLine(l) {
 			continue
 		}
 		if len(b.lines) >= b.maxLines {
-			b.lines = b.lines[1:]
+			copy(b.lines, b.lines[1:])
+			b.lines[len(b.lines)-1] = ""
+			b.lines = b.lines[:len(b.lines)-1]
 		}
-		b.lines = append(b.lines, l)
+		b.lines = append(b.lines, strings.Clone(l))
 	}
 	return len(p), nil
 }
@@ -211,8 +237,12 @@ func fetchServiceLogs(unit string, lines int, files ...string) string {
 	return globalLogBuffer.Get(lines)
 }
 
-// fetchLogs 获取最近日志，优先从 systemd journal 获取，回退到常见日志文件或内存日志缓冲区
+// fetchLogs 获取最近日志（已过滤良性噪声），优先从 systemd journal 获取，回退到常见日志文件或内存日志缓冲区
 func fetchLogs(source string, lines int) string {
+	return filterLogNoise(fetchLogsRaw(source, lines))
+}
+
+func fetchLogsRaw(source string, lines int) string {
 	if lines <= 0 {
 		lines = 200
 	}
