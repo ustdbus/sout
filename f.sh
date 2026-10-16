@@ -485,7 +485,7 @@ BIN="/usr/local/bin/sout-server"
 WORK_DIR="/var/lib/sout"
 [[ ! -d "$WORK_DIR" && -d "/var/lib/fanout" ]] && WORK_DIR="/var/lib/fanout"
 DEFAULT_PORT=8899
-SOUT_VERSION="4.9.5"
+SOUT_VERSION="4.9.6"
 
 R='\033[31m'; G='\033[32m'; Y='\033[33m'; B='\033[34m'; D='\033[90m'; N='\033[0m'
 
@@ -958,7 +958,7 @@ show_info() {
   elif [[ -f "${WORK_DIR}/version" ]]; then
     cur_ver=$(cat "${WORK_DIR}/version" 2>/dev/null | tr -d ' \r\n')
   fi
-  [[ -z "$cur_ver" ]] && cur_ver="${SOUT_VERSION:-4.9.5}"
+  [[ -z "$cur_ver" ]] && cur_ver="${SOUT_VERSION:-4.9.6}"
 
   echo
   echo -e "  程序版本:    ${G}${cur_ver}${N}"
