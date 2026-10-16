@@ -661,6 +661,7 @@ EOF
   if [[ -f /etc/init.d/sout ]] && command -v supervise-daemon >/dev/null 2>&1; then
     if ! grep -q 'supervisor="supervise-daemon"' /etc/init.d/sout 2>/dev/null; then
       sed -i '/command_background=/d' /etc/init.d/sout 2>/dev/null || true
+      sed -i '/respawn_delay=/d' /etc/init.d/sout 2>/dev/null || true
       sed -i '/name="sout"/a supervisor="supervise-daemon"\nrespawn_delay=2\nrespawn_max=0' /etc/init.d/sout 2>/dev/null || true
     fi
   fi
