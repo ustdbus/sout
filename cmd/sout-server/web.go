@@ -9,6 +9,9 @@ var indexHTML string
 
 func init() {
 	indexHTML = strings.Replace(indexHTMLTemplate, "/* QRCODE_JS */", qrcodeMinJS, 1)
+	for key, uri := range ozAssetData {
+		indexHTML = strings.ReplaceAll(indexHTML, key, uri)
+	}
 }
 
 func handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -29,7 +32,7 @@ const indexHTMLTemplate = `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>sout - 节点与分流管理</title>
-<script>try{var t=localStorage.getItem('sout.theme');if(t&&t!=='classic'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}</script>
+<script>try{var t=localStorage.getItem('sout.theme')||'emerald';if(t!=='classic'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}</script>
 <style>
 :root{
   color-scheme: dark;
@@ -46,6 +49,9 @@ const indexHTMLTemplate = `<!DOCTYPE html>
   --bad-soft:rgba(248,81,73,.1); --bad-line:rgba(248,81,73,.35);
   --hover:rgba(255,255,255,.02);
   --danger:var(--bad);
+  --art-image:none; --art-size:auto; --art-pos:center; --art-opacity:0; --art-mask:none;
+  --deco-image:none; --deco-size:auto; --deco-pos:center; --deco-opacity:0; --deco-mask:none;
+  --extra-image:none; --extra-size:auto; --extra-pos:center; --extra-opacity:0; --extra-mask:none;
   --pattern-image:none; --pattern-size:auto; --pattern-position:0 0; --pattern-opacity:0;
   --glow-image:none; --glow-opacity:0; --glow-duration:26s;
   --bg-image:none; --header-accent:transparent; --font-display:inherit;
@@ -67,6 +73,9 @@ html[data-theme="emerald"]{
   --warn-soft:rgba(227,179,65,.14); --warn-line:rgba(227,179,65,.32);
   --bad-soft:rgba(255,123,114,.1); --bad-line:rgba(255,123,114,.35);
   --hover:rgba(255,255,255,.03);
+  --art-image:url("__OZ_CITY__"); --art-size:min(720px, 80vw) auto; --art-pos:center bottom -4px; --art-opacity:.16; --art-blend:normal; --art-mask:none;
+  --deco-image:url("__OZ_MONKEYS__"); --deco-size:min(210px, 18vw) auto; --deco-pos:right 1% bottom 9%; --deco-opacity:.07; --deco-mask:none;
+  --extra-image:none;
   --pattern-image:linear-gradient(45deg, rgba(61,220,151,.055) 25%, transparent 25%, transparent 75%, rgba(61,220,151,.055) 75%),linear-gradient(45deg, rgba(61,220,151,.055) 25%, transparent 25%, transparent 75%, rgba(61,220,151,.055) 75%),linear-gradient(rgba(227,179,65,.04) 1px, transparent 1px);
   --pattern-size:44px 44px,44px 44px,44px 44px;
   --pattern-position:0 0,22px 22px,0 0;
@@ -94,6 +103,9 @@ html[data-theme="brickroad"]{
   --warn-soft:rgba(230,162,60,.14); --warn-line:rgba(230,162,60,.32);
   --bad-soft:rgba(224,108,117,.1); --bad-line:rgba(224,108,117,.35);
   --hover:rgba(255,255,255,.03);
+  --art-image:url("__OZ_SCARECROW__"); --art-size:min(340px, 28vw) auto; --art-pos:right -3% bottom -8%; --art-opacity:.08; --art-blend:screen; --art-mask:none;
+  --deco-image:url("__OZ_LION__"); --deco-size:min(210px, 18vw) auto; --deco-pos:left -1% bottom 4%; --deco-opacity:.07; --deco-mask:none;
+  --extra-image:none;
   --pattern-image:linear-gradient(rgba(240,180,41,.055) 1px, transparent 1px),linear-gradient(90deg, rgba(240,180,41,.055) 1px, transparent 1px),linear-gradient(rgba(240,180,41,.032) 1px, transparent 1px),linear-gradient(90deg, rgba(240,180,41,.032) 1px, transparent 1px);
   --pattern-size:64px 28px,64px 28px,64px 28px,64px 28px;
   --pattern-position:0 0,0 0,32px 14px,32px 14px;
@@ -122,6 +134,9 @@ html[data-theme="forest"]{
   --warn-soft:rgba(242,193,78,.14); --warn-line:rgba(242,193,78,.32);
   --bad-soft:rgba(255,143,154,.1); --bad-line:rgba(255,143,154,.35);
   --hover:rgba(255,255,255,.035);
+  --art-image:url("__OZ_FERN__"); --art-size:min(260px, 22vw) auto; --art-pos:left -4% bottom -10%; --art-opacity:.10; --art-blend:screen; --art-mask:none;
+  --deco-image:url("__OZ_MUSHROOM__"); --deco-size:min(110px, 9vw) auto; --deco-pos:right 6% bottom 2%; --deco-opacity:.08; --deco-mask:none;
+  --extra-image:url("__OZ_TREE__"); --extra-size:min(210px, 18vw) auto; --extra-pos:right -1% top 4%; --extra-opacity:.03; --extra-mask:none;
   --pattern-image:radial-gradient(circle at 18% 22%, rgba(94,234,212,.14) 0 1.2px, transparent 2px),radial-gradient(circle at 72% 64%, rgba(196,167,245,.12) 0 1px, transparent 1.8px),radial-gradient(circle at 41% 82%, rgba(240,166,202,.1) 0 1px, transparent 1.6px),repeating-linear-gradient(115deg, rgba(94,234,212,.025) 0 1px, transparent 1px 30px);
   --pattern-size:200px 200px,260px 260px,230px 230px,auto;
   --pattern-position:0 0,37px 53px,91px 17px,0 0;
@@ -148,6 +163,13 @@ html::after{content:"";position:fixed;inset:-12%;z-index:-1;pointer-events:none;
 @keyframes oz-drift{from{transform:translate3d(-1.6%,-1.2%,0) scale(1.03)}to{transform:translate3d(1.6%,1.4%,0) scale(1.09)}}
 @keyframes oz-breathe{0%,100%{opacity:var(--glow-opacity)}50%{opacity:calc(var(--glow-opacity) * .55)}}
 @media (prefers-reduced-motion:reduce){html::after{animation:none}}
+/* 主题插画与粒子层 */
+.oz-scene{position:fixed;inset:0;z-index:-1;pointer-events:none;overflow:hidden}
+.oz-scene .oz-layer{position:absolute;inset:0;background-repeat:no-repeat;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;-webkit-mask-size:100% 100%;mask-size:100% 100%}
+.oz-art{background-image:var(--art-image);background-size:var(--art-size);background-position:var(--art-pos);opacity:var(--art-opacity);mix-blend-mode:var(--art-blend,normal);-webkit-mask-image:var(--art-mask);mask-image:var(--art-mask)}
+.oz-deco{background-image:var(--deco-image);background-size:var(--deco-size);background-position:var(--deco-pos);opacity:var(--deco-opacity);mix-blend-mode:var(--deco-blend,screen);-webkit-mask-image:var(--deco-mask);mask-image:var(--deco-mask)}
+.oz-extra{background-image:var(--extra-image);background-size:var(--extra-size);background-position:var(--extra-pos);opacity:var(--extra-opacity);mix-blend-mode:var(--extra-blend,screen);-webkit-mask-image:var(--extra-mask);mask-image:var(--extra-mask)}
+#ozParticles{position:fixed;inset:0;z-index:-1;width:100%;height:100%;pointer-events:none}
 header{position:relative;display:flex;align-items:center;gap:16px;padding:12px 20px;
   border-bottom:1px solid var(--line);background:var(--panel)}
 header::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:1px;background:var(--header-accent);pointer-events:none}
@@ -220,7 +242,7 @@ main{padding:20px;max-width:1120px;margin:0 auto}
 .toggle-switch input{opacity:0;width:0;height:0;position:absolute}
 .toggle-slider{position:absolute;cursor:pointer;inset:0;background-color:var(--track);transition:.2s;border-radius:18px;border:1px solid var(--line)}
 .toggle-slider:before{position:absolute;content:"";height:12px;width:12px;left:2px;bottom:2px;background-color:#8b949e;transition:.2s;border-radius:50%}
-.toggle-switch input:checked + .toggle-slider{background-color:#238636;border-color:var(--ok-line)}
+.toggle-switch input:checked + .toggle-slider{background-color:var(--ok-solid);border-color:var(--ok-line)}
 .toggle-switch input:checked + .toggle-slider:before{transform:translateX(14px);background-color:#fff}
 .branch-row.disabled{opacity:.6}
 .branch-row.disabled .branch-name{color:var(--dim)}
@@ -270,23 +292,15 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
 .pool-tag.residential{background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-line)}
 .pool-tag.datacenter{background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent-line)}
 
-/* 界面主题切换器 */
-.theme-picker{position:relative}
-.theme-menu{position:absolute;right:0;top:calc(100% + 10px);width:272px;padding:8px;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 18px 44px rgba(0,0,0,.5);display:none;z-index:70}
-.theme-menu.open{display:block}
-.theme-menu-title{padding:6px 8px 8px;font-size:11px;letter-spacing:.04em;color:var(--dim);font-weight:600}
-.theme-item{display:flex;align-items:center;gap:10px;width:100%;padding:8px;border:1px solid transparent;background:transparent;border-radius:8px;text-align:left;white-space:normal;line-height:1.35}
-.theme-item:hover:not(:disabled){border-color:var(--line);background:var(--hover);color:var(--text)}
-.theme-item.active{border-color:var(--accent);background:var(--accent-softer)}
-.theme-swatches{display:flex;gap:3px;flex:none}
-.theme-swatches i{display:block;width:11px;height:24px;border-radius:3px;border:1px solid rgba(0,0,0,.25)}
-.theme-meta{display:flex;flex-direction:column;gap:1px;min-width:0}
-.theme-meta b{font-size:12.5px;font-weight:600;color:var(--text)}
-.theme-meta em{font-style:normal;font-size:11px;color:var(--dim)}
-@media (max-width:640px){.theme-menu{width:250px}}
 </style>
 </head>
 <body>
+<div class="oz-scene" aria-hidden="true">
+  <div class="oz-layer oz-art"></div>
+  <div class="oz-layer oz-deco"></div>
+  <div class="oz-layer oz-extra"></div>
+  <canvas id="ozParticles"></canvas>
+</div>
 <header>
   <h1>
     <svg viewBox="0 0 24 24" style="color:var(--accent)"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
@@ -294,31 +308,7 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
     <span class="badge" id="backendBadge">已连接</span>
   </h1>
   <span class="spacer"></span>
-  <div class="theme-picker">
-    <button id="themeBtn" title="切换界面主题" aria-haspopup="true" aria-expanded="false" style="gap:6px">
-      <svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 2a10 10 0 1 0 0 20c1.1 0 2-.9 2-2 0-.5-.2-1-.5-1.4-.3-.4-.5-.9-.5-1.5 0-1.1.9-2 2-2H17a4 4 0 0 0 4-4c0-5-4.5-9-9-9z"/><circle cx="7.5" cy="10.5" r="1" fill="currentColor" stroke="none"/><circle cx="9.5" cy="6.5" r="1" fill="currentColor" stroke="none"/><circle cx="14" cy="6.5" r="1" fill="currentColor" stroke="none"/><circle cx="17" cy="10" r="1" fill="currentColor" stroke="none"/></svg>
-      主题
-    </button>
-    <div class="theme-menu" id="themeMenu" role="menu">
-      <div class="theme-menu-title">绿野仙踪 · 界面主题</div>
-      <button class="theme-item" role="menuitem" data-theme="classic">
-        <span class="theme-swatches"><i style="background:#0e1117;border-color:#2d333b"></i><i style="background:#58a6ff"></i><i style="background:#3fb950"></i></span>
-        <span class="theme-meta"><b>经典暗夜</b><em>默认 · GitHub 深色</em></span>
-      </button>
-      <button class="theme-item" role="menuitem" data-theme="emerald">
-        <span class="theme-swatches"><i style="background:#07130f"></i><i style="background:#3ddc97"></i><i style="background:#e3b341"></i></span>
-        <span class="theme-meta"><b>翡翠城</b><em>祖母绿 · 清澈沉稳</em></span>
-      </button>
-      <button class="theme-item" role="menuitem" data-theme="brickroad">
-        <span class="theme-swatches"><i style="background:#14100a"></i><i style="background:#f0b429"></i><i style="background:#c94f5f"></i></span>
-        <span class="theme-meta"><b>黄砖路</b><em>暖金 · 复古童话</em></span>
-      </button>
-      <button class="theme-item" role="menuitem" data-theme="forest">
-        <span class="theme-swatches"><i style="background:#0a0f14"></i><i style="background:#5eead4"></i><i style="background:#c4a7f5"></i></span>
-        <span class="theme-meta"><b>魔法森林</b><em>月光青绿 · 仙子紫</em></span>
-      </button>
-    </div>
-  </div>
+
   <button id="settingsBtn" style="gap:6px">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
     设置
@@ -3020,39 +3010,128 @@ $('#copyLogsBtn').onclick = () => {
   });
 };
 
-// ---- 界面主题切换 ----
+// ---- 主题粒子（萤火 / 金粉 / 光尘） ----
+(function(){
+  var canvas = document.getElementById('ozParticles');
+  if(!canvas) return;
+  var ctx = canvas.getContext('2d');
+  var PRESETS = {
+    emerald:  {count:30, colors:['#3ddc97','#8ee6a6','#e3b341'], mode:'float',   speed:.16, size:[1.2,3.0], alpha:[.16,.5]},
+    brickroad:{count:28, colors:['#f0b429','#ffd166','#c9a227'], mode:'fall',    speed:.26, size:[1.0,2.6], alpha:[.14,.46]},
+    forest:   {count:30, colors:['#5eead4','#c4a7f5','#f0a6ca'], mode:'firefly', speed:.1,  size:[1.0,2.4], alpha:[.18,.7]}
+  };
+  var W=0,H=0,dpr=1,parts=[],preset=null,raf=0,running=false,last=0,sprites={};
+  var reduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  function rand(a,b){ return a + Math.random()*(b-a); }
+  function sprite(color){
+    if(sprites[color]) return sprites[color];
+    var r=16, s=document.createElement('canvas');
+    s.width=s.height=r*2;
+    var c=s.getContext('2d');
+    var g=c.createRadialGradient(r,r,0,r,r,r);
+    g.addColorStop(0,color);
+    g.addColorStop(.22,color);
+    g.addColorStop(.55,'rgba(255,255,255,.18)');
+    g.addColorStop(1,'rgba(255,255,255,0)');
+    c.fillStyle=g;
+    c.beginPath(); c.arc(r,r,r,0,Math.PI*2); c.fill();
+    sprites[color]=s;
+    return s;
+  }
+  function makeParticle(anywhere){
+    return {
+      x: rand(0,W),
+      y: anywhere ? rand(0,H) : (preset.mode==='fall' ? -12 : H+12),
+      r: rand(preset.size[0],preset.size[1]),
+      a: rand(preset.alpha[0],preset.alpha[1]),
+      color: preset.colors[Math.floor(Math.random()*preset.colors.length)],
+      vx: rand(-.12,.12),
+      vy: (preset.mode==='fall'? 1 : -1) * rand(.5,1.2) * preset.speed,
+      ph: Math.random()*Math.PI*2,
+      tw: rand(.6,1.4)
+    };
+  }
+  function seed(){
+    parts=[];
+    if(!preset) return;
+    var n=Math.round(preset.count*Math.min(1.5,Math.max(.65,W/1280)));
+    for(var i=0;i<n;i++) parts.push(makeParticle(true));
+  }
+  function resize(){
+    dpr=Math.min(2,window.devicePixelRatio||1);
+    W=window.innerWidth; H=window.innerHeight;
+    canvas.width=Math.round(W*dpr); canvas.height=Math.round(H*dpr);
+    canvas.style.width=W+'px'; canvas.style.height=H+'px';
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+  function paint(){
+    ctx.clearRect(0,0,W,H);
+    for(var i=0;i<parts.length;i++){
+      var p=parts[i], sp=sprite(p.color);
+      ctx.globalAlpha=p.a*p.tw;
+      ctx.drawImage(sp,p.x-p.r*3,p.y-p.r*3,p.r*6,p.r*6);
+    }
+    ctx.globalAlpha=1;
+  }
+  function step(t){
+    if(!running) return;
+    var dt=Math.min(50,(t-last)||16); last=t;
+    var k=dt/16.67;
+    for(var i=0;i<parts.length;i++){
+      var p=parts[i];
+      if(preset.mode==='firefly'){
+        p.x+=Math.sin(t/2600+p.ph)*0.12*k+p.vx*k;
+        p.y+=Math.cos(t/3100+p.ph*1.7)*0.1*k+p.vy*k;
+        p.tw=0.45+0.55*Math.abs(Math.sin(t/900+p.ph));
+      } else {
+        p.x+=p.vx*k+Math.sin(t/1800+p.ph)*0.16*k;
+        p.y+=p.vy*k;
+        p.tw=0.7+0.3*Math.sin(t/1400+p.ph);
+      }
+      if(p.x<-20) p.x=W+20; if(p.x>W+20) p.x=-20;
+      if(p.y<-30){ p.y=H+20; p.x=rand(0,W); }
+      if(p.y>H+30){ p.y=-20; p.x=rand(0,W); }
+    }
+    paint();
+    raf=requestAnimationFrame(step);
+  }
+  function stop(){ running=false; if(raf) cancelAnimationFrame(raf); raf=0; }
+  function start(){ stop(); running=true; last=0; raf=requestAnimationFrame(step); }
+  function setTheme(name){
+    stop();
+    preset=PRESETS[name]||null;
+    resize();
+    ctx.clearRect(0,0,W,H);
+    if(!preset){ canvas.style.display='none'; return; }
+    canvas.style.display='block';
+    seed();
+    if(reduced){ paint(); } else { start(); }
+  }
+  window.ozScene={ setTheme:setTheme };
+  var initial=(document.documentElement.getAttribute('data-theme')||'classic');
+  if(PRESETS[initial]) setTheme(initial);
+  window.addEventListener('resize',function(){
+    if(!preset) return;
+    resize(); seed();
+    if(reduced) paint();
+  });
+  document.addEventListener('visibilitychange',function(){
+    if(!preset) return;
+    if(document.hidden){ stop(); }
+    else if(!reduced){ start(); }
+  });
+})();
+
+// ---- 界面主题（不新增任何按钮，默认翡翠城；可用 localStorage 覆盖） ----
 const SOUT_THEMES = ['classic', 'emerald', 'brickroad', 'forest'];
 function applyTheme(name, persist){
   if(SOUT_THEMES.indexOf(name) < 0) name = 'classic';
   if(name === 'classic'){ document.documentElement.removeAttribute('data-theme'); }
   else { document.documentElement.setAttribute('data-theme', name); }
-  document.querySelectorAll('.theme-item').forEach(function(el){
-    el.classList.toggle('active', el.getAttribute('data-theme') === name);
-  });
   if(persist !== false){ try{ localStorage.setItem('sout.theme', name); }catch(e){} }
+  if(window.ozScene) window.ozScene.setTheme(name);
 }
-function closeThemeMenu(){
-  const m = $('#themeMenu'); if(m) m.classList.remove('open');
-  const b = $('#themeBtn'); if(b) b.setAttribute('aria-expanded', 'false');
-}
-$('#themeBtn').onclick = function(e){
-  e.stopPropagation();
-  const open = $('#themeMenu').classList.toggle('open');
-  this.setAttribute('aria-expanded', open ? 'true' : 'false');
-};
-$('#themeMenu').addEventListener('click', function(e){
-  const item = e.target.closest('.theme-item');
-  if(!item) return;
-  applyTheme(item.getAttribute('data-theme'));
-  const label = item.querySelector('b');
-  toast('已切换主题：' + (label ? label.textContent : ''));
-  closeThemeMenu();
-});
-document.addEventListener('click', function(e){
-  if(!e.target.closest('.theme-picker')) closeThemeMenu();
-});
-document.addEventListener('keydown', function(e){ if(e.key === 'Escape') closeThemeMenu(); });
-applyTheme(document.documentElement.getAttribute('data-theme') || 'classic', false);
+applyTheme(document.documentElement.getAttribute('data-theme') || 'emerald', false);
 
 poll();
 setInterval(poll, 3000);
