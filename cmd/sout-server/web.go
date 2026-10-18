@@ -29,63 +29,178 @@ const indexHTMLTemplate = `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>sout - 节点与分流管理</title>
+<script>try{var t=localStorage.getItem('sout.theme');if(t&&t!=='classic'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}</script>
 <style>
 :root{
   color-scheme: dark;
   --bg:#0e1117; --panel:#161b22; --card:#1b212b; --line:#2d333b; --text:#e6edf3;
   --dim:#8b949e; --accent:#58a6ff; --accent-hover:#79b8ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+  --on-accent:#0d1117; --on-ok:#ffffff; --badge-bg:#238636; --badge-fg:#ffffff;
+  --btn-bg:#21262d; --surface-2:#161b22; --input-bg:#0d1117; --code-bg:#0e1117;
+  --track:#30363d; --line-soft:#21262d; --toast-bg:#1f242c; --overlay:rgba(1,4,9,.75);
+  --ok-solid:#238636; --ok-solid-hover:#2ea043;
+  --accent-soft:rgba(88,166,255,.15); --accent-softer:rgba(88,166,255,.08);
+  --accent-line:rgba(88,166,255,.3); --accent-glow:rgba(88,166,255,.25);
+  --ok-soft:rgba(63,185,80,.15); --ok-line:rgba(63,185,80,.3);
+  --warn-soft:rgba(210,153,34,.15); --warn-line:rgba(210,153,34,.3);
+  --bad-soft:rgba(248,81,73,.1); --bad-line:rgba(248,81,73,.35);
+  --hover:rgba(255,255,255,.02);
+  --danger:var(--bad);
+  --pattern-image:none; --pattern-size:auto; --pattern-position:0 0; --pattern-opacity:0;
+  --glow-image:none; --glow-opacity:0; --glow-duration:26s;
+  --bg-image:none; --header-accent:transparent; --font-display:inherit;
+  --card-shadow:0 1px 3px rgba(0,0,0,.2);
+}
+
+/* ── 主题：绿野仙踪 · 翡翠城 ── */
+html[data-theme="emerald"]{
+  color-scheme: dark;
+  --bg:#07130f; --panel:#0c1f18; --card:#10271e; --line:#1e3b2c; --text:#e9f6ef;
+  --dim:#83ab99; --accent:#3ddc97; --accent-hover:#74f1bd; --ok:#8ee6a6; --warn:#e3b341; --bad:#ff7b72;
+  --on-accent:#04130d; --on-ok:#04130d; --badge-bg:#2fbf82; --badge-fg:#04130d;
+  --btn-bg:#123126; --surface-2:#0e241b; --input-bg:#06120d; --code-bg:#05100b;
+  --track:#224535; --line-soft:#143327; --toast-bg:#123026; --overlay:rgba(2,10,7,.78);
+  --ok-solid:#2fbf82; --ok-solid-hover:#3ddc97;
+  --accent-soft:rgba(61,220,151,.14); --accent-softer:rgba(61,220,151,.07);
+  --accent-line:rgba(61,220,151,.34); --accent-glow:rgba(61,220,151,.26);
+  --ok-soft:rgba(142,230,166,.12); --ok-line:rgba(142,230,166,.3);
+  --warn-soft:rgba(227,179,65,.14); --warn-line:rgba(227,179,65,.32);
+  --bad-soft:rgba(255,123,114,.1); --bad-line:rgba(255,123,114,.35);
+  --hover:rgba(255,255,255,.03);
+  --pattern-image:linear-gradient(45deg, rgba(61,220,151,.055) 25%, transparent 25%, transparent 75%, rgba(61,220,151,.055) 75%),linear-gradient(45deg, rgba(61,220,151,.055) 25%, transparent 25%, transparent 75%, rgba(61,220,151,.055) 75%),linear-gradient(rgba(227,179,65,.04) 1px, transparent 1px);
+  --pattern-size:44px 44px,44px 44px,44px 44px;
+  --pattern-position:0 0,22px 22px,0 0;
+  --pattern-opacity:.7;
+  --glow-image:radial-gradient(620px 420px at 32% 26%, rgba(61,220,151,.18), transparent 68%),radial-gradient(520px 380px at 76% 72%, rgba(227,179,65,.11), transparent 70%);
+  --glow-opacity:.85;
+  --glow-duration:24s;
+  --bg-image:radial-gradient(1100px 560px at 50% -12%, rgba(61,220,151,.10), transparent 62%),radial-gradient(700px 400px at 92% 8%, rgba(227,179,65,.06), transparent 65%);
+  --header-accent:linear-gradient(90deg,rgba(61,220,151,0),rgba(61,220,151,.55),rgba(227,179,65,.45),rgba(61,220,151,0));
+  --card-shadow:0 1px 3px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.02);
+}
+
+/* ── 主题：绿野仙踪 · 黄砖路 ── */
+html[data-theme="brickroad"]{
+  color-scheme: dark;
+  --bg:#14100a; --panel:#1d1710; --card:#251d13; --line:#3a2e1f; --text:#f6ecd9;
+  --dim:#b29a7b; --accent:#f0b429; --accent-hover:#ffd166; --ok:#a8c97f; --warn:#e6a23c; --bad:#e06c75;
+  --on-accent:#1a1206; --on-ok:#161006; --badge-bg:#c9a227; --badge-fg:#1a1206;
+  --btn-bg:#2a2115; --surface-2:#211a11; --input-bg:#120e08; --code-bg:#100c07;
+  --track:#42341f; --line-soft:#2a2115; --toast-bg:#2b2214; --overlay:rgba(12,8,3,.78);
+  --ok-solid:#7e9a4e; --ok-solid-hover:#94b25c;
+  --accent-soft:rgba(240,180,41,.14); --accent-softer:rgba(240,180,41,.07);
+  --accent-line:rgba(240,180,41,.34); --accent-glow:rgba(240,180,41,.26);
+  --ok-soft:rgba(168,201,127,.12); --ok-line:rgba(168,201,127,.3);
+  --warn-soft:rgba(230,162,60,.14); --warn-line:rgba(230,162,60,.32);
+  --bad-soft:rgba(224,108,117,.1); --bad-line:rgba(224,108,117,.35);
+  --hover:rgba(255,255,255,.03);
+  --pattern-image:linear-gradient(rgba(240,180,41,.055) 1px, transparent 1px),linear-gradient(90deg, rgba(240,180,41,.055) 1px, transparent 1px),linear-gradient(rgba(240,180,41,.032) 1px, transparent 1px),linear-gradient(90deg, rgba(240,180,41,.032) 1px, transparent 1px);
+  --pattern-size:64px 28px,64px 28px,64px 28px,64px 28px;
+  --pattern-position:0 0,0 0,32px 14px,32px 14px;
+  --pattern-opacity:.72;
+  --glow-image:radial-gradient(720px 420px at 40% 18%, rgba(240,180,41,.17), transparent 70%),radial-gradient(520px 400px at 82% 78%, rgba(201,79,95,.11), transparent 70%);
+  --glow-opacity:.85;
+  --glow-duration:28s;
+  --bg-image:radial-gradient(1000px 520px at 50% -10%, rgba(240,180,41,.10), transparent 60%),radial-gradient(700px 400px at 8% 4%, rgba(201,79,95,.07), transparent 62%);
+  --header-accent:linear-gradient(90deg,rgba(240,180,41,0),rgba(240,180,41,.6),rgba(201,79,95,.45),rgba(240,180,41,0));
+  --font-display:Georgia,"Songti SC","Times New Roman",serif;
+  --card-shadow:0 1px 3px rgba(0,0,0,.4);
+}
+
+/* ── 主题：绿野仙踪 · 魔法森林 ── */
+html[data-theme="forest"]{
+  color-scheme: dark;
+  --bg:#0a0f14; --panel:#0f1a19; --card:#13221f; --line:#203c36; --text:#e7f4ef;
+  --dim:#82a89c; --accent:#5eead4; --accent-hover:#9bf7e6; --ok:#8ee6a6; --warn:#f2c14e; --bad:#ff8f9a;
+  --on-accent:#04120f; --on-ok:#05130e; --badge-bg:#2f9e7f; --badge-fg:#eafff8;
+  --btn-bg:#122622; --surface-2:#0e1f1c; --input-bg:#081412; --code-bg:#071210;
+  --track:#1e3f39; --line-soft:#122a26; --toast-bg:#102a25; --overlay:rgba(2,8,8,.8);
+  --ok-solid:#2f9e7f; --ok-solid-hover:#3bb896;
+  --accent-soft:rgba(94,234,212,.12); --accent-softer:rgba(94,234,212,.06);
+  --accent-line:rgba(94,234,212,.32); --accent-glow:rgba(94,234,212,.24);
+  --ok-soft:rgba(142,230,166,.12); --ok-line:rgba(142,230,166,.3);
+  --warn-soft:rgba(242,193,78,.14); --warn-line:rgba(242,193,78,.32);
+  --bad-soft:rgba(255,143,154,.1); --bad-line:rgba(255,143,154,.35);
+  --hover:rgba(255,255,255,.035);
+  --pattern-image:radial-gradient(circle at 18% 22%, rgba(94,234,212,.14) 0 1.2px, transparent 2px),radial-gradient(circle at 72% 64%, rgba(196,167,245,.12) 0 1px, transparent 1.8px),radial-gradient(circle at 41% 82%, rgba(240,166,202,.1) 0 1px, transparent 1.6px),repeating-linear-gradient(115deg, rgba(94,234,212,.025) 0 1px, transparent 1px 30px);
+  --pattern-size:200px 200px,260px 260px,230px 230px,auto;
+  --pattern-position:0 0,37px 53px,91px 17px,0 0;
+  --pattern-opacity:.8;
+  --glow-image:radial-gradient(560px 400px at 24% 30%, rgba(94,234,212,.18), transparent 70%),radial-gradient(520px 380px at 78% 26%, rgba(196,167,245,.15), transparent 72%),radial-gradient(420px 320px at 56% 86%, rgba(240,166,202,.08), transparent 72%);
+  --glow-opacity:.9;
+  --glow-duration:30s;
+  --bg-image:radial-gradient(900px 520px at 10% -10%, rgba(94,234,212,.13), transparent 60%),radial-gradient(760px 460px at 92% 2%, rgba(196,167,245,.11), transparent 62%),radial-gradient(600px 400px at 50% 110%, rgba(240,166,202,.05), transparent 65%);
+  --header-accent:linear-gradient(90deg,rgba(94,234,212,0),rgba(94,234,212,.55),rgba(196,167,245,.5),rgba(94,234,212,0));
+  --card-shadow:0 1px 3px rgba(0,0,0,.4), 0 0 24px rgba(94,234,212,.03);
 }
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);
+html{background-color:var(--bg);background-image:var(--bg-image);background-attachment:fixed}
+body{margin:0;background:transparent;color:var(--text);
   font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif,ui-monospace}
-header{display:flex;align-items:center;gap:16px;padding:12px 20px;
+/* 主题背景：静态花纹 + 缓慢漂移的光晕 */
+html::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background-image:var(--pattern-image);background-size:var(--pattern-size);background-position:var(--pattern-position);
+  opacity:var(--pattern-opacity)}
+html::after{content:"";position:fixed;inset:-12%;z-index:-1;pointer-events:none;
+  background-image:var(--glow-image);background-repeat:no-repeat;
+  opacity:var(--glow-opacity);
+  animation:oz-drift var(--glow-duration,26s) ease-in-out infinite alternate,oz-breathe calc(var(--glow-duration,26s) / 3) ease-in-out infinite}
+@keyframes oz-drift{from{transform:translate3d(-1.6%,-1.2%,0) scale(1.03)}to{transform:translate3d(1.6%,1.4%,0) scale(1.09)}}
+@keyframes oz-breathe{0%,100%{opacity:var(--glow-opacity)}50%{opacity:calc(var(--glow-opacity) * .55)}}
+@media (prefers-reduced-motion:reduce){html::after{animation:none}}
+header{position:relative;display:flex;align-items:center;gap:16px;padding:12px 20px;
   border-bottom:1px solid var(--line);background:var(--panel)}
+header::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:1px;background:var(--header-accent);pointer-events:none}
 h1{font-size:15px;font-weight:700;margin:0;display:flex;align-items:center;gap:8px}
-.badge{background:#238636;color:#fff;font-size:11px;padding:2px 8px;border-radius:12px;font-weight:600}
+.brand{font-family:var(--font-display);letter-spacing:.2px}
+html[data-theme="emerald"] .brand{background:linear-gradient(92deg,#3ddc97,#e3b341);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent}
+html[data-theme="brickroad"] .brand{background:linear-gradient(92deg,#f0b429,#ffd166,#c94f5f);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent}
+html[data-theme="forest"] .brand{background:linear-gradient(92deg,#5eead4,#c4a7f5);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent}
+.badge{background:var(--badge-bg);color:var(--badge-fg);font-size:11px;padding:2px 8px;border-radius:12px;font-weight:600;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 .spacer{flex:1}
-button{font:inherit;color:var(--text);background:#21262d;border:1px solid var(--line);
+button{font:inherit;color:var(--text);background:var(--btn-bg);border:1px solid var(--line);
   border-radius:6px;padding:6px 12px;cursor:pointer;display:inline-flex;
   align-items:center;gap:6px;white-space:nowrap;font-weight:500;transition:all .15s}
 button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
 button:disabled{opacity:.45;cursor:default}
-button.primary{background:var(--accent);border-color:var(--accent);color:#0d1117;font-weight:600}
-button.primary:hover:not(:disabled){background:var(--accent-hover);border-color:var(--accent-hover);color:#0d1117}
-button.success{background:#238636;border-color:#238636;color:#fff;font-weight:600}
-button.success:hover:not(:disabled){background:#2ea043;border-color:#2ea043;color:#fff}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:600}
+button.primary:hover:not(:disabled){background:var(--accent-hover);border-color:var(--accent-hover);color:var(--on-accent)}
+button.success{background:var(--ok-solid);border-color:var(--ok-solid);color:var(--on-ok);font-weight:600}
+button.success:hover:not(:disabled){background:var(--ok-solid-hover);border-color:var(--ok-solid-hover);color:var(--on-ok)}
 button.icon{padding:4px 8px;background:transparent;border-color:transparent;color:var(--dim)}
 button.icon:hover:not(:disabled){color:var(--accent);border-color:var(--line);background:var(--panel)}
-button.icon.danger:hover:not(:disabled){color:var(--bad);border-color:rgba(248,81,73,.35);background:rgba(248,81,73,.1)}
-button.icon.chain-btn.active{color:var(--accent);border-color:var(--accent);background:rgba(88,166,255,.15);box-shadow:0 0 8px rgba(88,166,255,.25)}
-button.icon.chain-btn.active:hover:not(:disabled){background:rgba(88,166,255,.25);color:#fff}
-button.chip-btn{padding:3px 9px;font-size:12px;background:#21262d;border-radius:4px}
+button.icon.danger:hover:not(:disabled){color:var(--bad);border-color:var(--bad-line);background:var(--bad-soft)}
+button.icon.chain-btn.active{color:var(--accent);border-color:var(--accent);background:var(--accent-soft);box-shadow:0 0 8px var(--accent-glow)}
+button.icon.chain-btn.active:hover:not(:disabled){background:var(--accent-glow);color:#fff}
+button.chip-btn{padding:3px 9px;font-size:12px;background:var(--btn-bg);border-radius:4px}
 svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;
   stroke-linecap:round;stroke-linejoin:round;flex:none}
 main{padding:20px;max-width:1120px;margin:0 auto}
 
 .section-head{display:flex;align-items:center;gap:12px;margin:28px 0 14px}
 .section-head:first-child{margin-top:0}
-.section-head h2{font-size:14px;font-weight:700;margin:0;color:var(--text);display:flex;align-items:center;gap:8px}
+.section-head h2{font-size:14px;font-weight:700;margin:0;color:var(--text);display:flex;align-items:center;gap:8px;font-family:var(--font-display)}
 .section-head .desc{color:var(--dim);font-size:12px}
 
 /* VPN 出口隧道池 */
-.exits-box{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.2)}
-.exit-row{display:grid;grid-template-columns:14px 140px auto 1fr auto;align-items:center;gap:12px;padding:11px 16px;border-bottom:1px solid #21262d}
+.exits-box{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;box-shadow:var(--card-shadow)}
+.exit-row{display:grid;grid-template-columns:14px 140px auto 1fr auto;align-items:center;gap:12px;padding:11px 16px;border-bottom:1px solid var(--line-soft)}
 .exit-row:last-child{border-bottom:none}
 .exit-ip{font-weight:700;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text)}
 .exit-meta{color:var(--dim);font-size:12px;display:flex;align-items:center;gap:8px;min-width:0;overflow:hidden}
 .exit-place-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:320px;display:inline-block;vertical-align:middle}
 .source-tag{font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;white-space:nowrap;max-width:100px;overflow:hidden;text-overflow:ellipsis;display:inline-block;vertical-align:middle}
-.socks-tag{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#0d1117;border:1px solid var(--line);padding:1px 6px;border-radius:4px;color:var(--dim);font-size:11px}
+.socks-tag{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--input-bg);border:1px solid var(--line);padding:1px 6px;border-radius:4px;color:var(--dim);font-size:11px}
 .metric-tag{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;padding:2px 6px;border-radius:4px;font-weight:600}
-.metric-tag.speed{color:#3fb950;border:1px solid rgba(63,185,80,.3);background:rgba(63,185,80,.1)}
-.metric-tag.ping{color:#58a6ff;border:1px solid rgba(88,166,255,.3);background:rgba(88,166,255,.1)}
+.metric-tag.speed{color:var(--ok);border:1px solid var(--ok-line);background:var(--ok-soft)}
+.metric-tag.ping{color:var(--accent);border:1px solid var(--accent-line);background:var(--accent-softer)}
 
 /* s-ui 节点管理 */
-.node-card{background:var(--panel);border:1px solid var(--line);border-radius:8px;margin-bottom:16px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+.node-card{background:var(--panel);border:1px solid var(--line);border-radius:8px;margin-bottom:16px;overflow:hidden;box-shadow:var(--card-shadow)}
 .node-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--card);border-bottom:1px solid var(--line)}
 .node-title{display:flex;align-items:center;gap:10px}
 .node-title h3{font-size:14px;font-weight:700;margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-.proto-tag{font-size:11px;font-weight:700;padding:2px 7px;border-radius:4px;text-transform:uppercase;background:#30363d;color:#fff}
+.proto-tag{font-size:11px;font-weight:700;padding:2px 7px;border-radius:4px;text-transform:uppercase;background:var(--track);color:#fff}
 .proto-tag.VLESS{background:rgba(163,113,247,.2);color:#d2a8ff;border:1px solid rgba(163,113,247,.4)}
 .proto-tag.TUIC{background:rgba(240,136,62,.2);color:#ffa657;border:1px solid rgba(240,136,62,.4)}
 .proto-tag.VMESS{background:rgba(31,111,235,.2);color:#79c0ff;border:1px solid rgba(31,111,235,.4)}
@@ -93,19 +208,19 @@ main{padding:20px;max-width:1120px;margin:0 auto}
 .base-port{color:var(--dim);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 
 .branch-table{display:flex;flex-direction:column}
-.branch-row{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid #21262d}
+.branch-row{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--line-soft)}
 .branch-row:last-child{border-bottom:none}
-.branch-row:hover{background:rgba(255,255,255,.02)}
+.branch-row:hover{background:var(--hover)}
 .branch-info{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .branch-name{font-weight:600;font-size:13px;color:var(--text)}
-.branch-tag{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--dim);background:#0e1117;padding:1px 6px;border-radius:3px;border:1px solid var(--line)}
+.branch-tag{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--dim);background:var(--code-bg);padding:1px 6px;border-radius:3px;border:1px solid var(--line)}
 .branch-port{color:var(--accent);font-weight:600;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
 .branch-acts{display:flex;align-items:center;gap:8px}
 .toggle-switch{position:relative;display:inline-block;width:32px;height:18px;flex-shrink:0;vertical-align:middle}
 .toggle-switch input{opacity:0;width:0;height:0;position:absolute}
-.toggle-slider{position:absolute;cursor:pointer;inset:0;background-color:#30363d;transition:.2s;border-radius:18px;border:1px solid rgba(255,255,255,.08)}
+.toggle-slider{position:absolute;cursor:pointer;inset:0;background-color:var(--track);transition:.2s;border-radius:18px;border:1px solid var(--line)}
 .toggle-slider:before{position:absolute;content:"";height:12px;width:12px;left:2px;bottom:2px;background-color:#8b949e;transition:.2s;border-radius:50%}
-.toggle-switch input:checked + .toggle-slider{background-color:#238636;border-color:rgba(63,185,80,.4)}
+.toggle-switch input:checked + .toggle-slider{background-color:#238636;border-color:var(--ok-line)}
 .toggle-switch input:checked + .toggle-slider:before{transform:translateX(14px);background-color:#fff}
 .branch-row.disabled{opacity:.6}
 .branch-row.disabled .branch-name{color:var(--dim)}
@@ -118,7 +233,7 @@ main{padding:20px;max-width:1120px;margin:0 auto}
 
 .empty{border:1px dashed var(--line);border-radius:8px;padding:32px 20px;text-align:center;color:var(--dim)}
 
-.modal{position:fixed;inset:0;background:rgba(1,4,9,.75);display:none;align-items:center;justify-content:center;z-index:50;padding:20px;backdrop-filter:blur(2px)}
+.modal{position:fixed;inset:0;background:var(--overlay);display:none;align-items:center;justify-content:center;z-index:50;padding:20px;backdrop-filter:blur(2px)}
 .modal.open{display:flex}
 .sheet{background:var(--panel);border:1px solid var(--line);border-radius:8px;width:min(640px,100%);max-height:86vh;display:flex;flex-direction:column;box-shadow:0 8px 24px rgba(0,0,0,.5)}
 .sheet .head{display:flex;align-items:center;gap:10px;padding:12px 18px;border-bottom:1px solid var(--line);background:var(--card);border-radius:8px 8px 0 0}
@@ -128,42 +243,82 @@ main{padding:20px;max-width:1120px;margin:0 auto}
 
 label.f{display:block;margin-bottom:16px}
 label.f>span{display:block;color:var(--dim);font-size:12px;margin-bottom:6px;font-weight:500}
-select,textarea,input[type=search],input[type=text],input[type=password]{font:inherit;background:#0d1117;border:1px solid var(--line);color:var(--text);border-radius:6px;padding:7px 10px;width:100%;color-scheme:dark}
-option{background:#161b22;color:var(--text);padding:8px}
+select,textarea,input[type=search],input[type=text],input[type=password]{font:inherit;background:var(--input-bg);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:7px 10px;width:100%;color-scheme:dark}
+option{background:var(--surface-2);color:var(--text);padding:8px}
 .card-input-box:focus-within{border-color:var(--accent)!important}
-.listen-opt-item:hover{background:rgba(88,166,255,.15)!important;color:var(--accent)!important}
-.listen-opt-item.selected{background:rgba(88,166,255,.08);color:var(--accent)}
+.listen-opt-item:hover{background:var(--accent-soft)!important;color:var(--accent)!important}
+.listen-opt-item.selected{background:var(--accent-softer);color:var(--accent)}
 .regions{display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:8px;max-height:250px;overflow:auto;margin-top:8px}
-.rg{border:1px solid var(--line);background:#0d1117;border-radius:6px;padding:8px 10px;cursor:pointer;text-align:left;display:block;width:100%}
+.rg{border:1px solid var(--line);background:var(--input-bg);border-radius:6px;padding:8px 10px;cursor:pointer;text-align:left;display:block;width:100%}
 .rg:hover{border-color:var(--accent)}
-.rg.sel{border-color:var(--accent);background:rgba(88,166,255,.12)}
+.rg.sel{border-color:var(--accent);background:var(--accent-soft)}
 .rg b{font-weight:600;font-size:11.5px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rg em{display:block;font-style:normal;color:var(--dim);font-size:11px;margin-top:2px}
 
-.stepper{display:flex;align-items:center;width:fit-content;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:#0d1117}
+.stepper{display:flex;align-items:center;width:fit-content;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--input-bg)}
 .stepper button{border:0;border-radius:0;background:transparent;padding:7px 15px;cursor:pointer;color:var(--text);font-size:15px;font-weight:700}
 .stepper button:hover{background:rgba(255,255,255,.06)}
 .stepper input{width:60px;text-align:center;font:inherit;background:transparent;border:0;border-left:1px solid var(--line);border-right:1px solid var(--line);color:var(--text);padding:7px 0;font-variant-numeric:tabular-nums;border-radius:0}
 
-.toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#1f242c;border:1px solid var(--line);border-radius:6px;padding:9px 16px;font-size:13px;z-index:80;opacity:0;pointer-events:none;transition:opacity .18s;box-shadow:0 4px 12px rgba(0,0,0,.4)}
+.toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:var(--toast-bg);border:1px solid var(--line);border-radius:6px;padding:9px 16px;font-size:13px;z-index:80;opacity:0;pointer-events:none;transition:opacity .18s;box-shadow:0 4px 12px rgba(0,0,0,.4)}
 .toast.show{opacity:1}
 .toast.bad{border-color:rgba(248,81,73,.5);color:var(--bad)}
-.tab-pill{background:#161b22;border:1px solid var(--line);color:var(--dim);font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;cursor:pointer;transition:all .15s}
+.tab-pill{background:var(--surface-2);border:1px solid var(--line);color:var(--dim);font-size:12px;font-weight:600;padding:5px 12px;border-radius:6px;cursor:pointer;transition:all .15s}
 .tab-pill:hover{border-color:var(--accent);color:var(--text)}
-.tab-pill.active{background:rgba(88,166,255,.15);border-color:var(--accent);color:var(--accent)}
+.tab-pill.active{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
 .pool-tag{font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;display:inline-flex;align-items:center;gap:3px}
-.pool-tag.residential{background:rgba(63,185,80,.15);color:#3fb950;border:1px solid rgba(63,185,80,.3)}
-.pool-tag.datacenter{background:rgba(88,166,255,.15);color:#58a6ff;border:1px solid rgba(88,166,255,.3)}
+.pool-tag.residential{background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-line)}
+.pool-tag.datacenter{background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent-line)}
+
+/* 界面主题切换器 */
+.theme-picker{position:relative}
+.theme-menu{position:absolute;right:0;top:calc(100% + 10px);width:272px;padding:8px;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 18px 44px rgba(0,0,0,.5);display:none;z-index:70}
+.theme-menu.open{display:block}
+.theme-menu-title{padding:6px 8px 8px;font-size:11px;letter-spacing:.04em;color:var(--dim);font-weight:600}
+.theme-item{display:flex;align-items:center;gap:10px;width:100%;padding:8px;border:1px solid transparent;background:transparent;border-radius:8px;text-align:left;white-space:normal;line-height:1.35}
+.theme-item:hover:not(:disabled){border-color:var(--line);background:var(--hover);color:var(--text)}
+.theme-item.active{border-color:var(--accent);background:var(--accent-softer)}
+.theme-swatches{display:flex;gap:3px;flex:none}
+.theme-swatches i{display:block;width:11px;height:24px;border-radius:3px;border:1px solid rgba(0,0,0,.25)}
+.theme-meta{display:flex;flex-direction:column;gap:1px;min-width:0}
+.theme-meta b{font-size:12.5px;font-weight:600;color:var(--text)}
+.theme-meta em{font-style:normal;font-size:11px;color:var(--dim)}
+@media (max-width:640px){.theme-menu{width:250px}}
 </style>
 </head>
 <body>
 <header>
   <h1>
     <svg viewBox="0 0 24 24" style="color:var(--accent)"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-    sout
+    <span class="brand">sout</span>
     <span class="badge" id="backendBadge">已连接</span>
   </h1>
   <span class="spacer"></span>
+  <div class="theme-picker">
+    <button id="themeBtn" title="切换界面主题" aria-haspopup="true" aria-expanded="false" style="gap:6px">
+      <svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 2a10 10 0 1 0 0 20c1.1 0 2-.9 2-2 0-.5-.2-1-.5-1.4-.3-.4-.5-.9-.5-1.5 0-1.1.9-2 2-2H17a4 4 0 0 0 4-4c0-5-4.5-9-9-9z"/><circle cx="7.5" cy="10.5" r="1" fill="currentColor" stroke="none"/><circle cx="9.5" cy="6.5" r="1" fill="currentColor" stroke="none"/><circle cx="14" cy="6.5" r="1" fill="currentColor" stroke="none"/><circle cx="17" cy="10" r="1" fill="currentColor" stroke="none"/></svg>
+      主题
+    </button>
+    <div class="theme-menu" id="themeMenu" role="menu">
+      <div class="theme-menu-title">绿野仙踪 · 界面主题</div>
+      <button class="theme-item" role="menuitem" data-theme="classic">
+        <span class="theme-swatches"><i style="background:#0e1117;border-color:#2d333b"></i><i style="background:#58a6ff"></i><i style="background:#3fb950"></i></span>
+        <span class="theme-meta"><b>经典暗夜</b><em>默认 · GitHub 深色</em></span>
+      </button>
+      <button class="theme-item" role="menuitem" data-theme="emerald">
+        <span class="theme-swatches"><i style="background:#07130f"></i><i style="background:#3ddc97"></i><i style="background:#e3b341"></i></span>
+        <span class="theme-meta"><b>翡翠城</b><em>祖母绿 · 清澈沉稳</em></span>
+      </button>
+      <button class="theme-item" role="menuitem" data-theme="brickroad">
+        <span class="theme-swatches"><i style="background:#14100a"></i><i style="background:#f0b429"></i><i style="background:#c94f5f"></i></span>
+        <span class="theme-meta"><b>黄砖路</b><em>暖金 · 复古童话</em></span>
+      </button>
+      <button class="theme-item" role="menuitem" data-theme="forest">
+        <span class="theme-swatches"><i style="background:#0a0f14"></i><i style="background:#5eead4"></i><i style="background:#c4a7f5"></i></span>
+        <span class="theme-meta"><b>魔法森林</b><em>月光青绿 · 仙子紫</em></span>
+      </button>
+    </div>
+  </div>
   <button id="settingsBtn" style="gap:6px">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
     设置
@@ -193,7 +348,7 @@ option{background:#161b22;color:var(--text);padding:8px}
     </h2>
     <span class="desc">在此拉取并运行各公共家宽与自定义出口隧道</span>
     <span class="spacer"></span>
-    <button class="primary" id="openNewExitModalBtn" style="box-shadow:0 2px 6px rgba(88,166,255,.3)">
+    <button class="primary" id="openNewExitModalBtn" style="box-shadow:0 2px 6px var(--accent-glow)">
       <svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
       新建国家/地区出口
     </button>
@@ -326,7 +481,7 @@ option{background:#161b22;color:var(--text);padding:8px}
           <span style="font-size:12px;color:var(--dim);font-weight:500">连接</span>
         </div>
 
-        <div class="card-input-box" style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px 12px;transition:border-color .15s">
+        <div class="card-input-box" style="background:var(--input-bg);border:1px solid var(--line);border-radius:6px;padding:8px 12px;transition:border-color .15s">
           <textarea id="nodeClientAddrsText" rows="4" spellcheck="false"
             placeholder="66.66.55.44:443&#10;example.com:443#HK1-线路 246 Mbps&#10;88.88.77.66:443&#10;99.99.88.77"
             style="width:100%;border:none;background:transparent;color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.6;resize:vertical;min-height:90px;padding:0;outline:none"></textarea>
@@ -337,7 +492,7 @@ option{background:#161b22;color:var(--text);padding:8px}
         </div>
 
         <!-- 客户端 TLS 开关与 SNI -->
-        <div style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:9px 12px;margin-top:10px">
+        <div style="background:var(--input-bg);border:1px solid var(--line);border-radius:6px;padding:9px 12px;margin-top:10px">
           <div style="display:flex;align-items:center;justify-content:space-between">
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0;user-select:none" id="clientTlsLabel">
               <input type="checkbox" id="clientTlsToggle" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;margin:0">
@@ -346,7 +501,7 @@ option{background:#161b22;color:var(--text);padding:8px}
             <span id="clientTlsBadge" style="font-size:11px;color:var(--dim)">TLS</span>
           </div>
 
-          <div id="clientTlsServerHint" style="display:none;margin-top:6px;font-size:11px;color:#3fb950;line-height:1.4">
+          <div id="clientTlsServerHint" style="display:none;margin-top:6px;font-size:11px;color:var(--ok);line-height:1.4">
             🔒 服务端已配置 TLS 证书模板，客户端自动继承加密连接（无需手动设置）
           </div>
 
@@ -377,7 +532,7 @@ option{background:#161b22;color:var(--text);padding:8px}
           <span style="font-size:12px;color:var(--dim);font-weight:500">监听</span>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-          <div class="card-input-box" id="nodeListenAddrBox" style="position:relative;background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px 12px;cursor:pointer;user-select:none;transition:border-color .15s">
+          <div class="card-input-box" id="nodeListenAddrBox" style="position:relative;background:var(--input-bg);border:1px solid var(--line);border-radius:6px;padding:8px 12px;cursor:pointer;user-select:none;transition:border-color .15s">
             <span style="display:block;color:var(--dim);font-size:11px;margin-bottom:4px">地址</span>
             <div style="display:flex;align-items:center;justify-content:space-between">
               <span id="nodeListenAddrDisplay" style="font-weight:600;font-size:13px;color:var(--text)">::</span>
@@ -385,7 +540,7 @@ option{background:#161b22;color:var(--text);padding:8px}
             </div>
             <input type="hidden" id="nodeListenAddr" value="::">
             
-            <div id="nodeListenAddrMenu" style="display:none;position:absolute;left:-1px;right:-1px;top:calc(100% + 4px);background:#161b22;border:1px solid var(--line);border-radius:6px;box-shadow:0 12px 28px rgba(0,0,0,.85);z-index:999;overflow:hidden">
+            <div id="nodeListenAddrMenu" style="display:none;position:absolute;left:-1px;right:-1px;top:calc(100% + 4px);background:var(--surface-2);border:1px solid var(--line);border-radius:6px;box-shadow:0 12px 28px rgba(0,0,0,.85);z-index:999;overflow:hidden">
               <div class="listen-opt-item" data-val="::" style="padding:9px 12px;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;color:var(--text);transition:background .15s">
                 <span style="font-weight:600">::</span>
                 <span style="color:var(--dim);font-size:11px">（ipv4/6外网通信）</span>
@@ -396,7 +551,7 @@ option{background:#161b22;color:var(--text);padding:8px}
               </div>
             </div>
           </div>
-          <div class="card-input-box" style="background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px 12px;transition:border-color .15s">
+          <div class="card-input-box" style="background:var(--input-bg);border:1px solid var(--line);border-radius:6px;padding:8px 12px;transition:border-color .15s">
             <span style="display:block;color:var(--dim);font-size:11px;margin-bottom:4px">端口</span>
             <input type="text" id="nodeListenPort" inputmode="numeric" style="border:none;background:transparent;padding:0;font-weight:600;font-size:13px;width:100%" placeholder="26060">
           </div>
@@ -423,7 +578,7 @@ option{background:#161b22;color:var(--text);padding:8px}
       <div style="color:var(--dim);font-size:12px;margin-bottom:12px;line-height:1.5">
         ℹ️ 此端口是 sout 在 VPS 本地（127.0.0.1）监听的内部 SOCKS5 桥接隧道，供 s-ui / sing-box 入站节点做分流路由对接。流量在 VPS 出口处将以对应的真实协议（WireGuard、HTTPS、HTTP 或 OpenVPN）发送到远端。
       </div>
-      <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#0d1117;padding:10px;border-radius:6px;border:1px solid var(--line);word-break:break-all;margin-bottom:12px" id="credURL"></div>
+      <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--input-bg);padding:10px;border-radius:6px;border:1px solid var(--line);word-break:break-all;margin-bottom:12px" id="credURL"></div>
       <label class="f"><span>用户名</span><input id="crUser" type="text" placeholder="输入用户名"></label>
       <label class="f"><span>密码</span><input id="crPass" type="text" placeholder="输入密码"></label>
       <label class="f"><span>内部桥接端口</span><input id="crPort" type="text" inputmode="numeric" placeholder="如 43440"></label>
@@ -458,7 +613,7 @@ option{background:#161b22;color:var(--text);padding:8px}
     <div class="body" style="padding:22px 20px;text-align:center">
       <!-- 左边：二维码视图 -->
       <div id="subQrSection" style="display:flex;flex-direction:column;align-items:center">
-        <div style="display:inline-block;background:#30363d;color:#c9d1d9;font-size:11px;padding:3px 12px;border-radius:12px;margin-bottom:16px;font-weight:500">订阅</div>
+        <div style="display:inline-block;background:var(--track);color:var(--text);font-size:11px;padding:3px 12px;border-radius:12px;margin-bottom:16px;font-weight:500">订阅</div>
         <div style="background:#fff;padding:14px;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.4);display:inline-flex;align-items:center;justify-content:center">
           <div id="subQrBox" style="width:200px;height:200px;display:flex;align-items:center;justify-content:center"></div>
         </div>
@@ -536,7 +691,7 @@ option{background:#161b22;color:var(--text);padding:8px}
           </div>
           <button type="button" id="checkUpdateBtn" style="font-size:12px;padding:5px 10px">检查更新</button>
         </div>
-        <div id="updateInfoBox" style="display:none;background:#12151a;border:1px solid var(--line);border-radius:4px;padding:10px;margin-top:8px;font-size:12px"></div>
+        <div id="updateInfoBox" style="display:none;background:var(--surface-2);border:1px solid var(--line);border-radius:4px;padding:10px;margin-top:8px;font-size:12px"></div>
       </div>
     </div>
     <div class="foot">
@@ -567,7 +722,7 @@ option{background:#161b22;color:var(--text);padding:8px}
       <!-- 2. 当前已配置状态卡片 -->
       <div id="tnStatusCard" style="display:none">
         <!-- 概览卡片 -->
-        <div style="background:#12151a;border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px">
+        <div style="background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
             <div style="display:flex;align-items:center;gap:8px">
               <svg viewBox="0 0 24 24" style="color:#f6821f;fill:#f6821f" width="18" height="18">
@@ -587,7 +742,7 @@ option{background:#161b22;color:var(--text);padding:8px}
         </div>
 
         <!-- 路由映射 -->
-        <div style="background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12px">
+        <div style="background:var(--input-bg);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12px">
           <div style="font-weight:600;margin-bottom:8px;color:var(--text);display:flex;align-items:center;justify-content:space-between">
             <span>内置轻量反代网关路由映射</span>
             <span id="tnBackPortHint" style="font-size:11px;color:var(--dim)">回源 127.0.0.1:8081</span>
@@ -631,7 +786,7 @@ option{background:#161b22;color:var(--text);padding:8px}
         </div>
 
         <!-- 参数详情 -->
-        <div style="background:#161b22;border:1px solid var(--line);border-radius:6px;padding:10px 12px;font-size:11px;color:var(--dim);line-height:1.6;margin-bottom:14px">
+        <div style="background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:10px 12px;font-size:11px;color:var(--dim);line-height:1.6;margin-bottom:14px">
           <div>• <b>隧道 Token:</b> <code id="tnTokenMasked" style="color:var(--text)">已配置</code></div>
           <div>• <b>本地回源端口:</b> <code id="tnTunnelPort" style="color:var(--text)">127.0.0.1:8081</code></div>
           <div>• <b>传输协议:</b> <code id="tnProtocolBadge" style="color:var(--text)">QUIC</code></div>
@@ -641,13 +796,13 @@ option{background:#161b22;color:var(--text);padding:8px}
         <div style="display:flex;gap:8px;justify-content:flex-end">
           <button id="tnRestartBtn" style="display:inline-flex;align-items:center;gap:4px">🔄 重启隧道</button>
           <button id="tnSwitchToConfigBtn" class="primary" style="display:inline-flex;align-items:center;gap:4px">⚙ 更换/配置隧道</button>
-          <button id="tnDeleteBtn" style="color:#f85149;display:inline-flex;align-items:center;gap:4px">🗑 关闭隧道</button>
+          <button id="tnDeleteBtn" style="color:var(--bad);display:inline-flex;align-items:center;gap:4px">🗑 关闭隧道</button>
         </div>
       </div>
 
       <!-- 3. 配置 / 更换隧道表单卡片 -->
       <div id="tnConfigCard" style="display:none">
-        <div style="background:#161b22;border:1px solid var(--line);border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:11.5px;color:var(--dim);line-height:1.5">
+        <div style="background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:11.5px;color:var(--dim);line-height:1.5">
           💡 <span style="color:var(--text)">填写域名与 Token 绑定命名隧道，留空直接保存将启用免费临时隧道；可随时修改端口或切换连接协议。</span>
         </div>
 
@@ -666,7 +821,7 @@ option{background:#161b22;color:var(--text);padding:8px}
           </div>
           <div>
             <label style="display:block;font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text)">隧道连接协议 (Protocol)</label>
-            <select id="tnInputProtocol" style="width:100%;box-sizing:border-box;background:#0d1117;color:var(--text);border:1px solid var(--line);padding:8px 10px;border-radius:6px;font-size:12px">
+            <select id="tnInputProtocol" style="width:100%;box-sizing:border-box;background:var(--input-bg);color:var(--text);border:1px solid var(--line);padding:8px 10px;border-radius:6px;font-size:12px">
               <option value="quic">QUIC (默认推荐，基于 UDP 传输，延迟更低、速度更快)</option>
               <option value="http2">HTTP/2 (兼容模式，基于 TCP 传输，适合阻断 UDP/QUIC 的网络)</option>
             </select>
@@ -699,11 +854,11 @@ option{background:#161b22;color:var(--text);padding:8px}
     <div class="body">
       <label class="f" style="margin-bottom:12px">
         <span style="font-weight:600;margin-bottom:6px">直接粘贴 sing-box 支持的协议节点配置</span>
-        <textarea id="csNodeText" rows="6" spellcheck="false" placeholder="直接粘贴 sing-box 支持的各类节点协议链接或 Outbound 配置 JSON：&#10;• 协议链接：tuic://..., hysteria2://... (hy2), vless://..., vmess://..., trojan://..., ss://..., wireguard://..., socks5://...&#10;• sing-box Outbound JSON：&#10;  {&quot;type&quot;: &quot;tuic&quot;, &quot;server&quot;: &quot;1.2.3.4&quot;, &quot;server_port&quot;: 443, ...}&#10;  {&quot;type&quot;: &quot;vless&quot;, &quot;server&quot;: &quot;1.2.3.4&quot;, &quot;server_port&quot;: 443, ...}&#10;  {&quot;type&quot;: &quot;hysteria2&quot;, &quot;server&quot;: &quot;1.2.3.4&quot;, &quot;server_port&quot;: 443, ...}&#10;  {&quot;type&quot;: &quot;wireguard&quot;, &quot;server&quot;: &quot;...&quot;, &quot;server_port&quot;: 2408, ...}" style="width:100%;border:1px solid var(--line);background:#0d1117;color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5;padding:10px;border-radius:6px;resize:vertical;min-height:130px"></textarea>
+        <textarea id="csNodeText" rows="6" spellcheck="false" placeholder="直接粘贴 sing-box 支持的各类节点协议链接或 Outbound 配置 JSON：&#10;• 协议链接：tuic://..., hysteria2://... (hy2), vless://..., vmess://..., trojan://..., ss://..., wireguard://..., socks5://...&#10;• sing-box Outbound JSON：&#10;  {&quot;type&quot;: &quot;tuic&quot;, &quot;server&quot;: &quot;1.2.3.4&quot;, &quot;server_port&quot;: 443, ...}&#10;  {&quot;type&quot;: &quot;vless&quot;, &quot;server&quot;: &quot;1.2.3.4&quot;, &quot;server_port&quot;: 443, ...}&#10;  {&quot;type&quot;: &quot;hysteria2&quot;, &quot;server&quot;: &quot;1.2.3.4&quot;, &quot;server_port&quot;: 443, ...}&#10;  {&quot;type&quot;: &quot;wireguard&quot;, &quot;server&quot;: &quot;...&quot;, &quot;server_port&quot;: 2408, ...}" style="width:100%;border:1px solid var(--line);background:var(--input-bg);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5;padding:10px;border-radius:6px;resize:vertical;min-height:130px"></textarea>
       </label>
 
       <!-- 智能解析预览条目 -->
-      <div id="csNodePreview" style="display:none;background:#161b22;border:1px solid var(--line);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:12px">
+      <div id="csNodePreview" style="display:none;background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:12px">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
           <span style="font-weight:600;color:var(--text)">识别到的节点信息</span>
           <span id="csParsedProtoBadge" class="source-tag" style="background:#1f6feb;color:#fff;font-weight:600">SOCKS5</span>
@@ -736,7 +891,7 @@ option{background:#161b22;color:var(--text);padding:8px}
       <button class="icon" data-close="customSourceModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
     <div class="body">
-      <div style="background:#181c23;border:1px solid var(--line);border-radius:6px;padding:12px;margin-bottom:16px">
+      <div style="background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:12px;margin-bottom:16px">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
           <div style="display:flex;gap:6px">
             <button type="button" class="tab-pill active" id="tabSrcUrlBtn" style="padding:4px 10px;font-size:12px">在线订阅源</button>
@@ -759,7 +914,7 @@ option{background:#161b22;color:var(--text);padding:8px}
           <div style="margin-bottom:8px">
             <input type="text" id="srcBatchName" placeholder="源名称 (如 悉尼节点导入 / WARP合集，可选)" style="width:100%">
           </div>
-          <textarea id="srcBatchContent" rows="5" spellcheck="false" placeholder="直接粘贴批量节点内容：&#10;• 多行节点链接 (每行一个 wireguard://, socks5://, https:// 等)&#10;• Clash / Mihomo 配置文件 YAML 内容&#10;• sing-box outbound JSON 片段或配置&#10;• Base64 编码的订阅文本" style="width:100%;border:1px solid var(--line);background:#0d1117;color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;padding:8px;border-radius:6px;resize:vertical"></textarea>
+          <textarea id="srcBatchContent" rows="5" spellcheck="false" placeholder="直接粘贴批量节点内容：&#10;• 多行节点链接 (每行一个 wireguard://, socks5://, https:// 等)&#10;• Clash / Mihomo 配置文件 YAML 内容&#10;• sing-box outbound JSON 片段或配置&#10;• Base64 编码的订阅文本" style="width:100%;border:1px solid var(--line);background:var(--input-bg);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;padding:8px;border-radius:6px;resize:vertical"></textarea>
           <div style="display:flex;justify-content:flex-end;margin-top:8px">
             <button class="primary" id="addBatchSourceBtn">批量解析并导入为源</button>
           </div>
@@ -805,7 +960,7 @@ option{background:#161b22;color:var(--text);padding:8px}
           </button>
         </div>
       </div>
-      <pre id="logContentBox" style="background:#0a0c10;border:1px solid var(--line);border-radius:6px;padding:12px;color:#c9d1d9;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:1.45;height:420px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;margin:0">正在加载日志...</pre>
+      <pre id="logContentBox" style="background:var(--code-bg);border:1px solid var(--line);border-radius:6px;padding:12px;color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:1.45;height:420px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;margin:0">正在加载日志...</pre>
     </div>
     <div class="foot">
       <span style="font-size:12px;color:var(--dim)" id="logStatusText">显示最近 200 行日志</span>
@@ -896,7 +1051,7 @@ function renderExits(){
     const srcName = e.source_name || (e.kind === 'custom' ? '自定义' : 'VPN Gate');
     const kindBadge = e.kind === 'custom'
       ? '<span class="source-tag" style="background:#1f6feb;color:#fff" title="' + esc(srcName) + '">' + esc(srcName) + '</span>'
-      : '<span class="source-tag" style="background:#238636;color:#fff">VPN Gate</span>';
+      : '<span class="source-tag" style="background:var(--ok-solid);color:#fff">VPN Gate</span>';
 
     // 真实远端出站协议徽标
     let protoBadge = '';
@@ -977,7 +1132,7 @@ function renderNodes(){
       +     '<span class="base-port">默认端口 :' + n.port + '</span>'
       +   '</div>'
       +   '<div style="display:flex;gap:8px;align-items:center">'
-      +     '<button class="primary" data-add-node="' + n.base_id + '" data-node-name="' + esc(n.name) + '" style="box-shadow:0 2px 6px rgba(88,166,255,.3)">'
+      +     '<button class="primary" data-add-node="' + n.base_id + '" data-node-name="' + esc(n.name) + '" style="box-shadow:0 2px 6px var(--accent-glow)">'
       +       ICON.plus + ' 添加出口分流'
       +     '</button>'
       +     '<button data-edit-node="' + n.base_id + '" data-node-name="' + esc(n.name) + '" title="修改节点配置">'
@@ -1117,7 +1272,7 @@ document.addEventListener('click', async e => {
           $('#clientTlsLabel').style.cursor = 'not-allowed';
           $('#clientTlsText').textContent = '客户端 TLS（已锁定）';
           $('#clientTlsBadge').textContent = '服务端证书托管';
-          $('#clientTlsBadge').style.color = '#3fb950';
+          $('#clientTlsBadge').style.color = 'var(--ok)';
           $('#clientTlsServerHint').style.display = 'block';
           $('#clientTlsBox').style.display = 'none';
         } else {
@@ -1627,7 +1782,7 @@ function renderRegionList(){
 
   // 1. 若为 WARP 且未创建账号，直接显示本机一键创建引导
   if(currentSourceCategory === 'warp' && (!catRegions || !catRegions.length)){
-    $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:22px 14px;text-align:center;background:#12151a;border:1px dashed var(--line);border-radius:6px">'
+    $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:22px 14px;text-align:center;background:var(--surface-2);border:1px dashed var(--line);border-radius:6px">'
       + '<div style="font-weight:600;font-size:14px;color:var(--text);margin-bottom:6px">⚡ 本机尚未创建 Cloudflare WARP 出口账号</div>'
       + '<div style="font-size:12px;color:var(--dim);margin-bottom:14px;line-height:1.5">WARP 采用 Anycast 就近路由原则，无需添加订阅链接。点击下方按钮直接从 Cloudflare 官方免费注册 WireGuard 凭据并生成出口节点。</div>'
       + '<button class="primary" id="oneClickWarpBtn" style="padding:8px 18px">' + ICON.plus + ' 立即一键申请并创建 WARP 账号</button>'
@@ -1645,7 +1800,7 @@ function renderRegionList(){
     if(currentSourceCategory === 'vpngate'){
       if(currentPoolType === 'datacenter'){
         // VPN Gate 切换到机房池：明确显示为 0 节点！
-        $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:26px 14px;text-align:center;background:#12151a;border:1px dashed var(--line);border-radius:6px">'
+        $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:26px 14px;text-align:center;background:var(--surface-2);border:1px dashed var(--line);border-radius:6px">'
           + '<div style="font-size:24px;font-weight:700;color:var(--dim);margin-bottom:4px">0 个节点</div>'
           + '<div style="font-weight:600;font-size:13px;color:var(--text);margin-bottom:6px">当前「机房池」中 VPN Gate 共有 0 个可用节点</div>'
           + '<div style="font-size:12px;color:var(--dim);margin-bottom:16px;line-height:1.5">VPN Gate 官方节点均为真实志愿者的住宅网络（家宽），全部归属于「家宽池」。</div>'
@@ -1659,7 +1814,7 @@ function renderRegionList(){
         return;
       }
 
-      $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:22px 14px;text-align:center;background:#12151a;border:1px dashed var(--line);border-radius:6px">'
+      $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:22px 14px;text-align:center;background:var(--surface-2);border:1px dashed var(--line);border-radius:6px">'
         + '<div style="font-weight:600;font-size:13px;color:var(--text);margin-bottom:6px">当前「VPN Gate」官方节点池暂无可用节点</div>'
         + '<div style="font-size:12px;color:var(--dim);margin-bottom:14px;line-height:1.5">VPN Gate 为系统内置全球家宽源，无需配置订阅链接。<br>若刚启动或已被禁用，请点击下方按钮立即刷新节点池，或前往「订阅源」检查启用状态。</div>'
         + '<div style="display:flex;gap:8px;justify-content:center">'
@@ -1689,7 +1844,7 @@ function renderRegionList(){
     // 2.2 WARP
     if(currentSourceCategory === 'warp'){
       if(currentPoolType === 'residential'){
-        $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:26px 14px;text-align:center;background:#12151a;border:1px dashed var(--line);border-radius:6px">'
+        $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:26px 14px;text-align:center;background:var(--surface-2);border:1px dashed var(--line);border-radius:6px">'
           + '<div style="font-size:24px;font-weight:700;color:var(--dim);margin-bottom:4px">0 个节点</div>'
           + '<div style="font-weight:600;font-size:13px;color:var(--text);margin-bottom:6px">当前「家宽池」中 WARP 共有 0 个可用节点</div>'
           + '<div style="font-size:12px;color:var(--dim);margin-bottom:16px;line-height:1.5">Cloudflare WARP 为官方机房出站网络，全部归属于「机房池」。</div>'
@@ -1718,7 +1873,7 @@ function renderRegionList(){
       const targetPoolKey = currentPoolType === 'residential' ? 'datacenter' : 'residential';
       const otherCount = currentPoolType === 'residential' ? dcCount : resCount;
 
-      $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:26px 14px;text-align:center;background:#12151a;border:1px dashed var(--line);border-radius:6px">'
+      $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:26px 14px;text-align:center;background:var(--surface-2);border:1px dashed var(--line);border-radius:6px">'
         + '<div style="font-size:24px;font-weight:700;color:var(--dim);margin-bottom:4px">0 个节点</div>'
         + '<div style="font-weight:600;font-size:13px;color:var(--text);margin-bottom:6px">当前「' + esc(poolTitle) + '」中 ' + esc(name) + ' 共有 0 个可用节点</div>'
         + '<div style="font-size:12px;color:var(--dim);margin-bottom:16px;line-height:1.5">该订阅源共包含 ' + totalCount + ' 个节点（' + esc(otherPool) + ' ' + (otherCount || totalCount) + ' 个）。<br>您可以直接切换分类查看并选择拉取。</div>'
@@ -1743,10 +1898,10 @@ function renderRegionList(){
     const tipMsg = customSrc
       ? '请在主界面右上角「订阅源」中检查该源是否已启用或更新订阅。'
       : ('请在主界面右上角「订阅源」中为 ' + esc(name) + ' 填入订阅链接并启用。');
-    $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:22px 14px;text-align:center;background:#12151a;border:1px dashed var(--line);border-radius:6px">'
+    $('#rgList').innerHTML = '<div style="grid-column:1/-1;padding:22px 14px;text-align:center;background:var(--surface-2);border:1px dashed var(--line);border-radius:6px">'
       + '<div style="font-weight:600;font-size:13px;color:var(--text);margin-bottom:6px">当前「' + esc(name) + '」暂无可用节点</div>'
       + '<div style="font-size:12px;color:var(--dim);margin-bottom:14px">' + tipMsg + '</div>'
-      + '<button class="chip-btn" id="goCustomSourceBtn" style="padding:6px 14px;background:#238636;color:#fff">前往「订阅源」配置</button>'
+      + '<button class="chip-btn" id="goCustomSourceBtn" style="padding:6px 14px;background:var(--ok-solid);color:#fff">前往「订阅源」配置</button>'
       + '</div>';
     const g = $('#goCustomSourceBtn');
     if(g) g.onclick = () => { closeModal('newExitModal'); $('#openCustomSourceModalBtn').click(); };
@@ -2640,7 +2795,7 @@ async function loadSourcesList(){
     }
     box.innerHTML = list.map(s => {
       const typeBadge = s.is_builtin
-        ? '<span style="background:#238636;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">系统内置</span>'
+        ? '<span style="background:var(--ok-solid);color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">系统内置</span>'
         : (s.is_preset
           ? '<span style="background:#0969da;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">预置主流源</span>'
           : (s.type === 'batch'
@@ -2654,22 +2809,22 @@ async function loadSourcesList(){
       if(isWarp){
         if(s.count > 0){
           statusBadge = isEn
-            ? '<span style="background:rgba(63,185,80,.15);color:#3fb950;border:1px solid rgba(63,185,80,.3);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">已就绪</span>'
-            : '<span style="background:rgba(248,81,73,.15);color:#f85149;border:1px solid rgba(248,81,73,.3);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">已禁用</span>';
+            ? '<span style="background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-line);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">已就绪</span>'
+            : '<span style="background:var(--bad-soft);color:var(--bad);border:1px solid var(--bad-line);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">已禁用</span>';
         } else {
           statusBadge = '<span style="background:rgba(139,148,158,.15);color:#8b949e;border:1px solid rgba(139,148,158,.3);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">未创建账号</span>';
         }
       } else if(!isConfigured && !s.is_builtin){
-        statusBadge = '<span style="background:rgba(210,153,34,.15);color:#d29922;border:1px solid rgba(210,153,34,.3);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">待配置链接</span>';
+        statusBadge = '<span style="background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn-line);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">待配置链接</span>';
       } else {
         statusBadge = isEn
-          ? '<span style="background:rgba(63,185,80,.15);color:#3fb950;border:1px solid rgba(63,185,80,.3);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">已启用</span>'
-          : '<span style="background:rgba(248,81,73,.15);color:#f85149;border:1px solid rgba(248,81,73,.3);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">已禁用</span>';
+          ? '<span style="background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-line);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">已启用</span>'
+          : '<span style="background:var(--bad-soft);color:var(--bad);border:1px solid var(--bad-line);font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;flex-shrink:0">已禁用</span>';
       }
 
       const toggleBtn = isEn
         ? '<button class="chip-btn danger" data-toggle-src="' + esc(s.id) + '" title="点击禁用此源（节点将从家宽/机房池移除）">禁用</button>'
-        : '<button class="chip-btn" style="background:#238636;color:#fff" data-toggle-src="' + esc(s.id) + '" title="点击启用此源（节点将加入家宽/机房池）">启用</button>';
+        : '<button class="chip-btn" style="background:var(--ok-solid);color:#fff" data-toggle-src="' + esc(s.id) + '" title="点击启用此源（节点将加入家宽/机房池）">启用</button>';
 
       let actBtns = '';
       if(s.is_builtin){
@@ -2706,7 +2861,7 @@ async function loadSourcesList(){
         : (s.url ? s.url : '待填入订阅链接 (点击配置链接)');
 
 
-      return '<div style="background:#12151a;border:1px solid var(--line);border-radius:6px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px">'
+      return '<div style="background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px">'
         + '<div style="min-width:0;flex:1">'
         +   '<div style="font-weight:600;font-size:13px;display:flex;align-items:center;gap:6px;white-space:nowrap;overflow:hidden">' 
         +     '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px" title="' + esc(s.name) + '">' + esc(s.name) + '</span>'
@@ -2864,6 +3019,40 @@ $('#copyLogsBtn').onclick = () => {
     toast('复制失败，请手动选择复制', true);
   });
 };
+
+// ---- 界面主题切换 ----
+const SOUT_THEMES = ['classic', 'emerald', 'brickroad', 'forest'];
+function applyTheme(name, persist){
+  if(SOUT_THEMES.indexOf(name) < 0) name = 'classic';
+  if(name === 'classic'){ document.documentElement.removeAttribute('data-theme'); }
+  else { document.documentElement.setAttribute('data-theme', name); }
+  document.querySelectorAll('.theme-item').forEach(function(el){
+    el.classList.toggle('active', el.getAttribute('data-theme') === name);
+  });
+  if(persist !== false){ try{ localStorage.setItem('sout.theme', name); }catch(e){} }
+}
+function closeThemeMenu(){
+  const m = $('#themeMenu'); if(m) m.classList.remove('open');
+  const b = $('#themeBtn'); if(b) b.setAttribute('aria-expanded', 'false');
+}
+$('#themeBtn').onclick = function(e){
+  e.stopPropagation();
+  const open = $('#themeMenu').classList.toggle('open');
+  this.setAttribute('aria-expanded', open ? 'true' : 'false');
+};
+$('#themeMenu').addEventListener('click', function(e){
+  const item = e.target.closest('.theme-item');
+  if(!item) return;
+  applyTheme(item.getAttribute('data-theme'));
+  const label = item.querySelector('b');
+  toast('已切换主题：' + (label ? label.textContent : ''));
+  closeThemeMenu();
+});
+document.addEventListener('click', function(e){
+  if(!e.target.closest('.theme-picker')) closeThemeMenu();
+});
+document.addEventListener('keydown', function(e){ if(e.key === 'Escape') closeThemeMenu(); });
+applyTheme(document.documentElement.getAttribute('data-theme') || 'classic', false);
 
 poll();
 setInterval(poll, 3000);
