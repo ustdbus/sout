@@ -60,63 +60,6 @@ const indexHTMLTemplate = `<!DOCTYPE html>
   --card-shadow:0 1px 3px rgba(0,0,0,.2);
 }
 
-/* ── 主题：绿野仙踪 · 翡翠城 ── */
-html[data-theme="emerald"]{
-  color-scheme: dark;
-  --bg:#07130f; --panel:#0c1f18; --card:#10271e; --line:#1e3b2c; --text:#e9f6ef;
-  --dim:#83ab99; --accent:#3ddc97; --accent-hover:#74f1bd; --ok:#8ee6a6; --warn:#e3b341; --bad:#ff7b72;
-  --on-accent:#04130d; --on-ok:#04130d; --badge-bg:#2fbf82; --badge-fg:#04130d;
-  --btn-bg:#123126; --surface-2:#0e241b; --input-bg:#06120d; --code-bg:#05100b;
-  --track:#224535; --line-soft:#143327; --toast-bg:#123026; --overlay:rgba(2,10,7,.78);
-  --ok-solid:#2fbf82; --ok-solid-hover:#3ddc97;
-  --accent-soft:rgba(61,220,151,.14); --accent-softer:rgba(61,220,151,.07);
-  --accent-line:rgba(61,220,151,.34); --accent-glow:rgba(61,220,151,.26);
-  --ok-soft:rgba(142,230,166,.12); --ok-line:rgba(142,230,166,.3);
-  --warn-soft:rgba(227,179,65,.14); --warn-line:rgba(227,179,65,.32);
-  --bad-soft:rgba(255,123,114,.1); --bad-line:rgba(255,123,114,.35);
-  --hover:rgba(255,255,255,.03);
-  --art-image:none; --deco-image:none; --extra-image:none;
-  --pattern-image:linear-gradient(45deg, rgba(61,220,151,.055) 25%, transparent 25%, transparent 75%, rgba(61,220,151,.055) 75%),linear-gradient(45deg, rgba(61,220,151,.055) 25%, transparent 25%, transparent 75%, rgba(61,220,151,.055) 75%),linear-gradient(rgba(227,179,65,.04) 1px, transparent 1px);
-  --pattern-size:44px 44px,44px 44px,44px 44px;
-  --pattern-position:0 0,22px 22px,0 0;
-  --pattern-opacity:.7;
-  --glow-image:radial-gradient(620px 420px at 32% 26%, rgba(61,220,151,.18), transparent 68%),radial-gradient(520px 380px at 76% 72%, rgba(227,179,65,.11), transparent 70%);
-  --glow-opacity:.85;
-  --glow-duration:24s;
-  --bg-image:radial-gradient(1100px 560px at 50% -12%, rgba(61,220,151,.10), transparent 62%),radial-gradient(700px 400px at 92% 8%, rgba(227,179,65,.06), transparent 65%);
-  --header-accent:linear-gradient(90deg,rgba(61,220,151,0),rgba(61,220,151,.55),rgba(227,179,65,.45),rgba(61,220,151,0));
-  --card-shadow:0 1px 3px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.02);
-}
-
-/* ── 主题：绿野仙踪 · 黄砖路 ── */
-html[data-theme="brickroad"]{
-  color-scheme: dark;
-  --bg:#14100a; --panel:#1d1710; --card:#251d13; --line:#3a2e1f; --text:#f6ecd9;
-  --dim:#b29a7b; --accent:#f0b429; --accent-hover:#ffd166; --ok:#a8c97f; --warn:#e6a23c; --bad:#e06c75;
-  --on-accent:#1a1206; --on-ok:#161006; --badge-bg:#c9a227; --badge-fg:#1a1206;
-  --btn-bg:#2a2115; --surface-2:#211a11; --input-bg:#120e08; --code-bg:#100c07;
-  --track:#42341f; --line-soft:#2a2115; --toast-bg:#2b2214; --overlay:rgba(12,8,3,.78);
-  --ok-solid:#7e9a4e; --ok-solid-hover:#94b25c;
-  --accent-soft:rgba(240,180,41,.14); --accent-softer:rgba(240,180,41,.07);
-  --accent-line:rgba(240,180,41,.34); --accent-glow:rgba(240,180,41,.26);
-  --ok-soft:rgba(168,201,127,.12); --ok-line:rgba(168,201,127,.3);
-  --warn-soft:rgba(230,162,60,.14); --warn-line:rgba(230,162,60,.32);
-  --bad-soft:rgba(224,108,117,.1); --bad-line:rgba(224,108,117,.35);
-  --hover:rgba(255,255,255,.03);
-  --art-image:none; --deco-image:none; --extra-image:none;
-  --pattern-image:linear-gradient(rgba(240,180,41,.055) 1px, transparent 1px),linear-gradient(90deg, rgba(240,180,41,.055) 1px, transparent 1px),linear-gradient(rgba(240,180,41,.032) 1px, transparent 1px),linear-gradient(90deg, rgba(240,180,41,.032) 1px, transparent 1px);
-  --pattern-size:64px 28px,64px 28px,64px 28px,64px 28px;
-  --pattern-position:0 0,0 0,32px 14px,32px 14px;
-  --pattern-opacity:.72;
-  --glow-image:radial-gradient(720px 420px at 40% 18%, rgba(240,180,41,.17), transparent 70%),radial-gradient(520px 400px at 82% 78%, rgba(201,79,95,.11), transparent 70%);
-  --glow-opacity:.85;
-  --glow-duration:28s;
-  --bg-image:radial-gradient(1000px 520px at 50% -10%, rgba(240,180,41,.10), transparent 60%),radial-gradient(700px 400px at 8% 4%, rgba(201,79,95,.07), transparent 62%);
-  --header-accent:linear-gradient(90deg,rgba(240,180,41,0),rgba(240,180,41,.6),rgba(201,79,95,.45),rgba(240,180,41,0));
-  --font-display:Georgia,"Songti SC","Times New Roman",serif;
-  --card-shadow:0 1px 3px rgba(0,0,0,.4);
-}
-
 /* ── 主题：绿野仙踪 · 魔法森林 ── */
 html[data-theme="forest"]{
   color-scheme: dark;
@@ -184,8 +127,7 @@ header{position:relative;display:flex;align-items:center;gap:16px;padding:12px 2
 header::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:1px;background:var(--header-accent);pointer-events:none}
 h1{font-size:15px;font-weight:700;margin:0;display:flex;align-items:center;gap:8px}
 .brand{font-family:var(--font-display);letter-spacing:.2px}
-html[data-theme="emerald"] .brand{background:linear-gradient(92deg,#3ddc97,#e3b341);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent}
-html[data-theme="brickroad"] .brand{background:linear-gradient(92deg,#f0b429,#ffd166,#c94f5f);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent}
+
 html[data-theme="forest"] .brand{background:linear-gradient(92deg,#5eead4,#c4a7f5);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent}
 .badge{background:var(--badge-bg);color:var(--badge-fg);font-size:11px;padding:2px 8px;border-radius:12px;font-weight:600;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 .spacer{flex:1}
@@ -346,14 +288,6 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
         <button class="theme-item" role="menuitem" data-theme="classic">
           <span class="theme-swatches"><i style="background:#0e1117;border-color:#2d333b"></i><i style="background:#58a6ff"></i><i style="background:#3fb950"></i></span>
           <span class="theme-meta"><b>经典暗夜</b><em>原版 · GitHub 深色</em></span>
-        </button>
-        <button class="theme-item" role="menuitem" data-theme="emerald">
-          <span class="theme-swatches"><i style="background:#07130f"></i><i style="background:#3ddc97"></i><i style="background:#e3b341"></i></span>
-          <span class="theme-meta"><b>翡翠城</b><em>祖母绿 · 清澈沉稳</em></span>
-        </button>
-        <button class="theme-item" role="menuitem" data-theme="brickroad">
-          <span class="theme-swatches"><i style="background:#14100a"></i><i style="background:#f0b429"></i><i style="background:#c94f5f"></i></span>
-          <span class="theme-meta"><b>黄砖路</b><em>暖金 · 复古童话</em></span>
         </button>
         <button class="theme-item" role="menuitem" data-theme="forest">
           <span class="theme-swatches"><i style="background:#0a0f14"></i><i style="background:#5eead4"></i><i style="background:#c4a7f5"></i></span>
@@ -3071,8 +3005,6 @@ $('#copyLogsBtn').onclick = () => {
   if(!canvas) return;
   var ctx = canvas.getContext('2d');
   var PRESETS = {
-    emerald:  {count:30, colors:['#3ddc97','#8ee6a6','#e3b341'], mode:'float',   speed:.16, size:[1.2,3.0], alpha:[.16,.5]},
-    brickroad:{count:28, colors:['#f0b429','#ffd166','#c9a227'], mode:'fall',    speed:.26, size:[1.0,2.6], alpha:[.14,.46]},
     forest:   {count:30, colors:['#5eead4','#c4a7f5','#f0a6ca'], mode:'firefly', speed:.1,  size:[1.0,2.4], alpha:[.18,.7]}
   };
   var W=0,H=0,dpr=1,parts=[],preset=null,raf=0,running=false,last=0,sprites={};
@@ -3178,12 +3110,10 @@ $('#copyLogsBtn').onclick = () => {
 })();
 
 // ---- 界面主题切换（默认魔法森林） ----
-const SOUT_THEMES = ['classic', 'emerald', 'brickroad', 'forest'];
+const SOUT_THEMES = ['classic', 'forest'];
 const THEME_META = {
-  classic:  {name:'经典暗夜', color:'#58a6ff'},
-  emerald:  {name:'翡翠城',   color:'#3ddc97'},
-  brickroad:{name:'黄砖路',   color:'#f0b429'},
-  forest:   {name:'魔法森林', color:'#5eead4'}
+  classic:{name:'经典暗夜', color:'#58a6ff'},
+  forest: {name:'魔法森林', color:'#5eead4'}
 };
 function applyTheme(name, persist){
   if(SOUT_THEMES.indexOf(name) < 0) name = 'classic';

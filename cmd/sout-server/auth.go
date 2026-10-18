@@ -351,24 +351,6 @@ const loginHTML = `<!DOCTYPE html>
   --glow-image:none; --glow-opacity:0; --glow-duration:26s;
   --bg-image:none;
 }
-html[data-theme="emerald"]{
-  color-scheme:dark;
-  --bg:#07130f; --panel:#0c1f18; --line:#1e3b2c; --text:#e9f6ef; --dim:#83ab99;
-  --accent:#3ddc97; --accent-hover:#74f1bd; --on-accent:#04130d; --input-bg:#06120d; --bad:#ff7b72;
-  --pattern-image:linear-gradient(45deg, rgba(61,220,151,.055) 25%, transparent 25%, transparent 75%, rgba(61,220,151,.055) 75%),linear-gradient(45deg, rgba(61,220,151,.055) 25%, transparent 25%, transparent 75%, rgba(61,220,151,.055) 75%),linear-gradient(rgba(227,179,65,.04) 1px, transparent 1px);
-  --pattern-size:44px 44px,44px 44px,44px 44px; --pattern-position:0 0,22px 22px,0 0; --pattern-opacity:.7;
-  --glow-image:radial-gradient(620px 420px at 32% 26%, rgba(61,220,151,.18), transparent 68%),radial-gradient(520px 380px at 76% 72%, rgba(227,179,65,.11), transparent 70%); --glow-opacity:.85; --glow-duration:24s;
-  --bg-image:radial-gradient(1000px 560px at 50% -10%, rgba(61,220,151,.12), transparent 62%);
-}
-html[data-theme="brickroad"]{
-  color-scheme:dark;
-  --bg:#14100a; --panel:#1d1710; --line:#3a2e1f; --text:#f6ecd9; --dim:#b29a7b;
-  --accent:#f0b429; --accent-hover:#ffd166; --on-accent:#1a1206; --input-bg:#120e08; --bad:#e06c75;
-  --pattern-image:linear-gradient(rgba(240,180,41,.055) 1px, transparent 1px),linear-gradient(90deg, rgba(240,180,41,.055) 1px, transparent 1px),linear-gradient(rgba(240,180,41,.032) 1px, transparent 1px),linear-gradient(90deg, rgba(240,180,41,.032) 1px, transparent 1px);
-  --pattern-size:64px 28px,64px 28px,64px 28px,64px 28px; --pattern-position:0 0,0 0,32px 14px,32px 14px; --pattern-opacity:.72;
-  --glow-image:radial-gradient(720px 420px at 40% 18%, rgba(240,180,41,.17), transparent 70%),radial-gradient(520px 400px at 82% 78%, rgba(201,79,95,.11), transparent 70%); --glow-opacity:.85; --glow-duration:28s;
-  --bg-image:radial-gradient(1000px 520px at 50% -10%, rgba(240,180,41,.10), transparent 60%);
-}
 html[data-theme="forest"]{
   color-scheme:dark;
   --bg:#0a0f14; --panel:#0f1a19; --line:#203c36; --text:#e7f4ef; --dim:#82a89c;
