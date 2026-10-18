@@ -32,7 +32,7 @@ const indexHTMLTemplate = `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>sout - 节点与分流管理</title>
-<script>try{var t=localStorage.getItem('sout.theme')||'emerald';if(t!=='classic'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}</script>
+<script>try{var t=localStorage.getItem('sout.theme')||'forest';if(t!=='classic'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}</script>
 <style>
 :root{
   color-scheme: dark;
@@ -49,6 +49,8 @@ const indexHTMLTemplate = `<!DOCTYPE html>
   --bad-soft:rgba(248,81,73,.1); --bad-line:rgba(248,81,73,.35);
   --hover:rgba(255,255,255,.02);
   --danger:var(--bad);
+  --vine-image:none; --vine-opacity:0;
+  --art-filter:none; --deco-filter:none;
   --art-image:none; --art-size:auto; --art-pos:center; --art-opacity:0; --art-mask:none;
   --deco-image:none; --deco-size:auto; --deco-pos:center; --deco-opacity:0; --deco-mask:none;
   --extra-image:none; --extra-size:auto; --extra-pos:center; --extra-opacity:0; --extra-mask:none;
@@ -73,9 +75,7 @@ html[data-theme="emerald"]{
   --warn-soft:rgba(227,179,65,.14); --warn-line:rgba(227,179,65,.32);
   --bad-soft:rgba(255,123,114,.1); --bad-line:rgba(255,123,114,.35);
   --hover:rgba(255,255,255,.03);
-  --art-image:url("__OZ_CITY__"); --art-size:min(720px, 80vw) auto; --art-pos:center bottom -4px; --art-opacity:.16; --art-blend:normal; --art-mask:none;
-  --deco-image:url("__OZ_MONKEYS__"); --deco-size:min(210px, 18vw) auto; --deco-pos:right 1% bottom 9%; --deco-opacity:.07; --deco-mask:none;
-  --extra-image:none;
+  --art-image:none; --deco-image:none; --extra-image:none;
   --pattern-image:linear-gradient(45deg, rgba(61,220,151,.055) 25%, transparent 25%, transparent 75%, rgba(61,220,151,.055) 75%),linear-gradient(45deg, rgba(61,220,151,.055) 25%, transparent 25%, transparent 75%, rgba(61,220,151,.055) 75%),linear-gradient(rgba(227,179,65,.04) 1px, transparent 1px);
   --pattern-size:44px 44px,44px 44px,44px 44px;
   --pattern-position:0 0,22px 22px,0 0;
@@ -103,9 +103,7 @@ html[data-theme="brickroad"]{
   --warn-soft:rgba(230,162,60,.14); --warn-line:rgba(230,162,60,.32);
   --bad-soft:rgba(224,108,117,.1); --bad-line:rgba(224,108,117,.35);
   --hover:rgba(255,255,255,.03);
-  --art-image:url("__OZ_SCARECROW__"); --art-size:min(340px, 28vw) auto; --art-pos:right -3% bottom -8%; --art-opacity:.08; --art-blend:screen; --art-mask:none;
-  --deco-image:url("__OZ_LION__"); --deco-size:min(210px, 18vw) auto; --deco-pos:left -1% bottom 4%; --deco-opacity:.07; --deco-mask:none;
-  --extra-image:none;
+  --art-image:none; --deco-image:none; --extra-image:none;
   --pattern-image:linear-gradient(rgba(240,180,41,.055) 1px, transparent 1px),linear-gradient(90deg, rgba(240,180,41,.055) 1px, transparent 1px),linear-gradient(rgba(240,180,41,.032) 1px, transparent 1px),linear-gradient(90deg, rgba(240,180,41,.032) 1px, transparent 1px);
   --pattern-size:64px 28px,64px 28px,64px 28px,64px 28px;
   --pattern-position:0 0,0 0,32px 14px,32px 14px;
@@ -134,14 +132,15 @@ html[data-theme="forest"]{
   --warn-soft:rgba(242,193,78,.14); --warn-line:rgba(242,193,78,.32);
   --bad-soft:rgba(255,143,154,.1); --bad-line:rgba(255,143,154,.35);
   --hover:rgba(255,255,255,.035);
-  --art-image:url("__OZ_FERN__"); --art-size:min(260px, 22vw) auto; --art-pos:left -4% bottom -10%; --art-opacity:.10; --art-blend:screen; --art-mask:none;
-  --deco-image:url("__OZ_MUSHROOM__"); --deco-size:min(110px, 9vw) auto; --deco-pos:right 6% bottom 2%; --deco-opacity:.08; --deco-mask:none;
-  --extra-image:url("__OZ_TREE__"); --extra-size:min(210px, 18vw) auto; --extra-pos:right -1% top 4%; --extra-opacity:.03; --extra-mask:none;
+  --art-image:url("__OZ_FOREST_BG__"); --art-size:cover; --art-pos:center 34%; --art-opacity:.13; --art-blend:normal; --art-mask:linear-gradient(to bottom, transparent 0%, rgba(0,0,0,.3) 16%, #000 46%, #000 100%); --art-filter:blur(3px) saturate(1.2) brightness(.9);
+  --deco-image:url("__OZ_FOREST_FG__"); --deco-size:min(700px, 62vw) auto; --deco-pos:left -6% bottom -10%; --deco-opacity:.2; --deco-mask:none;
+  --extra-image:none;
+  --vine-image:url("__OZ_VINE__"); --vine-opacity:.38;
   --pattern-image:radial-gradient(circle at 18% 22%, rgba(94,234,212,.14) 0 1.2px, transparent 2px),radial-gradient(circle at 72% 64%, rgba(196,167,245,.12) 0 1px, transparent 1.8px),radial-gradient(circle at 41% 82%, rgba(240,166,202,.1) 0 1px, transparent 1.6px),repeating-linear-gradient(115deg, rgba(94,234,212,.025) 0 1px, transparent 1px 30px);
   --pattern-size:200px 200px,260px 260px,230px 230px,auto;
   --pattern-position:0 0,37px 53px,91px 17px,0 0;
   --pattern-opacity:.8;
-  --glow-image:radial-gradient(560px 400px at 24% 30%, rgba(94,234,212,.18), transparent 70%),radial-gradient(520px 380px at 78% 26%, rgba(196,167,245,.15), transparent 72%),radial-gradient(420px 320px at 56% 86%, rgba(240,166,202,.08), transparent 72%);
+  --glow-image:radial-gradient(700px 420px at 50% -6%, rgba(255,226,150,.13), transparent 66%),radial-gradient(560px 400px at 24% 32%, rgba(94,234,212,.16), transparent 70%),radial-gradient(520px 380px at 78% 26%, rgba(196,167,245,.12), transparent 72%),radial-gradient(420px 320px at 56% 86%, rgba(240,166,202,.06), transparent 72%);
   --glow-opacity:.9;
   --glow-duration:30s;
   --bg-image:radial-gradient(900px 520px at 10% -10%, rgba(94,234,212,.13), transparent 60%),radial-gradient(760px 460px at 92% 2%, rgba(196,167,245,.11), transparent 62%),radial-gradient(600px 400px at 50% 110%, rgba(240,166,202,.05), transparent 65%);
@@ -166,10 +165,20 @@ html::after{content:"";position:fixed;inset:-12%;z-index:-1;pointer-events:none;
 /* 主题插画与粒子层 */
 .oz-scene{position:fixed;inset:0;z-index:-1;pointer-events:none;overflow:hidden}
 .oz-scene .oz-layer{position:absolute;inset:0;background-repeat:no-repeat;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;-webkit-mask-size:100% 100%;mask-size:100% 100%}
-.oz-art{background-image:var(--art-image);background-size:var(--art-size);background-position:var(--art-pos);opacity:var(--art-opacity);mix-blend-mode:var(--art-blend,normal);-webkit-mask-image:var(--art-mask);mask-image:var(--art-mask)}
-.oz-deco{background-image:var(--deco-image);background-size:var(--deco-size);background-position:var(--deco-pos);opacity:var(--deco-opacity);mix-blend-mode:var(--deco-blend,screen);-webkit-mask-image:var(--deco-mask);mask-image:var(--deco-mask)}
+.oz-art{background-image:var(--art-image);background-size:var(--art-size);background-position:var(--art-pos);opacity:var(--art-opacity);mix-blend-mode:var(--art-blend,normal);filter:var(--art-filter,none);-webkit-mask-image:var(--art-mask);mask-image:var(--art-mask)}
+.oz-deco{background-image:var(--deco-image);background-size:var(--deco-size);background-position:var(--deco-pos);opacity:var(--deco-opacity);mix-blend-mode:var(--deco-blend,screen);filter:var(--deco-filter,none);-webkit-mask-image:var(--deco-mask);mask-image:var(--deco-mask)}
 .oz-extra{background-image:var(--extra-image);background-size:var(--extra-size);background-position:var(--extra-pos);opacity:var(--extra-opacity);mix-blend-mode:var(--extra-blend,screen);-webkit-mask-image:var(--extra-mask);mask-image:var(--extra-mask)}
 #ozParticles{position:fixed;inset:0;z-index:-1;width:100%;height:100%;pointer-events:none}
+/* 屏幕边缘伸入的藤蔓画框 */
+.oz-vines{position:fixed;inset:0;z-index:-1;pointer-events:none;overflow:hidden}
+.oz-vines .vine{position:absolute;width:min(400px,34vw);height:min(400px,34vw);background-image:var(--vine-image);background-repeat:no-repeat;background-size:contain;opacity:var(--vine-opacity);filter:drop-shadow(0 10px 22px rgba(0,0,0,.4));animation:vine-sway 9s ease-in-out infinite}
+.vine-tl{left:-52px;top:54px}
+.vine-tr{right:-52px;top:62px;scale:-1 1;animation-delay:-2s;animation-direction:reverse}
+.vine-bl{left:-52px;bottom:-52px;scale:1 -1;animation-delay:-4s}
+.vine-br{right:-52px;bottom:-52px;scale:-1 -1;animation-delay:-6s;animation-direction:reverse}
+@keyframes vine-sway{0%,100%{rotate:0deg}50%{rotate:1.2deg}}
+@media (prefers-reduced-motion:reduce){.oz-vines .vine{animation:none}}
+@media (max-width:760px){.oz-vines .vine{width:230px;height:230px}}
 header{position:relative;display:flex;align-items:center;gap:16px;padding:12px 20px;
   border-bottom:1px solid var(--line);background:var(--panel)}
 header::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:1px;background:var(--header-accent);pointer-events:none}
@@ -300,6 +309,9 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
   <div class="oz-layer oz-deco"></div>
   <div class="oz-layer oz-extra"></div>
   <canvas id="ozParticles"></canvas>
+</div>
+<div class="oz-vines" aria-hidden="true">
+  <i class="vine vine-tl"></i><i class="vine vine-tr"></i><i class="vine vine-bl"></i><i class="vine vine-br"></i>
 </div>
 <header>
   <h1>
@@ -3131,7 +3143,7 @@ function applyTheme(name, persist){
   if(persist !== false){ try{ localStorage.setItem('sout.theme', name); }catch(e){} }
   if(window.ozScene) window.ozScene.setTheme(name);
 }
-applyTheme(document.documentElement.getAttribute('data-theme') || 'emerald', false);
+applyTheme(document.documentElement.getAttribute('data-theme') || 'forest', false);
 
 poll();
 setInterval(poll, 3000);

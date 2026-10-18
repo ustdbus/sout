@@ -341,7 +341,7 @@ const loginHTML = `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>sout</title>
-<script>try{var t=localStorage.getItem('sout.theme')||'emerald';if(t!=='classic'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}</script>
+<script>try{var t=localStorage.getItem('sout.theme')||'forest';if(t!=='classic'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}</script>
 <style>
 :root{
   color-scheme:dark;
