@@ -189,6 +189,23 @@ html[data-theme="brickroad"] .brand{background:linear-gradient(92deg,#f0b429,#ff
 html[data-theme="forest"] .brand{background:linear-gradient(92deg,#5eead4,#c4a7f5);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent}
 .badge{background:var(--badge-bg);color:var(--badge-fg);font-size:11px;padding:2px 8px;border-radius:12px;font-weight:600;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 .spacer{flex:1}
+/* 品牌旁的主题切换器 */
+.theme-picker{position:relative;display:inline-flex}
+.theme-trigger{height:20px;padding:0 8px 0 7px;font-size:11px;line-height:18px;border-radius:11px;background:var(--btn-bg);border:1px solid var(--line);color:var(--dim);gap:6px}
+.theme-trigger:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.theme-dot{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent-glow);flex:none}
+.theme-menu{position:absolute;left:0;top:calc(100% + 8px);width:250px;padding:8px;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 18px 44px rgba(0,0,0,.5);display:none;z-index:70}
+.theme-menu.open{display:block}
+.theme-menu-title{padding:6px 8px 8px;font-size:11px;letter-spacing:.04em;color:var(--dim);font-weight:600}
+.theme-item{display:flex;align-items:center;gap:10px;width:100%;padding:8px;border:1px solid transparent;background:transparent;border-radius:8px;text-align:left;white-space:normal;line-height:1.35}
+.theme-item:hover:not(:disabled){border-color:var(--line);background:var(--hover);color:var(--text)}
+.theme-item.active{border-color:var(--accent);background:var(--accent-softer)}
+.theme-swatches{display:flex;gap:3px;flex:none}
+.theme-swatches i{display:block;width:11px;height:22px;border-radius:3px;border:1px solid rgba(0,0,0,.25)}
+.theme-meta{display:flex;flex-direction:column;gap:1px;min-width:0}
+.theme-meta b{font-size:12.5px;font-weight:600;color:var(--text)}
+.theme-meta em{font-style:normal;font-size:11px;color:var(--dim)}
+@media (max-width:700px){#themeName{display:none}.theme-trigger{padding:0 7px}.theme-menu{width:230px}}
 button{font:inherit;color:var(--text);background:var(--btn-bg);border:1px solid var(--line);
   border-radius:6px;padding:6px 12px;cursor:pointer;display:inline-flex;
   align-items:center;gap:6px;white-space:nowrap;font-weight:500;transition:all .15s}
@@ -318,6 +335,32 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
     <svg viewBox="0 0 24 24" style="color:var(--accent)"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
     <span class="brand">sout</span>
     <span class="badge" id="backendBadge">已连接</span>
+    <div class="theme-picker">
+      <button id="themeBtn" class="theme-trigger" title="切换界面主题" aria-haspopup="true" aria-expanded="false">
+        <span class="theme-dot" id="themeDot"></span>
+        <span id="themeName">魔法森林</span>
+        <svg viewBox="0 0 24 24" style="width:10px;height:10px"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="theme-menu" id="themeMenu" role="menu">
+        <div class="theme-menu-title">绿野仙踪 · 界面主题</div>
+        <button class="theme-item" role="menuitem" data-theme="classic">
+          <span class="theme-swatches"><i style="background:#0e1117;border-color:#2d333b"></i><i style="background:#58a6ff"></i><i style="background:#3fb950"></i></span>
+          <span class="theme-meta"><b>经典暗夜</b><em>原版 · GitHub 深色</em></span>
+        </button>
+        <button class="theme-item" role="menuitem" data-theme="emerald">
+          <span class="theme-swatches"><i style="background:#07130f"></i><i style="background:#3ddc97"></i><i style="background:#e3b341"></i></span>
+          <span class="theme-meta"><b>翡翠城</b><em>祖母绿 · 清澈沉稳</em></span>
+        </button>
+        <button class="theme-item" role="menuitem" data-theme="brickroad">
+          <span class="theme-swatches"><i style="background:#14100a"></i><i style="background:#f0b429"></i><i style="background:#c94f5f"></i></span>
+          <span class="theme-meta"><b>黄砖路</b><em>暖金 · 复古童话</em></span>
+        </button>
+        <button class="theme-item" role="menuitem" data-theme="forest">
+          <span class="theme-swatches"><i style="background:#0a0f14"></i><i style="background:#5eead4"></i><i style="background:#c4a7f5"></i></span>
+          <span class="theme-meta"><b>魔法森林</b><em>写实绘景 · 萤火藤蔓</em></span>
+        </button>
+      </div>
+    </div>
   </h1>
   <span class="spacer"></span>
 
@@ -3134,15 +3177,46 @@ $('#copyLogsBtn').onclick = () => {
   });
 })();
 
-// ---- 界面主题（不新增任何按钮，默认翡翠城；可用 localStorage 覆盖） ----
+// ---- 界面主题切换（默认魔法森林） ----
 const SOUT_THEMES = ['classic', 'emerald', 'brickroad', 'forest'];
+const THEME_META = {
+  classic:  {name:'经典暗夜', color:'#58a6ff'},
+  emerald:  {name:'翡翠城',   color:'#3ddc97'},
+  brickroad:{name:'黄砖路',   color:'#f0b429'},
+  forest:   {name:'魔法森林', color:'#5eead4'}
+};
 function applyTheme(name, persist){
   if(SOUT_THEMES.indexOf(name) < 0) name = 'classic';
   if(name === 'classic'){ document.documentElement.removeAttribute('data-theme'); }
   else { document.documentElement.setAttribute('data-theme', name); }
+  document.querySelectorAll('.theme-item').forEach(function(el){
+    el.classList.toggle('active', el.getAttribute('data-theme') === name);
+  });
+  const meta = THEME_META[name];
+  const label = $('#themeName'); if(label) label.textContent = meta.name;
+  const dot = $('#themeDot'); if(dot) dot.style.background = meta.color;
   if(persist !== false){ try{ localStorage.setItem('sout.theme', name); }catch(e){} }
   if(window.ozScene) window.ozScene.setTheme(name);
 }
+function closeThemeMenu(){
+  const m = $('#themeMenu'); if(m) m.classList.remove('open');
+  const b = $('#themeBtn'); if(b) b.setAttribute('aria-expanded', 'false');
+}
+$('#themeBtn').onclick = function(e){
+  e.stopPropagation();
+  const open = $('#themeMenu').classList.toggle('open');
+  this.setAttribute('aria-expanded', open ? 'true' : 'false');
+};
+$('#themeMenu').addEventListener('click', function(e){
+  const item = e.target.closest('.theme-item');
+  if(!item) return;
+  applyTheme(item.getAttribute('data-theme'));
+  closeThemeMenu();
+});
+document.addEventListener('click', function(e){
+  if(!e.target.closest('.theme-picker')) closeThemeMenu();
+});
+document.addEventListener('keydown', function(e){ if(e.key === 'Escape') closeThemeMenu(); });
 applyTheme(document.documentElement.getAttribute('data-theme') || 'forest', false);
 
 poll();
