@@ -172,7 +172,7 @@ func setUpdateProgress(fn func(*UpdateProgress)) {
 	fn(&currentUpdate)
 }
 
-// StartAsyncUpdate 启动异步后台更新任务，立即返回避免前端请求挂起超时
+// StartAsyncUpdate 启动异步后台更新任务，优先交由系统独立脱壳脚本执行，避免大包在 Go 进程内解压引发超小内存机 OOM
 func StartAsyncUpdate() (started bool, msg string) {
 	updateMu.Lock()
 	if currentUpdate.Running {
@@ -183,17 +183,50 @@ func StartAsyncUpdate() (started bool, msg string) {
 		Running:  true,
 		Status:   "starting",
 		Progress: 0,
-		Message:  "正在连接 GitHub 获取最新版本信息...",
+		Message:  "正在准备系统独立脱机更新任务...",
 	}
 	updateMu.Unlock()
 
-	// 独立日志：sout 服务重启时 /var/log/sout.log 会被截断，更新过程的证据会丢失。
-	// 这里写到单独文件并追加，便于事后确认每一步到底做了什么。
 	updLogInit()
 	updLog("update 启动，当前版本 %s", version)
 
+	scriptPath := findSoutScript()
+	if scriptPath != "" {
+		setUpdateProgress(func(p *UpdateProgress) {
+			p.Status = "installing"
+			p.Progress = 50
+			p.Message = "已将更新任务交由系统独立脱机脚本执行，服务即将平滑重启，面板将在约 15 秒后恢复..."
+		})
+		updLog("检测到系统管理脚本: %s，采用独立脱机静默更新模式 (超低内存保护)", scriptPath)
+		go runDetachedScriptUpdate(scriptPath)
+		return true, "更新任务已交由系统独立脱机执行，面板即将重启"
+	}
+
+	updLog("未检测到外部管理脚本，降级使用内置协程更新")
 	go runAsyncUpdate()
 	return true, "更新任务已启动"
+}
+
+func runDetachedScriptUpdate(scriptPath string) {
+	// 留出 1 秒延迟，让当前 API 请求有充足时间向客户端返回 HTTP 响应
+	time.Sleep(1 * time.Second)
+
+	sh := "bash"
+	if !hasCmd("bash") {
+		sh = "sh"
+	}
+
+	cmdStr := fmt.Sprintf("(trap '' HUP TERM; exec %s %s update) >> %s 2>&1", sh, scriptPath, updLogPath)
+	cmd := exec.Command("sh", "-c", cmdStr)
+	cmd.Env = append(os.Environ(), "SOUT_CALLED_FROM_WEB=1", "DEBIAN_FRONTEND=noninteractive")
+	setDetachedProcess(cmd)
+
+	if err := cmd.Start(); err != nil {
+		updLog("启动独立脱壳更新脚本失败: %v，降级使用内置协程更新", err)
+		runAsyncUpdate()
+		return
+	}
+	updLog("独立脱机更新脚本已拉起 (PID: %d)，脱壳交接完成", cmd.Process.Pid)
 }
 
 const updLogPath = "/var/log/sout-update.log"

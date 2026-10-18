@@ -2233,12 +2233,12 @@ $('#checkUpdateBtn').onclick = async e => {
               } else if(u.status === 'verifying') {
                 btn.target.textContent = '正在校验包...';
               } else if(u.status === 'extracting' || u.status === 'installing') {
-                btn.target.textContent = '正在安装部署...';
+                btn.target.textContent = u.message || '正在静默安装部署...';
               } else if(u.status === 'restarting') {
                 clearInterval(pollTimer);
                 btn.target.textContent = '正在重启服务...';
                 toast('更新完成，服务正在重启...');
-                setTimeout(() => location.reload(), 3000);
+                setTimeout(() => location.reload(), 4000);
               } else if(u.status === 'error') {
                 clearInterval(pollTimer);
                 toast('更新失败: ' + (u.error || u.message || '未知错误'), true);
@@ -2247,8 +2247,18 @@ $('#checkUpdateBtn').onclick = async e => {
               }
             } catch(e) {
               clearInterval(pollTimer);
-              toast('服务已平滑重启，正在重新连接...');
-              setTimeout(() => location.reload(), 3000);
+              toast('服务已交由底层独立任务执行静默更新与重启，约 15 秒后自动恢复...');
+              let countdown = 15;
+              btn.target.textContent = '正在重启并上线 (' + countdown + 's)...';
+              const cdTimer = setInterval(() => {
+                countdown--;
+                if(countdown > 0) {
+                  btn.target.textContent = '正在重启并上线 (' + countdown + 's)...';
+                } else {
+                  clearInterval(cdTimer);
+                  location.reload();
+                }
+              }, 1000);
             }
           }, 1000);
         }catch(err){
