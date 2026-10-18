@@ -326,8 +326,12 @@ func doApplyUpdate() error {
 	}
 	// 一并更新终端管理脚本。此前更新流程只替换二进制，
 	// 导致 /usr/local/bin/sout 永远停留在安装时的版本（脚本层修复无法下发）。
-	newFsh := filepath.Join(tmp, "f.sh")
-	hasNewFsh := extractBinary(tarPath, "f.sh", newFsh) == nil
+	newScript := filepath.Join(tmp, "s.sh")
+	hasNewScript := extractBinary(tarPath, "s.sh", newScript) == nil
+	if !hasNewScript {
+		newScript = filepath.Join(tmp, "f.sh")
+		hasNewScript = extractBinary(tarPath, "f.sh", newScript) == nil
+	}
 	_ = os.Remove(tarPath)
 
 	setUpdateProgress(func(p *UpdateProgress) {
@@ -336,12 +340,12 @@ func doApplyUpdate() error {
 	})
 
 	// 终端管理脚本(/usr/local/bin/sout)同步替换；失败不影响二进制主流程
-	if hasNewFsh {
-		if fi, e := os.Stat(newFsh); e == nil {
-			updLog("准备替换终端管理脚本: %s (%d 字节)", newFsh, fi.Size())
+	if hasNewScript {
+		if fi, e := os.Stat(newScript); e == nil {
+			updLog("准备替换终端管理脚本: %s (%d 字节)", newScript, fi.Size())
 		}
 		_ = copyFileMode("/usr/local/bin/sout", "/usr/local/bin/sout.prev", 0755)
-		if err := copyFileMode(newFsh, "/usr/local/bin/sout", 0755); err != nil {
+		if err := copyFileMode(newScript, "/usr/local/bin/sout", 0755); err != nil {
 			updLog("管理脚本替换失败: %v", err)
 			setUpdateProgress(func(p *UpdateProgress) {
 				p.Message = "管理脚本更新失败（二进制仍会更新）: " + err.Error()
@@ -350,7 +354,7 @@ func doApplyUpdate() error {
 			updLog("终端管理脚本已替换为 /usr/local/bin/sout")
 		}
 	} else {
-		updLog("安装包内未找到 f.sh，跳过管理脚本更新")
+		updLog("安装包内未找到 s.sh 或 f.sh，跳过管理脚本更新")
 	}
 
 	self, err := os.Executable()

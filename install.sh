@@ -594,7 +594,7 @@ ${k} = ${v}"
 
 optimize_low_memory() {
   # 1. 清理 /tmp 与 /var/tmp 历史残留的 tar.gz 与二进制 (释放内存)
-  rm -f /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/f.sh 2>/dev/null || true
+  rm -f /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/s.sh /tmp/f.sh 2>/dev/null || true
   rm -f /var/tmp/sout-linux-*.tar.gz /var/tmp/sout-server /var/tmp/tmp.* 2>/dev/null || true
 
   # 2. 彻底清除历史强加的 MemorySwapMax=0，避免突发瞬时尖峰因 0 容错直接触发内核 OOM Killer
@@ -1110,7 +1110,10 @@ else
   elif [[ -f "$TMP/sout" ]]; then
     install -m 755 "$TMP/sout" "$BIN"
   fi
-  if [[ -f "$TMP/f.sh" ]]; then
+  if [[ -f "$TMP/s.sh" ]]; then
+    install -m 755 "$TMP/s.sh" /usr/local/bin/sout
+    rm -f /usr/local/bin/f /usr/local/bin/sout-cli 2>/dev/null || true
+  elif [[ -f "$TMP/f.sh" ]]; then
     install -m 755 "$TMP/f.sh" /usr/local/bin/sout
     rm -f /usr/local/bin/f /usr/local/bin/sout-cli 2>/dev/null || true
   fi
@@ -1131,7 +1134,9 @@ detected_cc=$(get_tcp_congestion)
 echo "      当前系统生效的 TCP 拥塞控制算法: ${detected_cc}"
 
 echo "[5/6] 部署服务与终端管理命令..."
-if [[ -f f.sh ]]; then
+if [[ -f s.sh ]]; then
+  install -m 755 s.sh /usr/local/bin/sout
+elif [[ -f f.sh ]]; then
   install -m 755 f.sh /usr/local/bin/sout
 fi
 rm -f /usr/local/bin/f /usr/local/bin/sout-cli 2>/dev/null || true

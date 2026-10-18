@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -e
 
+# 捕获挂断与终止信号：当 SSH 会话关闭或连接断开时，立即自毁退出，杜绝孤儿进程驻留
+trap 'exit 0' SIGHUP SIGINT SIGTERM
+
 # ==============================================================================
 # 统一 JSON 字段读取：替代 grep -oE/cut/awk 解析（键不存在或解析失败时输出空，由调用点 :- 兜底）
 # ==============================================================================
@@ -485,7 +488,7 @@ BIN="/usr/local/bin/sout-server"
 WORK_DIR="/var/lib/sout"
 [[ ! -d "$WORK_DIR" && -d "/var/lib/fanout" ]] && WORK_DIR="/var/lib/fanout"
 DEFAULT_PORT=8899
-SOUT_VERSION="4.9.6"
+SOUT_VERSION="4.9.7"
 
 R='\033[31m'; G='\033[32m'; Y='\033[33m'; B='\033[34m'; D='\033[90m'; N='\033[0m'
 
@@ -626,7 +629,7 @@ ${k} = ${v}"
 
 optimize_low_memory() {
   # 1. 清理 /tmp 内存文件系统历史残留的 tar.gz 与二进制
-  rm -f /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/f.sh 2>/dev/null || true
+  rm -f /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/s.sh /tmp/f.sh 2>/dev/null || true
 
   # 2. 彻底清除历史强加的 MemorySwapMax=0，避免突发瞬时尖峰因 0 容错直接触发内核 OOM Killer
   sed -i '/MemorySwapMax/d' /etc/systemd/system/*.service.d/override.conf 2>/dev/null || true
@@ -639,7 +642,7 @@ optimize_low_memory() {
   fi
 
   # 1. 彻底清理 /tmp 与 /var/tmp 下的历史升级包与临时残留 (释放 tmpfs 内存)
-  rm -f /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/f.sh 2>/dev/null || true
+  rm -f /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/s.sh /tmp/f.sh 2>/dev/null || true
   rm -f /var/tmp/sout-linux-*.tar.gz /var/tmp/sout-server /var/tmp/tmp.* 2>/dev/null || true
 
   # 4. 调低 swappiness（从默认 100 降为 30），防止过早向虚拟 Swap 剧烈换页
@@ -853,7 +856,7 @@ public_ip() {
 
 pause() {
   echo
-  read -rp "  按回车键继续..." _
+  read -rp "  按回车键继续..." _ || exit 0
 }
 
 GATEWAY_META="${WORK_DIR}/gateway_meta.json"
@@ -958,7 +961,7 @@ show_info() {
   elif [[ -f "${WORK_DIR}/version" ]]; then
     cur_ver=$(cat "${WORK_DIR}/version" 2>/dev/null | tr -d ' \r\n')
   fi
-  [[ -z "$cur_ver" ]] && cur_ver="${SOUT_VERSION:-4.9.6}"
+  [[ -z "$cur_ver" ]] && cur_ver="${SOUT_VERSION:-4.9.7}"
 
   echo
   echo -e "  程序版本:    ${G}${cur_ver}${N}"
@@ -1208,7 +1211,7 @@ change_listen_and_port() {
   echo "  [1/2] 设置面板监听地址："
   echo "  1) 127.0.0.1 (仅内网，用于反代)"
   echo "  2) 0.0.0.0   (公网 IP 直接访问)"
-  read -rp "  请选择 [1/2] (直接回车保持当前: ${cur_addr}): " opt_addr
+  read -rp "  请选择 [1/2] (直接回车保持当前: ${cur_addr}): " opt_addr || exit 0
 
   case "$opt_addr" in
     1) new_addr="127.0.0.1" ;;
@@ -1219,7 +1222,7 @@ change_listen_and_port() {
 
   echo
   echo "  [2/2] 设置面板管理端口："
-  read -rp "  请输入新管理端口 (直接回车保持当前: ${cur_port}): " input_port
+  read -rp "  请输入新管理端口 (直接回车保持当前: ${cur_port}): " input_port || exit 0
   if [[ -z "$input_port" ]]; then
     new_port="$cur_port"
   elif ! [[ "$input_port" =~ ^[0-9]+$ ]] || (( input_port < 1 || input_port > 65535 )); then
@@ -1253,7 +1256,7 @@ change_panel_url() {
   cur=$(web_panel_url)
   echo
   echo -e "  当前面板 URL: ${B}${cur:-(未设置)}${N}"
-  read -rp "  请输入新面板 URL (如 https://example.com 或 https://example.com/，留空清除): " new_url
+  read -rp "  请输入新面板 URL (如 https://example.com 或 https://example.com/，留空清除): " new_url || exit 0
   new_url=$(echo "$new_url" | tr -d ' \r\n')
   # 去除结尾所有斜杠
   new_url=$(echo "$new_url" | sed -e 's:/*$::')
@@ -1270,7 +1273,7 @@ change_panel_url() {
 reset_password() {
   local pw
   echo
-  read -rp "  请输入新口令 (留空随机生成): " pw
+  read -rp "  请输入新口令 (留空随机生成): " pw || exit 0
   if [[ -z "$pw" ]]; then
     pw=$(head -c 9 /dev/urandom | od -An -tx1 | tr -d ' \n')
   fi
@@ -1283,7 +1286,7 @@ reset_password() {
 reset_basepath() {
   local bp
   echo
-  read -rp "  请输入新路径 (留空随机): " bp
+  read -rp "  请输入新路径 (留空随机): " bp || exit 0
   if [[ -z "$bp" ]]; then
     rm -f "$WORK_DIR/basepath"
     svc_restart
@@ -1320,7 +1323,7 @@ change_ssl() {
     echo "  3) 修改域名"
     echo "  0) 返回主菜单"
     echo
-    read -rp "  请选择 [0-3]: " opt
+    read -rp "  请选择 [0-3]: " opt || exit 0
     case "$opt" in
       1)
         json_set "$WORK_DIR/settings.json" "ssl_enabled" "false" "bool"
@@ -1329,8 +1332,8 @@ change_ssl() {
         ;;
       2)
         echo
-        read -rp "  请输入新 SSL 证书 (cert) 绝对路径: " new_cert
-        read -rp "  请输入新 SSL 私钥 (key) 绝对路径: " new_key
+        read -rp "  请输入新 SSL 证书 (cert) 绝对路径: " new_cert || exit 0
+        read -rp "  请输入新 SSL 私钥 (key) 绝对路径: " new_key || exit 0
         [[ -z "$new_cert" || -z "$new_key" ]] && { echo "  路径不能为空，未修改"; return; }
         if [[ ! -f "$new_cert" ]]; then
           echo -e "  ${R}证书文件不存在: ${new_cert}${N}"
@@ -1347,7 +1350,7 @@ change_ssl() {
         ;;
       3)
         echo
-        read -rp "  请输入新域名 (如 sout.example.com): " new_dom
+        read -rp "  请输入新域名 (如 sout.example.com): " new_dom || exit 0
         json_set "$WORK_DIR/settings.json" "ssl_domain" "$new_dom" "string"
         svc_restart
         echo -e "  ${G}域名已更新为: ${new_dom}${N}"
@@ -1360,12 +1363,12 @@ change_ssl() {
     echo "  1) 开启 SSL (HTTPS)"
     echo "  0) 返回主菜单"
     echo
-    read -rp "  请选择 [0-1]: " opt
+    read -rp "  请选择 [0-1]: " opt || exit 0
     if [[ "$opt" == "1" ]]; then
       echo
-      read -rp "  请输入绑定域名 (如 sout.example.com，可选留空): " new_dom
-      read -rp "  请输入 SSL 证书 (cert) 绝对路径: " new_cert
-      read -rp "  请输入 SSL 私钥 (key) 绝对路径: " new_key
+      read -rp "  请输入绑定域名 (如 sout.example.com，可选留空): " new_dom || exit 0
+      read -rp "  请输入 SSL 证书 (cert) 绝对路径: " new_cert || exit 0
+      read -rp "  请输入 SSL 私钥 (key) 绝对路径: " new_key || exit 0
       if [[ -z "$new_cert" || -z "$new_key" ]]; then
         echo -e "  ${R}证书与私钥路径不能为空！${N}"
         return
@@ -1406,7 +1409,7 @@ cleanup_sui() {
 uninstall_sout_only() {
   local yes
   echo
-  read -rp "  确定仅卸载 sout 插件服务吗？[y/N]: " yes
+  read -rp "  确定仅卸载 sout 插件服务吗？[y/N]: " yes || exit 0
   [[ ${yes,,} == y ]] || { echo "  已取消"; return; }
 
   echo "  正在停止并卸载 sout 及反代服务..."
@@ -1520,7 +1523,7 @@ uninstall_sout_only() {
 uninstall_all() {
   local yes
   echo
-  read -rp "  ⚠️ 确定彻底卸载所有组件吗？所有节点、配置与证书将被完全清理！[y/N]: " yes
+  read -rp "  ⚠️ 确定彻底卸载所有组件吗？所有节点、配置与证书将被完全清理！[y/N]: " yes || exit 0
   [[ ${yes,,} == y ]] || { echo "  已取消"; return; }
 
   echo "  正在停止并彻底清理所有服务与组件..."
@@ -1602,7 +1605,7 @@ do_uninstall() {
   echo -e "   0) 取消并返回"
   echo -e "${D}----------------------------------------${N}"
   local opt
-  read -rp "  请选择 [0-2]: " opt
+  read -rp "  请选择 [0-2]: " opt || exit 0
   case "$opt" in
     1) uninstall_sout_only ;;
     2) uninstall_all ;;
@@ -1701,7 +1704,7 @@ check_and_update() {
     if [[ ! -t 0 ]]; then
       do_up="y"
     else
-      read -rp "  是否立即更新到最新版本？[Y/n]: " do_up
+      read -rp "  是否立即更新到最新版本？[Y/n]: " do_up || exit 0
     fi
     [[ ${do_up,,} == n ]] && return
   else
@@ -1709,7 +1712,7 @@ check_and_update() {
     if [[ ! -t 0 ]]; then
       force_up="y"
     else
-      read -rp "  是否仍要重新下载并覆盖安装 ${tag_name}？[y/N]: " force_up
+      read -rp "  是否仍要重新下载并覆盖安装 ${tag_name}？[y/N]: " force_up || exit 0
     fi
     [[ ${force_up,,} == y ]] || return
   fi
@@ -1774,8 +1777,14 @@ check_and_update() {
   chmod +x "$target_bin" 2>/dev/null || true
   ln -sf "$target_bin" /usr/local/bin/fanout 2>/dev/null || true
 
-  if [[ -f "$tmp_dir/f.sh" ]]; then
-    cat "$tmp_dir/f.sh" > /usr/local/bin/sout.new
+  local script_pkg=""
+  if [[ -f "$tmp_dir/s.sh" ]]; then
+    script_pkg="$tmp_dir/s.sh"
+  elif [[ -f "$tmp_dir/f.sh" ]]; then
+    script_pkg="$tmp_dir/f.sh"
+  fi
+  if [[ -n "$script_pkg" ]]; then
+    cat "$script_pkg" > /usr/local/bin/sout.new
     chmod +x /usr/local/bin/sout.new
     mv -f /usr/local/bin/sout.new /usr/local/bin/sout
     rm -f /usr/local/bin/f /usr/local/bin/sout-cli 2>/dev/null || true
@@ -1783,7 +1792,7 @@ check_and_update() {
 
   mkdir -p "${WORK_DIR}" 2>/dev/null || true
   echo "$tag_name" > "${WORK_DIR}/version" 2>/dev/null || true
-  rm -rf "$tmp_dir" /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/fanout /tmp/f.sh 2>/dev/null || true
+  rm -rf "$tmp_dir" /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/fanout /tmp/s.sh /tmp/f.sh 2>/dev/null || true
 
   echo
   echo -e "  ${B}[+] 正在启动服务并加载最新版本配置...${N}"
@@ -1847,7 +1856,7 @@ CADDY_META="$GATEWAY_META"
 
 pause() {
   echo
-  read -rp "  按回车键继续..." _
+  read -rp "  按回车键继续..." _ || exit 0
 }
 
 get_sys_arch() {
@@ -2356,7 +2365,7 @@ disable_caddy_proxy() {
   local force="${1:-}"
   if [[ "$force" != "force" && "$force" != "-y" ]]; then
     echo
-    read -rp "  确定关闭 Cloudflare 隧道反代并恢复默认独立端口模式吗？[y/N]: " yes
+    read -rp "  确定关闭 Cloudflare 隧道反代并恢复默认独立端口模式吗？[y/N]: " yes || exit 0
     [[ ${yes,,} == y ]] || { echo "  已取消"; return; }
   fi
 
@@ -2437,20 +2446,20 @@ caddy_interactive_setup() {
   echo -e "${D}----------------------------------------------------------------${N}"
 
   local domain tunnel_token tunnel_port
-  read -rp "  1. 请输入您的访问域名 (如 example.com): " domain
+  read -rp "  1. 请输入您的访问域名 (如 example.com): " domain || exit 0
   domain=$(echo "$domain" | tr -d ' 
 ')
   [[ -z "$domain" ]] && { echo -e "  ${R}域名不能为空！${N}"; return 1; }
 
   echo -e "  ${D}💡 提示：前往 Cloudflare Zero Trust -> Networks -> Tunnels 创建隧道并复制 Token${N}"
-  read -rp "  2. 请输入 Cloudflare 隧道 Token (eyJh...): " tunnel_token
+  read -rp "  2. 请输入 Cloudflare 隧道 Token (eyJh...): " tunnel_token || exit 0
   tunnel_token=$(echo "$tunnel_token" | tr -d ' 
 ')
   [[ -z "$tunnel_token" ]] && { echo -e "  ${R}隧道 Token 不能为空！${N}"; return 1; }
 
   echo
   echo -e "  ${D}💡 本地回源端口用于 cloudflared 将流量转发至内置轻量反代网关，默认 8081 即可${N}"
-  read -rp "  3. 请输入本地回源端口 [默认 8081]: " tunnel_port
+  read -rp "  3. 请输入本地回源端口 [默认 8081]: " tunnel_port || exit 0
   tunnel_port=$(echo "$tunnel_port" | tr -d ' \r\n')
   tunnel_port="${tunnel_port:-8081}"
 
@@ -2740,7 +2749,7 @@ apply_cf_ssl_cert() {
   echo
 
   local domain cf_token
-  read -rp "  [1/2] 请输入要申请证书的域名 (如 example.com): " domain
+  read -rp "  [1/2] 请输入要申请证书的域名 (如 example.com): " domain || exit 0
   domain=$(echo "$domain" | tr -d ' \r\n' | sed -e 's|^https\?://||' -e 's|/.*||')
   if [[ -z "$domain" ]]; then
     echo -e "  ${R}域名不能为空，已取消申请。${N}"
@@ -2771,7 +2780,7 @@ apply_cf_ssl_cert() {
       fi
     fi
     echo
-    read -rp "  是否要强制重新申请并覆盖本地证书？[y/N] (默认 N): " overwrite
+    read -rp "  是否要强制重新申请并覆盖本地证书？[y/N] (默认 N): " overwrite || exit 0
     overwrite=$(echo "$overwrite" | tr -d ' \r\n')
     if [[ "$overwrite" != "y" && "$overwrite" != "Y" ]]; then
       echo -e "  ${Y}已保留本地现有证书，取消重新申请。${N}"
@@ -2784,7 +2793,7 @@ apply_cf_ssl_cert() {
   echo
   echo -e "  [2/2] 请输入 Cloudflare API 令牌 (API Token):"
   echo -e "  ${D}提示: 该令牌需包含权限「区域.DNS / 编辑」 (Zone.DNS:Edit)${N}"
-  read -rp "  API Token: " cf_token
+  read -rp "  API Token: " cf_token || exit 0
   cf_token=$(echo "$cf_token" | tr -d ' \r\n')
   if [[ -z "$cf_token" ]]; then
     echo -e "  ${R}API Token 不能为空，已取消申请。${N}"
@@ -2859,6 +2868,7 @@ view_cf_ssl_certs() {
 
 cf_ssl_menu() {
   while true; do
+    [[ ! -t 0 ]] && exit 0
     echo
     echo -e "${B}========================================${N}"
     echo -e "${B}  Cloudflare SSL 证书申请与管理 (纯 Go 原生引擎)${N}"
@@ -2868,7 +2878,7 @@ cf_ssl_menu() {
     echo -e "   3) 手动立即执行全部域名证书续期检查"
     echo -e "   0) 返回上级菜单"
     echo -e "${D}----------------------------------------${N}"
-    read -rp "  请选择 [0-3]: " opt
+    read -rp "  请选择 [0-3]: " opt || exit 0
     case "$opt" in
       1) view_cf_ssl_certs; pause ;;
       2) apply_cf_ssl_cert; pause ;;
@@ -3081,7 +3091,7 @@ create_tuic_hy2_nodes() {
     echo -e "   3) 使用自签证书 (自动生成 10 年期自签证书，启用客户端允许不安全连接)"
     echo -e "   0) 返回上级菜单"
     echo -e "${D}----------------------------------------${N}"
-    read -rp "  请选择 [0-3] (默认 1): " cert_opt
+    read -rp "  请选择 [0-3] (默认 1): " cert_opt || exit 0
     cert_opt=$(echo "$cert_opt" | tr -d ' \r\n')
     [[ -z "$cert_opt" ]] && cert_opt="1"
     [[ "$cert_opt" == "0" ]] && return 0
@@ -3137,7 +3147,7 @@ create_tuic_hy2_nodes() {
           idx=$((idx + 1))
         done
         echo -e "   0) 取消"
-        read -rp "  请选择 [1-${count}]: " sel
+        read -rp "  请选择 [1-${count}]: " sel || exit 0
         sel=$(echo "$sel" | tr -d ' \r\n')
         if [[ "$sel" =~ ^[1-9][0-9]*$ ]] && [[ "$sel" -le "$count" ]]; then
           IFS='|' read -r cert_domain cert_file key_file <<< "${valid_domains[$((sel - 1))]}"
@@ -3149,19 +3159,19 @@ create_tuic_hy2_nodes() {
       fi
 
     elif [[ "$cert_opt" == "2" ]]; then
-      read -rp "  请输入证书对应域名 (如 example.com): " cert_domain
+      read -rp "  请输入证书对应域名 (如 example.com): " cert_domain || exit 0
       cert_domain=$(echo "$cert_domain" | tr -d ' \r\n' | sed -e 's|^https\?://||' -e 's|/.*||')
       if [[ -z "$cert_domain" ]]; then
         echo -e "  ${R}[!] 域名不能为空！${N}"
         return 1
       fi
-      read -rp "  请输入公钥证书文件绝对路径 (如 /etc/ssl/fullchain.pem): " cert_file
+      read -rp "  请输入公钥证书文件绝对路径 (如 /etc/ssl/fullchain.pem): " cert_file || exit 0
       cert_file=$(echo "$cert_file" | tr -d ' \r\n')
       if [[ ! -s "$cert_file" ]]; then
         echo -e "  ${R}[!] 公钥文件不存在或为空: ${cert_file}${N}"
         return 1
       fi
-      read -rp "  请输入私钥文件绝对路径 (如 /etc/ssl/privkey.pem): " key_file
+      read -rp "  请输入私钥文件绝对路径 (如 /etc/ssl/privkey.pem): " key_file || exit 0
       key_file=$(echo "$key_file" | tr -d ' \r\n')
       if [[ ! -s "$key_file" ]]; then
         echo -e "  ${R}[!] 私钥文件不存在或为空: ${key_file}${N}"
@@ -3169,7 +3179,7 @@ create_tuic_hy2_nodes() {
       fi
 
     elif [[ "$cert_opt" == "3" ]]; then
-      read -rp "  请输入自签证书伪装域名 [直接回车默认 apple.com]: " cert_domain
+      read -rp "  请输入自签证书伪装域名 [直接回车默认 apple.com]: " cert_domain || exit 0
       cert_domain=$(echo "$cert_domain" | tr -d ' \r\n' | sed -e 's|^https\?://||' -e 's|/.*||')
       [[ -z "$cert_domain" ]] && cert_domain="apple.com"
 
@@ -3233,7 +3243,7 @@ create_tuic_hy2_nodes() {
       if [[ -n "$in_domain" ]]; then
         action_mode="change_existing_only"
       else
-        read -rp "  是否仅仅变更现有节点的证书(TLS)？[y/N]: " do_chg
+        read -rp "  是否仅仅变更现有节点的证书(TLS)？[y/N]: " do_chg || exit 0
         do_chg=$(echo "$do_chg" | tr -d ' \r\n' | tr '[:upper:]' '[:lower:]')
         if [[ "$do_chg" != "y" && "$do_chg" != "yes" ]]; then
           echo -e "  ${D}已取消操作，未对现有节点进行修改。${N}"
@@ -3264,7 +3274,7 @@ create_tuic_hy2_nodes() {
         echo -e "   2) 仅变更现有 [${exist_type}] 节点的证书，不补齐缺失节点"
         echo -e "   0) 取消退出"
         echo -e "${D}----------------------------------------${N}"
-        read -rp "  请选择 [0-2] (默认 1): " single_choice
+        read -rp "  请选择 [0-2] (默认 1): " single_choice || exit 0
         single_choice=$(echo "$single_choice" | tr -d ' \r\n')
         [[ -z "$single_choice" ]] && single_choice="1"
 
@@ -3310,6 +3320,7 @@ create_tuic_hy2_nodes() {
 
 caddy_menu() {
   while true; do
+    [[ ! -t 0 ]] && exit 0
     echo
     echo -e "${B}========================================${N}"
     echo -e "${B}  Cloudflare隧道连接与轻量流量分流管理${N}"
@@ -3367,7 +3378,7 @@ caddy_menu() {
       echo "  4) 重启 Cloudflare 隧道服务"
       echo "  0) 返回上级菜单"
       echo
-      read -rp "  请选择 [0-4]: " opt
+      read -rp "  请选择 [0-4]: " opt || exit 0
       case "$opt" in
         1)
           if [[ -f "$CADDY_META" ]]; then
@@ -3466,7 +3477,7 @@ caddy_menu() {
       echo "  2) 使用固定域名 + 隧道 Token 配置"
       echo "  0) 返回上级菜单"
       echo
-      read -rp "  请选择 [0-2]: " opt
+      read -rp "  请选择 [0-2]: " opt || exit 0
       case "$opt" in
         1) setup_caddy_proxy "" "" ""; pause ;;
         2) caddy_interactive_setup; pause ;;
@@ -3479,6 +3490,7 @@ caddy_menu() {
 
 menu() {
   while true; do
+    [[ ! -t 0 ]] && exit 0
     clear
     echo -e "${B}========================================${N}"
     echo -e "${B}  sout - s-ui 动态家宽出口插件 (VPN Gate) ${N}"
@@ -3495,7 +3507,7 @@ menu() {
     echo -e "  12) 检查/更新版本    13) 卸载"
     echo -e "   0) 退出脚本"
     echo -e "${D}----------------------------------------${N}"
-    read -rp "  请选择 [0-13]: " choice
+    read -rp "  请选择 [0-13]: " choice || exit 0
 
     case "$choice" in
       1) svc_restart && echo -e "\n  ${G}服务已启动/重启${N}"; pause ;;
@@ -3593,7 +3605,10 @@ case "${1:-}" in
   update)    check_and_update ;;
   upgrade)   check_and_update ;;
   uninstall) do_uninstall ;;
-  "")        menu ;;
+  "")
+    [[ ! -t 0 ]] && exit 0
+    menu
+    ;;
   *)
     echo "用法: sout [start|stop|restart|status|log|info|listen|port|url|ssl|tunnel|gateway|cert|tuic|hy2|update|uninstall]"
     echo "直接在终端输入 sout 即可进入交互控制菜单"

@@ -23,7 +23,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v4.9.6"
+var version = "v4.9.7"
 
 var (
 	cgroupV2Path    = "/sys/fs/cgroup/memory.max"
@@ -685,6 +685,10 @@ func syncGatewayBasePath(dir, oldBP, newBP string) {
 func findSoutScript() string {
 	candidates := []string{
 		"/usr/local/bin/sout",
+		"/usr/local/bin/s",
+		"/etc/sout/s.sh",
+		"./s.sh",
+		"s.sh",
 		"/usr/local/bin/f",
 		"/etc/sout/f.sh",
 		"./f.sh",
@@ -722,7 +726,7 @@ func apiTunnelHandler(w http.ResponseWriter, r *http.Request) {
 
 	scriptPath := findSoutScript()
 	if scriptPath == "" {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "未找到 sout 管理脚本 (/usr/local/bin/sout 或 f.sh)"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "未找到 sout 管理脚本 (/usr/local/bin/sout 或 s.sh)"})
 		return
 	}
 
