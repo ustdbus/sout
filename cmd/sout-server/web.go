@@ -49,7 +49,7 @@ const indexHTMLTemplate = `<!DOCTYPE html>
   --bad-soft:rgba(248,81,73,.1); --bad-line:rgba(248,81,73,.35);
   --hover:rgba(255,255,255,.02);
   --danger:var(--bad);
-  --vine-image:none; --vine-opacity:0;
+  --vine-tl-image:none; --vine-tr-image:none; --vine-bl-image:none; --vine-br-image:none; --vine-opacity:0;
   --art-filter:none; --deco-filter:none;
   --art-image:none; --art-size:auto; --art-pos:center; --art-opacity:0; --art-mask:none;
   --deco-image:none; --deco-size:auto; --deco-pos:center; --deco-opacity:0; --deco-mask:none;
@@ -78,7 +78,8 @@ html[data-theme="forest"]{
   --art-image:url("__OZ_FOREST_BG__"); --art-size:cover; --art-pos:center 34%; --art-opacity:.13; --art-blend:normal; --art-mask:linear-gradient(to bottom, transparent 0%, rgba(0,0,0,.3) 16%, #000 46%, #000 100%); --art-filter:blur(3px) saturate(1.2) brightness(.9);
   --deco-image:url("__OZ_FOREST_FG__"); --deco-size:min(700px, 62vw) auto; --deco-pos:left -6% bottom -10%; --deco-opacity:.2; --deco-mask:none;
   --extra-image:none;
-  --vine-image:url("__OZ_VINE__"); --vine-opacity:.38;
+  --vine-tl-image:url("__OZ_VINE_TL__"); --vine-tr-image:url("__OZ_VINE_TR__");
+  --vine-bl-image:url("__OZ_VINE_BL__"); --vine-br-image:url("__OZ_VINE_BR__"); --vine-opacity:.42;
   --pattern-image:radial-gradient(circle at 18% 22%, rgba(94,234,212,.14) 0 1.2px, transparent 2px),radial-gradient(circle at 72% 64%, rgba(196,167,245,.12) 0 1px, transparent 1.8px),radial-gradient(circle at 41% 82%, rgba(240,166,202,.1) 0 1px, transparent 1.6px),repeating-linear-gradient(115deg, rgba(94,234,212,.025) 0 1px, transparent 1px 30px);
   --pattern-size:200px 200px,260px 260px,230px 230px,auto;
   --pattern-position:0 0,37px 53px,91px 17px,0 0;
@@ -114,12 +115,12 @@ html::after{content:"";position:fixed;inset:-12%;z-index:-1;pointer-events:none;
 #ozParticles{position:fixed;inset:0;z-index:-1;width:100%;height:100%;pointer-events:none}
 /* 屏幕边缘伸入的藤蔓画框 */
 .oz-vines{position:fixed;inset:0;z-index:-1;pointer-events:none;overflow:hidden}
-.oz-vines .vine{position:absolute;width:min(400px,34vw);height:min(400px,34vw);background-image:var(--vine-image);background-repeat:no-repeat;background-size:contain;opacity:var(--vine-opacity);filter:drop-shadow(0 10px 22px rgba(0,0,0,.4));animation:vine-sway 9s ease-in-out infinite}
-.vine-tl{left:-52px;top:54px}
-.vine-tr{right:-52px;top:62px;scale:-1 1;animation-delay:-2s;animation-direction:reverse}
-.vine-bl{left:-52px;bottom:-52px;scale:1 -1;animation-delay:-4s}
-.vine-br{right:-52px;bottom:-52px;scale:-1 -1;animation-delay:-6s;animation-direction:reverse}
-@keyframes vine-sway{0%,100%{rotate:0deg}50%{rotate:1.2deg}}
+.oz-vines .vine{position:absolute;width:min(400px,34vw);height:min(400px,34vw);background-repeat:no-repeat;background-size:contain;opacity:var(--vine-opacity);filter:drop-shadow(0 10px 22px rgba(0,0,0,.4));transform-origin:var(--vine-origin,center);animation:vine-sway var(--vine-dur,9s) ease-in-out infinite alternate;animation-delay:var(--vine-delay,0s)}
+.vine-tl{left:-52px;top:54px;--vine-origin:left top;--vine-dur:9s;--vine-amp:2.2deg;background-image:var(--vine-tl-image)}
+.vine-tr{right:-52px;top:62px;--vine-origin:right top;--vine-dur:11s;--vine-amp:1.8deg;--vine-delay:-3s;background-image:var(--vine-tr-image)}
+.vine-bl{left:-52px;bottom:-52px;--vine-origin:left bottom;--vine-dur:8s;--vine-amp:2.6deg;--vine-delay:-5s;background-image:var(--vine-bl-image)}
+.vine-br{right:-52px;bottom:-52px;--vine-origin:right bottom;--vine-dur:12s;--vine-amp:1.6deg;--vine-delay:-2s;background-image:var(--vine-br-image)}
+@keyframes vine-sway{from{transform:rotate(calc(-1 * var(--vine-amp)))}to{transform:rotate(var(--vine-amp))}}
 @media (prefers-reduced-motion:reduce){.oz-vines .vine{animation:none}}
 @media (max-width:760px){.oz-vines .vine{width:230px;height:230px}}
 header{position:relative;display:flex;align-items:center;gap:16px;padding:12px 20px;
