@@ -507,7 +507,7 @@ func apiNodeCreatePresetHandler(mgr *Manager) http.HandlerFunc {
 				presetTitle = "TUIC / Hysteria2"
 			}
 			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": fmt.Sprintf("检测到系统中已存在此前创建过的 %s 节点 (%s)，无法重复创建！如需重新生成，请先在下方节点列表中删除已有节点。", presetTitle, info.Detail),
+				"error": fmt.Sprintf("已存在 %s 节点 (%s)，如需重新创建请先删除现有节点。", presetTitle, info.Detail),
 			})
 			return
 		}

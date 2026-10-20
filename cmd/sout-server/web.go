@@ -879,136 +879,135 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
   </div>
 </div>
 
-<!-- Modal: 添加节点 (快捷预设与兜底) -->
+<!-- Modal: 添加节点 -->
 <div class="modal" id="addNodePresetModal">
   <div class="sheet" style="max-width:640px">
     <div class="head">
       <h2 style="display:flex;align-items:center;gap:8px">
         <svg viewBox="0 0 24 24" style="color:var(--accent)"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
-        添加节点 (快捷预设与兜底)
+        添加节点
       </h2>
       <span class="spacer"></span>
       <button class="icon" data-close="addNodePresetModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
     <div class="body" style="padding-top:14px">
       <!-- 模式提示横幅 -->
-      <div style="background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:8px 12px;margin-bottom:14px;font-size:12px;display:flex;align-items:center;justify-content:space-between">
-        <span>当前后端模式: <b id="presetBackendMode" style="color:var(--accent)">检测中...</b></span>
-        <span style="font-size:11px;color:var(--dim)">独立配置 · 严格隔离 · 复用引擎逻辑</span>
+      <div style="background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:8px 12px;margin-bottom:14px;font-size:12px">
+        当前模式: <b id="presetBackendMode" style="color:var(--accent)">检测中...</b>
       </div>
 
       <!-- 预设选项卡切换按钮 -->
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px">
         <button class="preset-tab-btn active" id="tabBtnVlessReality" style="padding:10px 8px;text-align:center;border-radius:6px;border:1px solid var(--accent);background:var(--card);cursor:pointer">
           <div id="tabTitleVlessReality" style="font-weight:600;font-size:13px;color:var(--text)">VLESS-Reality</div>
-          <div style="font-size:11px;color:var(--dim);margin-top:2px">直连 · 免域名免证书</div>
+          <div style="font-size:11px;color:var(--dim);margin-top:2px">直连 · 无需证书</div>
         </button>
         <button class="preset-tab-btn" id="tabBtnVlessArgo" style="padding:10px 8px;text-align:center;border-radius:6px;border:1px solid var(--line);background:var(--card);cursor:pointer">
           <div id="tabTitleVlessArgo" style="font-weight:600;font-size:13px;color:var(--text)">VLESS-Argo</div>
-          <div style="font-size:11px;color:var(--dim);margin-top:2px">隧道 · CDN路径分流</div>
+          <div style="font-size:11px;color:var(--dim);margin-top:2px">隧道 · CDN分流</div>
         </button>
         <button class="preset-tab-btn" id="tabBtnTuicHy2" style="padding:10px 8px;text-align:center;border-radius:6px;border:1px solid var(--line);background:var(--card);cursor:pointer">
           <div id="tabTitleTuicHy2" style="font-weight:600;font-size:13px;color:var(--text)">TUIC / Hysteria2</div>
-          <div style="font-size:11px;color:var(--dim);margin-top:2px">QUIC高速 · 双节点</div>
+          <div style="font-size:11px;color:var(--dim);margin-top:2px">QUIC · 双节点</div>
         </button>
       </div>
 
       <!-- 内容卡片 1: VLESS-Reality (默认) -->
       <div id="tabContentVlessReality" class="preset-tab-content" style="display:block">
         <div style="background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:14px;font-size:12px;line-height:1.6">
-          <div style="font-weight:600;font-size:13px;color:var(--accent);margin-bottom:6px">🛡️ VLESS-Reality (直连抗封锁推荐)</div>
+          <div style="font-weight:600;font-size:13px;color:var(--accent);margin-bottom:6px">VLESS-Reality</div>
           <div style="color:var(--dim);margin-bottom:10px">
-            基于 X25519 秘钥交换与 TLS 伪装握手，<b>无需自己的域名与 SSL 证书</b>，直连速度快且抗探测性极高，是最可靠的基础兜底节点。
+            直连节点，无需自备域名与 SSL 证书。
           </div>
           <div id="presetRealityExistAlert" style="display:none;background:rgba(210,153,34,0.15);border:1px solid var(--warn);color:var(--warn);border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;line-height:1.5"></div>
           <div style="display:flex;flex-direction:column;gap:10px">
             <div>
-              <label style="display:block;font-weight:600;margin-bottom:4px">伪装目标域名 (SNI / Dest):</label>
+              <label style="display:block;font-weight:600;margin-bottom:4px">伪装域名 (SNI):</label>
               <input id="presetRealitySNI" type="text" value="apple.com" placeholder="例如 apple.com 或 www.microsoft.com" style="width:100%;box-sizing:border-box">
             </div>
             <div>
-              <label style="display:block;font-weight:600;margin-bottom:4px">公网监听端口 (留空或 0 为自动分配):</label>
-              <input id="presetRealityPort" type="number" placeholder="默认 2083 (被占则自动分配空闲端口)" style="width:100%;box-sizing:border-box">
+              <label style="display:block;font-weight:600;margin-bottom:4px">监听端口 (留空自动分配):</label>
+              <input id="presetRealityPort" type="number" placeholder="默认 2083" style="width:100%;box-sizing:border-box">
             </div>
           </div>
         </div>
         <div style="display:flex;justify-content:flex-end">
-          <button id="createPresetRealityBtn" class="primary" style="padding:8px 20px">⚡ 立即生成 VLESS-Reality 节点</button>
+          <button id="createPresetRealityBtn" class="primary" style="padding:8px 20px">创建节点</button>
         </div>
       </div>
 
       <!-- 内容卡片 2: VLESS-Argo -->
       <div id="tabContentVlessArgo" class="preset-tab-content" style="display:none">
         <div style="background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:14px;font-size:12px;line-height:1.6">
-          <div style="font-weight:600;font-size:13px;color:var(--accent);margin-bottom:6px">☁️ VLESS-Argo (Cloudflare 隧道路径分流)</div>
+          <div style="font-weight:600;font-size:13px;color:var(--accent);margin-bottom:6px">VLESS-Argo</div>
           <div style="color:var(--dim);margin-bottom:10px">
-            节点流量通过本地 127.0.0.1 回源至 Cloudflare 隧道，由 CDN 边缘 443 端口接入并伪装。
+            通过 Cloudflare 隧道 443 端口接入与回源。
           </div>
           <div id="presetArgoExistAlert" style="display:none;background:rgba(210,153,34,0.15);border:1px solid var(--warn);color:var(--warn);border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;line-height:1.5"></div>
           <div id="presetArgoWarn" style="display:none;background:rgba(210,153,34,0.15);border:1px solid var(--warn);color:var(--warn);border-radius:6px;padding:8px 12px;margin-bottom:10px">
-            ⚠️ 检测到当前尚未配置或启动 Cloudflare 隧道，建议先在上方配置隧道，或手动在下方填入托管域名。
+            ⚠️ 未检测到运行中的隧道，请先配置隧道或手动填入域名。
           </div>
           <div style="display:flex;flex-direction:column;gap:10px">
             <div>
-              <label style="display:block;font-weight:600;margin-bottom:4px">托管域名 (Domain):</label>
+              <label style="display:block;font-weight:600;margin-bottom:4px">域名:</label>
               <input id="presetArgoDomain" type="text" placeholder="例如 node.example.com" style="width:100%;box-sizing:border-box">
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
               <div>
-                <label style="display:block;font-weight:600;margin-bottom:4px">回源端口 (Port):</label>
+                <label style="display:block;font-weight:600;margin-bottom:4px">回源端口:</label>
                 <input id="presetArgoPort" type="number" value="2082" placeholder="默认 2082" style="width:100%;box-sizing:border-box">
               </div>
               <div>
-                <label style="display:block;font-weight:600;margin-bottom:4px">WebSocket 分流路径:</label>
+                <label style="display:block;font-weight:600;margin-bottom:4px">WebSocket 路径:</label>
                 <input id="presetArgoPath" type="text" value="/wsargo" placeholder="例如 /wsargo" style="width:100%;box-sizing:border-box">
               </div>
             </div>
           </div>
         </div>
         <div style="display:flex;justify-content:flex-end">
-          <button id="createPresetArgoBtn" class="primary" style="padding:8px 20px">⚡ 立即生成 VLESS-Argo 节点</button>
+          <button id="createPresetArgoBtn" class="primary" style="padding:8px 20px">创建节点</button>
         </div>
       </div>
 
       <!-- 内容卡片 3: TUIC / Hysteria2 -->
       <div id="tabContentTuicHy2" class="preset-tab-content" style="display:none">
         <div style="background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:14px;font-size:12px;line-height:1.6">
-          <div style="font-weight:600;font-size:13px;color:var(--accent);margin-bottom:6px">🚀 TUIC / Hysteria2 (下一代 UDP/QUIC 极速双节点)</div>
+          <div style="font-weight:600;font-size:13px;color:var(--accent);margin-bottom:6px">TUIC / Hysteria2</div>
           <div style="color:var(--dim);margin-bottom:10px">
-            基于 QUIC 协议的高速防拥塞代理协议，支持 BBR 算法，自动同时创建 TUIC 和 Hysteria2 两个独立节点。
+            基于 QUIC 协议，同时创建 TUIC 与 Hysteria2 两个节点。
           </div>
           <div id="presetTuicHy2ExistAlert" style="display:none;background:rgba(210,153,34,0.15);border:1px solid var(--warn);color:var(--warn);border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;line-height:1.5"></div>
           <div style="display:flex;flex-direction:column;gap:10px">
             <div>
-              <label style="display:block;font-weight:600;margin-bottom:6px">选择 TLS 证书模式:</label>
+              <label style="display:block;font-weight:600;margin-bottom:6px">证书配置:</label>
               <div style="display:flex;flex-direction:column;gap:8px">
                 <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
                   <input type="radio" name="tuicCertType" value="self_signed" checked>
-                  <span><b>自动生成 10 年期自签证书</b> (完全免域名/免证书门槛，自动开启 Insecure 兼容)</span>
+                  <span>自签证书 (客户端需开启跳过证书校验)</span>
                 </label>
                 <label id="tuicLocalCertRow" style="display:none;align-items:center;gap:6px;cursor:pointer">
                   <input type="radio" name="tuicCertType" value="local_acme">
-                  <span><b>使用本地已有的有效证书</b> (扫描 /home/acme/ 目录发现)</span>
+                  <span>使用本地证书 (/home/acme/)</span>
                 </label>
                 <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
                   <input type="radio" name="tuicCertType" value="custom">
-                  <span><b>手动指定证书与私钥路径</b></span>
+                  <span>指定证书路径</span>
                 </label>
               </div>
             </div>
 
             <div id="tuicLocalCertSelectBox" style="display:none;margin-top:6px">
-              <label style="display:block;font-weight:600;margin-bottom:4px">选择本地证书域名:</label>
+              <label style="display:block;font-weight:600;margin-bottom:4px">选择本地证书:</label>
               <select id="tuicLocalCertSelect" style="width:100%;box-sizing:border-box;background:var(--input-bg);color:var(--text);border:1px solid var(--line);padding:8px;border-radius:6px"></select>
             </div>
 
             <div id="tuicCustomCertBox" style="display:none;margin-top:6px;flex-direction:column;gap:8px">
               <div>
-                <label style="display:block;font-weight:600;margin-bottom:4px">证书对应域名:</label>
+                <label style="display:block;font-weight:600;margin-bottom:4px">域名:</label>
                 <input id="tuicCustomDomain" type="text" placeholder="例如 example.com" style="width:100%;box-sizing:border-box">
               </div>
               <div>
-                <label style="display:block;font-weight:600;margin-bottom:4px">公钥证书文件路径 (fullchain.pem):</label>
+                <label style="display:block;font-weight:600;margin-bottom:4px">证书文件路径 (fullchain.pem):</label>
                 <input id="tuicCustomCertFile" type="text" placeholder="/etc/ssl/fullchain.pem" style="width:100%;box-sizing:border-box">
               </div>
               <div>
@@ -1019,7 +1018,7 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
           </div>
         </div>
         <div style="display:flex;justify-content:flex-end">
-          <button id="createPresetTuicHy2Btn" class="primary" style="padding:8px 20px">⚡ 立即生成 TUIC & HY2 双节点</button>
+          <button id="createPresetTuicHy2Btn" class="primary" style="padding:8px 20px">创建节点</button>
         </div>
       </div>
     </div>
@@ -2579,7 +2578,7 @@ async function openAddNodePresetModal() {
 
   try {
     const info = await api('/api/node/preset_info');
-    const modeText = (info.panel_mode === 's-ui') ? 's-ui 外挂面板模式' : 'sing-box 独立轻量模式';
+    const modeText = (info.panel_mode === 's-ui') ? 's-ui 模式' : 'sing-box 独立模式';
     $('#presetBackendMode').textContent = modeText;
 
     if (info.domain) {
@@ -2625,15 +2624,15 @@ async function openAddNodePresetModal() {
     }
     if (rEx) {
       rAlert.style.display = 'block';
-      rAlert.innerHTML = '⚠️ <b>检测到当前系统中已存在此前创建过的 VLESS-Reality 节点</b> (' + esc(curExistingNodes.vless_reality.detail || '') + ')。<br>为防止端口与入站配置冲突，<b>无法重复创建</b>。如需重新生成，请先在下方节点列表中删除已有节点。';
+      rAlert.innerHTML = '⚠️ 已存在 VLESS-Reality 节点 (' + esc(curExistingNodes.vless_reality.detail || '') + ')。如需重新创建，请先删除现有节点。';
       rBtn.disabled = true;
-      rBtn.textContent = '⚠️ 已存在该节点 (不可重复创建)';
+      rBtn.textContent = '已存在该节点';
       rBtn.style.opacity = '0.6';
       rBtn.style.cursor = 'not-allowed';
     } else {
       rAlert.style.display = 'none';
       rBtn.disabled = false;
-      rBtn.textContent = '⚡ 立即生成 VLESS-Reality 节点';
+      rBtn.textContent = '创建节点';
       rBtn.style.opacity = '1';
       rBtn.style.cursor = 'pointer';
     }
@@ -2648,15 +2647,15 @@ async function openAddNodePresetModal() {
     }
     if (aEx) {
       aAlert.style.display = 'block';
-      aAlert.innerHTML = '⚠️ <b>检测到当前系统中已存在此前创建过的 VLESS-Argo 节点</b> (' + esc(curExistingNodes.vless_argo.detail || '') + ')。<br>为防止 WebSocket 路径与回源冲突，<b>无法重复创建</b>。如需重新生成，请先在下方节点列表中删除已有节点。';
+      aAlert.innerHTML = '⚠️ 已存在 VLESS-Argo 节点 (' + esc(curExistingNodes.vless_argo.detail || '') + ')。如需重新创建，请先删除现有节点。';
       aBtn.disabled = true;
-      aBtn.textContent = '⚠️ 已存在该节点 (不可重复创建)';
+      aBtn.textContent = '已存在该节点';
       aBtn.style.opacity = '0.6';
       aBtn.style.cursor = 'not-allowed';
     } else {
       aAlert.style.display = 'none';
       aBtn.disabled = false;
-      aBtn.textContent = '⚡ 立即生成 VLESS-Argo 节点';
+      aBtn.textContent = '创建节点';
       aBtn.style.opacity = '1';
       aBtn.style.cursor = 'pointer';
     }
@@ -2671,15 +2670,15 @@ async function openAddNodePresetModal() {
     }
     if (tEx) {
       tAlert.style.display = 'block';
-      tAlert.innerHTML = '⚠️ <b>检测到当前系统中已存在此前创建过的 TUIC / Hysteria2 节点</b> (' + esc(curExistingNodes.tuic_hy2.detail || '') + ')。<br>为防止 QUIC 端口冲突，<b>无法重复创建</b>。如需重新生成，请先在下方节点列表中删除已有节点。';
+      tAlert.innerHTML = '⚠️ 已存在 TUIC / Hysteria2 节点 (' + esc(curExistingNodes.tuic_hy2.detail || '') + ')。如需重新创建，请先删除现有节点。';
       tBtn.disabled = true;
-      tBtn.textContent = '⚠️ 已存在该节点 (不可重复创建)';
+      tBtn.textContent = '已存在该节点';
       tBtn.style.opacity = '0.6';
       tBtn.style.cursor = 'not-allowed';
     } else {
       tAlert.style.display = 'none';
       tBtn.disabled = false;
-      tBtn.textContent = '⚡ 立即生成 TUIC & HY2 双节点';
+      tBtn.textContent = '创建节点';
       tBtn.style.opacity = '1';
       tBtn.style.cursor = 'pointer';
     }
@@ -2723,14 +2722,14 @@ function initAddNodePresetEvents() {
   // 1. 生成 Reality
   $('#createPresetRealityBtn').onclick = async () => {
     if (curExistingNodes.vless_reality && curExistingNodes.vless_reality.exists) {
-      toast('系统中已存在 VLESS-Reality 节点，无法重复创建！如需重新生成请先删除旧节点。', true);
+      toast('已存在 VLESS-Reality 节点，如需重新创建请先删除旧节点。', true);
       return;
     }
 
     const btn = $('#createPresetRealityBtn');
     const origText = btn.textContent;
     btn.disabled = true;
-    btn.textContent = '正在生成 VLESS-Reality 节点...';
+    btn.textContent = '正在创建...';
 
     const sni = $('#presetRealitySNI').value.trim() || 'apple.com';
     const port = parseInt($('#presetRealityPort').value.trim(), 10) || 0;
@@ -2745,11 +2744,11 @@ function initAddNodePresetEvents() {
           port: port
         })
       });
-      toast(res.message || 'VLESS-Reality 节点创建成功！');
+      toast(res.message || '节点创建成功！');
       closeModal('addNodePresetModal');
       await refreshNodes();
     } catch(e) {
-      toast('创建 VLESS-Reality 失败: ' + e.message, true);
+      toast('创建失败: ' + e.message, true);
     } finally {
       btn.disabled = false;
       btn.textContent = origText;
@@ -2759,14 +2758,14 @@ function initAddNodePresetEvents() {
   // 2. 生成 Argo
   $('#createPresetArgoBtn').onclick = async () => {
     if (curExistingNodes.vless_argo && curExistingNodes.vless_argo.exists) {
-      toast('系统中已存在 VLESS-Argo 节点，无法重复创建！如需重新生成请先删除旧节点。', true);
+      toast('已存在 VLESS-Argo 节点，如需重新创建请先删除旧节点。', true);
       return;
     }
 
     const btn = $('#createPresetArgoBtn');
     const origText = btn.textContent;
     btn.disabled = true;
-    btn.textContent = '正在生成 VLESS-Argo 节点...';
+    btn.textContent = '正在创建...';
 
     const domain = $('#presetArgoDomain').value.trim();
     const port = parseInt($('#presetArgoPort').value.trim(), 10) || 2082;
@@ -2783,11 +2782,11 @@ function initAddNodePresetEvents() {
           ws_path: wsPath
         })
       });
-      toast(res.message || 'VLESS-Argo 节点创建成功！');
+      toast(res.message || '节点创建成功！');
       closeModal('addNodePresetModal');
       await refreshNodes();
     } catch(e) {
-      toast('创建 VLESS-Argo 失败: ' + e.message, true);
+      toast('创建失败: ' + e.message, true);
     } finally {
       btn.disabled = false;
       btn.textContent = origText;
@@ -2797,14 +2796,14 @@ function initAddNodePresetEvents() {
   // 3. 生成 TUIC & Hysteria2
   $('#createPresetTuicHy2Btn').onclick = async () => {
     if (curExistingNodes.tuic_hy2 && curExistingNodes.tuic_hy2.exists) {
-      toast('系统中已存在 TUIC / Hysteria2 节点，无法重复创建！如需重新生成请先删除旧节点。', true);
+      toast('已存在 TUIC / Hysteria2 节点，如需重新创建请先删除旧节点。', true);
       return;
     }
 
     const btn = $('#createPresetTuicHy2Btn');
     const origText = btn.textContent;
     btn.disabled = true;
-    btn.textContent = '正在生成 TUIC & Hysteria2 节点...';
+    btn.textContent = '正在创建...';
 
     const checked = document.querySelector('input[name="tuicCertType"]:checked');
     const certType = checked ? checked.value : 'self_signed';
@@ -2827,7 +2826,7 @@ function initAddNodePresetEvents() {
       certFile = $('#tuicCustomCertFile').value.trim();
       keyFile = $('#tuicCustomKeyFile').value.trim();
       if (!domain || !certFile || !keyFile) {
-        toast('请完整填写自定义域名、公钥与私钥路径！', true);
+        toast('请填写完整证书与私钥路径', true);
         btn.disabled = false;
         btn.textContent = origText;
         return;
@@ -2846,11 +2845,11 @@ function initAddNodePresetEvents() {
           key_file: keyFile
         })
       });
-      toast(res.message || 'TUIC 与 Hysteria2 节点创建成功！');
+      toast(res.message || '节点创建成功！');
       closeModal('addNodePresetModal');
       await refreshNodes();
     } catch(e) {
-      toast('创建 TUIC/Hysteria2 失败: ' + e.message, true);
+      toast('创建失败: ' + e.message, true);
     } finally {
       btn.disabled = false;
       btn.textContent = origText;
