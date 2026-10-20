@@ -1553,8 +1553,13 @@ document.addEventListener('click', async e => {
         setListenAddr(detail.listen);
         $('#nodeListenPort').value = detail.listen_port || '';
         
-        if (detail.is_tuic_hy2 || (detail.server_has_tls && detail.protocol !== 'VLESS')) {
-          // 服务端证书托管 (TUIC / Hysteria2) -> 解锁并显示证书换绑卡片
+        const protoUpper = (detail.protocol || '').toUpperCase();
+        const tagLower = (detail.name || '').toLowerCase();
+        const isReality = tagLower.includes('reality') || (detail.server_has_tls && protoUpper === 'VLESS');
+        const isServerCertNode = detail.is_tuic_hy2 || (!isReality && detail.server_has_tls && protoUpper !== 'VLESS');
+
+        if (isServerCertNode) {
+          // 服务端证书托管 (仅 TUIC / Hysteria2 等需要挂载证书的节点) -> 解锁并显示证书换绑卡片
           $('#normalClientTlsCard').style.display = 'none';
           $('#serverCertCard').style.display = 'block';
 
@@ -1596,18 +1601,20 @@ document.addEventListener('click', async e => {
             opt.textContent = '当前正在使用: ' + detail.cert_domain + (detail.cert_type === 'self_signed' ? ' (自签)' : '');
             opt.selected = true;
             certSelect.insertBefore(opt, certSelect.firstChild);
+          } else if (certs.length === 0 && !detail.cert_domain) {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = '暂无可用的 TLS 证书 (请先在证书面板申请)';
+            opt.disabled = true;
+            opt.selected = true;
+            certSelect.appendChild(opt);
           }
-
-          const optNewSelf = document.createElement('option');
-          optNewSelf.value = '__new_self_cert__';
-          optNewSelf.textContent = '+ 现场生成新自签证书...';
-          certSelect.appendChild(optNewSelf);
 
           function updateBadge() {
             try {
-              if (certSelect.value === '__new_self_cert__') {
-                $('#serverCertTypeBadge').textContent = '新建自签';
-                $('#serverCertTypeBadge').style.color = 'var(--warn)';
+              if (!certSelect.value) {
+                $('#serverCertTypeBadge').textContent = '未绑定';
+                $('#serverCertTypeBadge').style.color = 'var(--dim)';
                 return;
               }
               const obj = JSON.parse(certSelect.value);
@@ -1621,29 +1628,6 @@ document.addEventListener('click', async e => {
             } catch(e) {}
           }
           certSelect.onchange = () => {
-            if (certSelect.value === '__new_self_cert__') {
-              const newDom = prompt('请输入新自签证书的伪装域名 (默认 apple.com):', 'apple.com');
-              if (newDom) {
-                api('/api/cert/apply', {
-                  method: 'POST',
-                  headers: {'Content-Type': 'application/json'},
-                  body: JSON.stringify({ mode: 'self_signed', domain: newDom.trim() })
-                }).then(res => {
-                  toast('新自签证书已生成！');
-                  const opt = document.createElement('option');
-                  opt.value = JSON.stringify({
-                    domain: newDom.trim(),
-                    cert_file: res.cert_file,
-                    key_file: res.key_file,
-                    cert_type: 'self_signed'
-                  });
-                  opt.textContent = '自签证书: ' + newDom.trim();
-                  opt.selected = true;
-                  certSelect.insertBefore(opt, certSelect.firstChild);
-                  updateBadge();
-                }).catch(err => { toast(err.message, true); });
-              }
-            }
             updateBadge();
           };
           updateBadge();
@@ -1652,15 +1636,15 @@ document.addEventListener('click', async e => {
           $('#serverCertCard').style.display = 'none';
           $('#normalClientTlsCard').style.display = 'block';
 
-          if (detail.server_has_tls) {
+          if (isReality || detail.server_has_tls) {
             $('#clientTlsToggle').checked = true;
             $('#clientTlsToggle').disabled = true;
             $('#clientTlsLabel').style.cursor = 'not-allowed';
             $('#clientTlsText').textContent = '客户端 TLS（Reality 伪装握手）';
-            $('#clientTlsBadge').textContent = 'Reality';
+            $('#clientTlsBadge').textContent = 'Reality 免证书';
             $('#clientTlsBadge').style.color = 'var(--accent)';
             $('#clientTlsServerHint').style.display = 'block';
-            $('#clientTlsServerHint').textContent = '🔒 服务端已启用 Reality 伪装，客户端自动继承免证书安全握手';
+            $('#clientTlsServerHint').textContent = '🔒 服务端已启用 Reality 伪装（' + (detail.sni || 'apple.com') + '），客户端自动继承免证书安全握手';
             $('#clientTlsBox').style.display = 'none';
           } else {
             $('#clientTlsToggle').disabled = false;
@@ -2934,6 +2918,10 @@ function initAddNodePresetEvents() {
     };
   });
 
+  function refreshNodes() {
+    poll();
+  }
+
   const radios = document.querySelectorAll('input[name="tuicCertType"]');
   radios.forEach(r => {
     r.onchange = () => {
@@ -2971,7 +2959,7 @@ function initAddNodePresetEvents() {
       });
       toast(res.message || '节点创建成功！');
       closeModal('addNodePresetModal');
-      await refreshNodes();
+      poll();
     } catch(e) {
       toast('创建失败: ' + e.message, true);
     } finally {
@@ -3009,7 +2997,7 @@ function initAddNodePresetEvents() {
       });
       toast(res.message || '节点创建成功！');
       closeModal('addNodePresetModal');
-      await refreshNodes();
+      poll();
     } catch(e) {
       toast('创建失败: ' + e.message, true);
     } finally {
@@ -3072,7 +3060,7 @@ function initAddNodePresetEvents() {
       });
       toast(res.message || '节点创建成功！');
       closeModal('addNodePresetModal');
-      await refreshNodes();
+      poll();
     } catch(e) {
       toast('创建失败: ' + e.message, true);
     } finally {
