@@ -297,10 +297,6 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
       </div>
     </div>
   </h1>
-  <button class="primary" id="addNodeBtnNav" style="margin-left:12px;gap:6px;box-shadow:0 2px 6px var(--accent-glow)">
-    <svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
-    添加节点
-  </button>
   <span class="spacer"></span>
 
   <button id="settingsBtn" style="gap:6px">
@@ -2599,9 +2595,6 @@ async function openAddNodePresetModal() {
 }
 
 function initAddNodePresetEvents() {
-  const navBtn = $('#addNodeBtnNav');
-  if (navBtn) navBtn.onclick = () => openAddNodePresetModal();
-
   const secBtn = $('#addNodeBtnSection');
   if (secBtn) secBtn.onclick = () => openAddNodePresetModal();
 
