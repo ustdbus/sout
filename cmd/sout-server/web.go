@@ -2455,9 +2455,14 @@ $('#tnSaveConfigBtn').onclick = async () => {
     toast(res.message || '隧道配置成功，服务正在生效...');
     openTunnelMigrationView(res.status);
   } catch(e) {
-    toast('配置隧道失败: ' + e.message, true);
     btn.disabled = false;
     btn.textContent = origText;
+    if (domain) {
+      toast('后端服务已切换至本地反代，正在载入新面板...');
+      openTunnelMigrationView({ domain: domain, sout_path: initialBasePath || 'sout' });
+    } else {
+      toast('配置隧道失败: ' + e.message, true);
+    }
   }
 };
 

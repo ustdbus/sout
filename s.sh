@@ -493,7 +493,7 @@ BIN="/usr/local/bin/sout-server"
 WORK_DIR="/var/lib/sout"
 [[ ! -d "$WORK_DIR" && -d "/var/lib/fanout" ]] && WORK_DIR="/var/lib/fanout"
 DEFAULT_PORT=43322
-SOUT_VERSION="5.0.2"
+SOUT_VERSION="5.0.3"
 
 R='\033[31m'; G='\033[32m'; Y='\033[33m'; B='\033[34m'; D='\033[90m'; N='\033[0m'
 
@@ -2587,8 +2587,10 @@ reload_caddy_proxy() {
     sout_port_listening=1
   fi
   if [[ "$sout_needs_restart" -eq 1 || "$sout_port_listening" -eq 0 ]]; then
-    echo -e "  [+] 检测到 sout 端口或配置需同步，正在重启服务..."
-    systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || rc-service sout restart 2>/dev/null || true
+    if [[ "${SOUT_CALLED_FROM_WEB:-0}" != "1" ]]; then
+      echo -e "  [+] 检测到 sout 端口或配置需同步，正在重启服务..."
+      systemctl restart sout 2>/dev/null || systemctl restart fanout 2>/dev/null || rc-service sout restart 2>/dev/null || true
+    fi
   fi
 
   # 2. 检查后端类型；若为 s-ui 则动态探测并自动纠偏 s-ui 面板配置
