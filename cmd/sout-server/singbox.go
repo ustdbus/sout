@@ -855,7 +855,7 @@ func (sb *SingBox) Inbounds(live map[string]bool) ([]Inbound, error) {
 				userSlot := parseSlotFromClientName(userName)
 				for _, b := range bindings {
 					if b.TemplateID == baseID && (b.Host == boundHost || sanitizeTag(b.Host) == boundHost || strings.Contains(userName, sanitizeTag(b.Host)) || (userSlot > 0 && b.Slot == userSlot)) {
-						if b.Remark != "" {
+						if b.Remark != "" && !strings.Contains(strings.ToLower(b.Remark), "vpngate") {
 							cRemark = b.Remark
 							break
 						}
@@ -1147,7 +1147,7 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 				matched = true
 			}
 			if matched {
-				if b.Remark != "" {
+				if b.Remark != "" && !strings.Contains(strings.ToLower(b.Remark), "vpngate") {
 					matchedRemark = b.Remark
 					break
 				}
@@ -1718,13 +1718,7 @@ func (sb *SingBox) CloneToTunnels(templateID int, hosts []string, tunnels []*Tun
 			if poolType == "" {
 				poolType = targetTunnel.IPType
 			}
-			if targetTunnel.Kind == "custom" && targetTunnel.Node.Remark != "" && targetTunnel.Node.Remark != targetTunnel.Node.IP {
-				clientRemark = targetTunnel.Node.Remark
-			} else if targetTunnel.Node.Remark != "" && !strings.Contains(targetTunnel.Node.Remark, "://") && !strings.Contains(targetTunnel.Node.Remark, "@") && targetTunnel.Node.Remark != targetTunnel.Node.IP {
-				clientRemark = targetTunnel.Node.Remark
-			} else {
-				clientRemark = formatExitRemark(region, poolType, targetTunnel.Node.HostName)
-			}
+			clientRemark = formatTunnelExitRemark(targetTunnel)
 		}
 
 		if slot <= 0 {
@@ -1909,13 +1903,7 @@ func (sb *SingBox) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) err
 			if pt != "" {
 				bindings[i].PoolType = pt
 			}
-			if target.Kind == "custom" && target.Node.Remark != "" && target.Node.Remark != target.Node.IP {
-				bindings[i].Remark = target.Node.Remark
-			} else if target.Node.Remark != "" && !strings.Contains(target.Node.Remark, "://") && !strings.Contains(target.Node.Remark, "@") && target.Node.Remark != target.Node.IP {
-				bindings[i].Remark = target.Node.Remark
-			} else {
-				bindings[i].Remark = formatExitRemark(bindings[i].Region, bindings[i].PoolType, target.Node.HostName)
-			}
+			bindings[i].Remark = formatTunnelExitRemark(target)
 			matchedBindings = append(matchedBindings, bindings[i])
 		}
 	}

@@ -300,32 +300,7 @@ func (m *Manager) ExitsOf() ExitsView {
 		ib := &list[idx]
 		if ib.BoundTo != "" {
 			if t, ok := hostToTunnel[ib.BoundTo]; ok {
-				exitName := ""
-				if t.Kind == "custom" {
-					if t.Node.Remark != "" && t.Node.Remark != t.Node.IP {
-						exitName = t.Node.Remark
-					} else if globalCustomStore != nil {
-						globalCustomStore.mu.RLock()
-						if cn, ok := globalCustomStore.Nodes[t.Node.HostName]; ok && cn.Remark != "" {
-							exitName = cn.Remark
-						}
-						globalCustomStore.mu.RUnlock()
-					}
-				}
-				if exitName == "" {
-					if t.Node.Remark != "" && !strings.Contains(t.Node.Remark, "://") && !strings.Contains(t.Node.Remark, "@") && t.Node.Remark != t.Node.IP {
-						exitName = t.Node.Remark
-					} else {
-						exitName = formatExitRemark(t.TargetRegion, t.IPType, t.Node.HostName)
-						if exitName == "" || exitName == "出站出口" || exitName == "出口分流" {
-							if t.Node.Country != "" && t.Node.Country != "自定义" {
-								exitName = t.Node.Country
-							} else {
-								exitName = "出口分流"
-							}
-						}
-					}
-				}
+				exitName := formatTunnelExitRemark(t)
 				if !ib.IsBase && exitName != "" {
 					baseTag := getBaseTag(ib.Tag)
 					cleanExit := cleanExitName(exitName)
@@ -390,32 +365,7 @@ func (m *Manager) ExitsOf() ExitsView {
 				if exitIP == "" {
 					exitIP = "连接中"
 				}
-				exitName := ""
-				if t.Kind == "custom" {
-					if t.Node.Remark != "" && t.Node.Remark != t.Node.IP {
-						exitName = t.Node.Remark
-					} else if globalCustomStore != nil {
-						globalCustomStore.mu.RLock()
-						if cn, ok := globalCustomStore.Nodes[t.Node.HostName]; ok && cn.Remark != "" {
-							exitName = cn.Remark
-						}
-						globalCustomStore.mu.RUnlock()
-					}
-				}
-				if exitName == "" {
-					if t.Node.Remark != "" && !strings.Contains(t.Node.Remark, "://") && !strings.Contains(t.Node.Remark, "@") && t.Node.Remark != t.Node.IP {
-						exitName = t.Node.Remark
-					} else {
-						exitName = formatExitRemark(t.TargetRegion, t.IPType, t.Node.HostName)
-						if exitName == "" || exitName == "出站出口" || exitName == "出口分流" {
-							if t.Node.Country != "" && t.Node.Country != "自定义" {
-								exitName = t.Node.Country
-							} else {
-								exitName = "出口分流"
-							}
-						}
-					}
-				}
+				exitName := formatTunnelExitRemark(t)
 				boundLabel = fmt.Sprintf("%s (%s · SOCKS5:%d)", exitName, exitIP, t.Port)
 			} else {
 				// 尝试通过 slot 进行二次救回，防止换节点瞬态被误判为孤儿删除

@@ -17,7 +17,71 @@ var (
 	vpngateMu       sync.RWMutex
 	vpngateDisabled bool
 	vpngatePath     string
+
+	globalMgrMu  sync.RWMutex
+	globalManager *Manager
 )
+
+func setGlobalManager(m *Manager) {
+	globalMgrMu.Lock()
+	defer globalMgrMu.Unlock()
+	globalManager = m
+}
+
+func getGlobalManager() *Manager {
+	globalMgrMu.RLock()
+	defer globalMgrMu.RUnlock()
+	return globalManager
+}
+
+// findCountryNameForHost 根据主机名/IP/tag 全局推导对应的国家中文名称 (如「日本」)
+func findCountryNameForHost(host string) string {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return ""
+	}
+	m := getGlobalManager()
+	if m != nil {
+		// 1. 尝试从当前活跃出站隧道匹配
+		for _, t := range m.Tunnels() {
+			if t.Node.HostName == host || sanitizeTag(t.Node.HostName) == sanitizeTag(host) || t.ExitIP == host || t.Node.IP == host || t.CustomHost == host {
+				if cName := countryNameCN(t.Node.CountryCode, t.Node.Country); cName != "" && cName != "海外" {
+					return cName
+				}
+			}
+		}
+		// 2. 尝试从本地持久化/内存中的节点池匹配
+		m.mu.RLock()
+		for _, n := range m.nodes {
+			if n.HostName == host || sanitizeTag(n.HostName) == sanitizeTag(host) || n.IP == host {
+				if cName := countryNameCN(n.CountryCode, n.Country); cName != "" && cName != "海外" {
+					m.mu.RUnlock()
+					return cName
+				}
+			}
+		}
+		m.mu.RUnlock()
+	}
+
+	// 3. 尝试从自定义节点存储中匹配
+	if globalCustomStore != nil {
+		globalCustomStore.mu.RLock()
+		for h, cn := range globalCustomStore.Nodes {
+			if h == host || sanitizeTag(h) == sanitizeTag(host) || cn.Host == host {
+				if cName := countryNameCN(cn.CountryCode, cn.Country); cName != "" && cName != "海外" {
+					globalCustomStore.mu.RUnlock()
+					return cName
+				}
+				if cn.Remark != "" && !strings.Contains(cn.Remark, "://") && !strings.Contains(cn.Remark, "@") && cn.Remark != cn.Host {
+					globalCustomStore.mu.RUnlock()
+					return cn.Remark
+				}
+			}
+		}
+		globalCustomStore.mu.RUnlock()
+	}
+	return ""
+}
 
 func initVPNGateToggle(dir string) {
 	vpngateMu.Lock()
@@ -99,6 +163,7 @@ func NewManager(maxSlots int, workDir string) *Manager {
 	if engine != nil {
 		engine.SetTunnelProvider(mgr)
 	}
+	setGlobalManager(mgr)
 	return mgr
 }
 

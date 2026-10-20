@@ -39,7 +39,7 @@ func TestInboundBranchLinksDirect(t *testing.T) {
 	// 模拟 InboundBranchLinks 的内部循环
 	baseID := 1000
 	clientID := 1002
-	clientTag := "vless-argo-o8px (Vpngate 日本)"
+	clientTag := "vless-argo-o8px (家宽-日本)"
 
 	inboundsRaw, _ := cfg["inbounds"].([]any)
 	idx := (baseID / 1000) - 1

@@ -1131,7 +1131,7 @@ func cleanRemarkTitle(rem string) string {
 	return cleanExitName(rem)
 }
 
-// cleanExitName 专门清洗出口名称（如 WARP、Proton 日本、shadowsocks-gcp、日本家宽）
+// cleanExitName 专门清洗出口名称（如 WARP、Proton-日本、Windscribe-西雅图、家宽-日本）
 func cleanExitName(rem string) string {
 	rem = strings.TrimSpace(rem)
 	if rem == "" {
@@ -1157,13 +1157,38 @@ func cleanExitName(rem string) string {
 		rem = strings.Replace(rem, fullSRC, sub, 1)
 	}
 
-	// 2. WARP 官方/原生出站统一规范化为简洁的 "WARP"（彻底杜绝多层套娃）
+	// 2. 清洗 VPN Gate 历史残留 -> 统一规范为「家宽」或「家宽-国家」
+	if strings.Contains(rem, "Vpngate") || strings.Contains(rem, "vpngate") {
+		country := ""
+		for _, c := range []string{"日本", "美国", "韩国", "香港", "台湾", "新加坡", "英国", "德国", "加拿大", "澳大利亚", "法国", "俄罗斯", "泰国", "越南", "马来西亚", "荷兰", "印度"} {
+			if strings.Contains(rem, c) {
+				country = c
+				break
+			}
+		}
+		if country != "" {
+			return fmt.Sprintf("家宽-%s", country)
+		}
+		return "家宽"
+	}
+
+	// 3. WARP 官方/原生出站统一规范化为 "WARP" 或 "WARP-地区"
 	lower := strings.ToLower(rem)
 	if strings.Contains(lower, "warp") || strings.Contains(lower, "cloudflareclient") {
+		country := ""
+		for _, c := range []string{"香港", "日本", "新加坡", "美国", "英国", "德国", "台湾", "韩国"} {
+			if strings.Contains(rem, c) {
+				country = c
+				break
+			}
+		}
+		if country != "" {
+			return fmt.Sprintf("WARP-%s", country)
+		}
 		return "WARP"
 	}
 
-	// 3. 清洗主流品牌（Proton, Windscribe, Opera 等）的连字符、括号与冗余后缀/编号
+	// 4. 清洗主流品牌（Proton, Windscribe, Opera 等）为统一短横线命名：品牌名-地区
 	if strings.Contains(rem, "Proton") {
 		region := ""
 		for _, c := range []string{"日本", "新加坡", "美国", "香港", "英国", "德国", "荷兰", "加拿大", "澳大利亚"} {
@@ -1173,14 +1198,9 @@ func cleanExitName(rem string) string {
 			}
 		}
 		if region != "" {
-			return "Proton " + region
+			return fmt.Sprintf("Proton-%s", region)
 		}
-		pClean := strings.ReplaceAll(rem, "Proton-", "Proton ")
-		pClean = strings.ReplaceAll(pClean, "Proton (", "Proton ")
-		pClean = strings.ReplaceAll(pClean, ")", "")
-		pClean = strings.ReplaceAll(pClean, "(", "")
-		pClean = strings.TrimRight(pClean, "0123456789# ")
-		return strings.TrimSpace(pClean)
+		return "Proton"
 	}
 
 	if strings.Contains(rem, "Windscribe") {
@@ -1192,33 +1212,47 @@ func cleanExitName(rem string) string {
 			}
 		}
 		if city != "" {
-			return "Windscribe " + city
+			return fmt.Sprintf("Windscribe-%s", city)
 		}
-		wClean := strings.ReplaceAll(rem, "Windscribe-", "Windscribe ")
-		wClean = strings.ReplaceAll(wClean, "Windscribe (", "Windscribe ")
-		wClean = strings.ReplaceAll(wClean, ")", "")
-		wClean = strings.ReplaceAll(wClean, "(", "")
-		wClean = strings.TrimRight(wClean, "0123456789# ")
-		return strings.TrimSpace(wClean)
+		return "Windscribe"
 	}
 
 	if strings.Contains(rem, "Opera") {
 		sub := cleanSubRegion(rem)
 		if sub != "" {
-			return "Opera " + sub
+			return fmt.Sprintf("Opera-%s", sub)
 		}
+		return "Opera"
 	}
 
-	// 4. 去除非家宽节点的残留“机房”二字
+	// 5. 将旧式「xx家宽」或「xx机房」统一规范
 	if strings.Contains(rem, "出口机房") {
 		rem = strings.ReplaceAll(rem, "出口机房", "出口分流")
+	}
+	if strings.Contains(rem, "出口家宽") {
+		rem = strings.ReplaceAll(rem, "出口家宽", "家宽")
+	}
+	if strings.HasSuffix(rem, "家宽") && len(rem) > len("家宽") {
+		prefix := strings.TrimSuffix(rem, "家宽")
+		prefix = strings.TrimSpace(prefix)
+		if prefix != "" && prefix != "出口" {
+			rem = fmt.Sprintf("家宽-%s", prefix)
+		}
 	}
 	if !strings.Contains(rem, "家宽") && strings.HasSuffix(rem, "机房") {
 		rem = strings.TrimSuffix(rem, "机房")
 		rem = strings.TrimSpace(rem)
 	}
 
-	// 5. 清理多余的双重/残留括号与空括号
+	// 6. 若形如「订阅名 地区」(中间为空格而非连字符)，规范化替换为「订阅名-地区」
+	if strings.Contains(rem, " ") && !strings.Contains(rem, "-") {
+		parts := strings.Fields(rem)
+		if len(parts) == 2 {
+			rem = parts[0] + "-" + parts[1]
+		}
+	}
+
+	// 7. 清理多余的双重/残留括号与空括号
 	for strings.Contains(rem, "((") && strings.Contains(rem, "))") {
 		rem = strings.ReplaceAll(rem, "((", "(")
 		rem = strings.ReplaceAll(rem, "))", ")")
@@ -1231,17 +1265,140 @@ func cleanExitName(rem string) string {
 	return strings.TrimSpace(strings.Join(strings.Fields(rem), " "))
 }
 
-// formatExitRemark 将 region, poolType, host 转换为人类友好的出口描述，严格参考 WARP 标准杜绝嵌套括号与内部变量
+// formatTunnelExitRemark 根据具体的 Tunnel 生成人类友好的标准出口名称
+// 1. 家宽出口（VPN Gate 或 residential）：
+//    格式为「家宽-国家」，如「家宽-日本」、「家宽-美国」；无法识别国家时显示「家宽」；
+// 2. 其它出口订阅（自定义订阅源 / WARP / Windscribe / Proton / Opera 等）：
+//    格式为「订阅名称-国家/地区」，如「WARP-香港」、「Windscribe-洛杉矶」、「Proton-日本」、「我的机场-香港」；
+//    无法识别国家/地区时显示「订阅名称」；
+// 3. 杜绝出现 (vpngate)、(Vpngate) 等内部变量与英文名称
+func formatTunnelExitRemark(t *Tunnel) string {
+	if t == nil {
+		return "出口分流"
+	}
+
+	isVpngate := t.Kind == "vpngate" || strings.Contains(strings.ToLower(t.TargetSourceID), "vpngate") || strings.Contains(strings.ToLower(t.TargetRegion), "vpngate") || (t.IPType == "residential" && t.Kind != "custom")
+
+	// 1. VPN Gate / 家宽出口 -> 规范为「家宽-国家」
+	if isVpngate {
+		sub := cleanSubRegion(t.TargetRegion)
+		if sub == "" {
+			sub = countryNameCN(t.Node.CountryCode, t.Node.Country)
+		}
+		if sub != "" && sub != "海外" && sub != "ALL" {
+			return fmt.Sprintf("家宽-%s", sub)
+		}
+		return "家宽"
+	}
+
+	// 2. 其它出口订阅 (自定义订阅 / 预设出站) -> 规范为「订阅名称-国家/地区」
+	srcName := "自定义订阅"
+	srcID := t.TargetSourceID
+	if srcID == "" {
+		srcID = t.Node.SourceID
+	}
+	srcLower := strings.ToLower(srcID)
+	hostLower := strings.ToLower(t.Node.HostName)
+
+	if strings.Contains(srcLower, "warp") || strings.Contains(hostLower, "warp") || strings.Contains(hostLower, "cloudflareclient") {
+		srcName = "WARP"
+	} else if strings.Contains(srcLower, "windscribe") || strings.Contains(hostLower, "windscribe") || strings.Contains(hostLower, "totallyacdn") {
+		srcName = "Windscribe"
+	} else if strings.Contains(srcLower, "proton") || strings.Contains(hostLower, "proton") {
+		srcName = "Proton"
+	} else if strings.Contains(srcLower, "opera") || strings.Contains(hostLower, "opera") {
+		srcName = "Opera"
+	} else if globalCustomStore != nil {
+		globalCustomStore.mu.RLock()
+		if s, ok := globalCustomStore.Sources[srcID]; ok && s.Name != "" {
+			srcName = s.Name
+		} else if s, ok := globalCustomStore.Sources["preset-"+srcID]; ok && s.Name != "" {
+			srcName = s.Name
+		} else if idx := strings.Index(srcID, ":"); idx > 0 {
+			pfx := srcID[:idx]
+			if s, ok := globalCustomStore.Sources["preset-"+pfx]; ok && s.Name != "" {
+				srcName = s.Name
+			} else if s, ok := globalCustomStore.Sources[pfx]; ok && s.Name != "" {
+				srcName = s.Name
+			}
+		}
+		globalCustomStore.mu.RUnlock()
+	}
+
+	// 提取国家/地区或城市
+	sub := cleanSubRegion(t.TargetRegion)
+	if sub == "" && srcName == "Windscribe" {
+		for _, c := range []string{"洛杉矶", "西雅图", "纽约", "芝加哥", "温哥华", "多伦多", "蒙特利尔", "伦敦", "法兰克福", "巴黎", "阿姆斯特丹", "苏黎世", "香港", "日本"} {
+			if strings.Contains(t.TargetRegion, c) || strings.Contains(t.Node.HostName, c) || strings.Contains(t.Node.Remark, c) {
+				sub = c
+				break
+			}
+		}
+		if sub == "" {
+			if strings.Contains(hostLower, "us-west-084") || strings.Contains(hostLower, "seattle") {
+				sub = "西雅图"
+			} else if strings.Contains(hostLower, "us-west") {
+				sub = "洛杉矶"
+			} else if strings.Contains(hostLower, "us-east") {
+				sub = "纽约"
+			}
+		}
+	}
+	if sub == "" {
+		cName := countryNameCN(t.Node.CountryCode, t.Node.Country)
+		if cName != "" && cName != "海外" && cName != "ALL" {
+			sub = cName
+		}
+	}
+	if sub == "" && t.Node.Remark != "" && !strings.Contains(t.Node.Remark, "://") && !strings.Contains(t.Node.Remark, "@") && t.Node.Remark != t.Node.IP {
+		sub = cleanExitName(t.Node.Remark)
+		if sub == srcName {
+			sub = ""
+		}
+	}
+
+	if strings.HasPrefix(sub, srcName) {
+		sub = strings.TrimPrefix(sub, srcName)
+		sub = strings.TrimLeft(sub, "- _/:\t")
+		sub = strings.TrimSpace(sub)
+	}
+
+	if sub != "" && sub != "海外" && sub != "ALL" {
+		return fmt.Sprintf("%s-%s", srcName, sub)
+	}
+	return srcName
+}
+
+// formatExitRemark 将 region, poolType, host 转换为人类友好的出口描述
 func formatExitRemark(region, poolType, host string) string {
 	lowerReg := strings.ToLower(region)
 	lowerHost := strings.ToLower(host)
 
-	// 1. WARP 官方/原生出站
+	// 0. VPN Gate / 家宽出站 -> 统一规范为「家宽-国家」(如「家宽-日本」)
+	if strings.Contains(lowerReg, "vpngate") || strings.Contains(lowerHost, "vpngate") || strings.HasPrefix(lowerHost, "vpn") || poolType == "residential" || strings.HasPrefix(region, "SRC:vpngate") {
+		sub := cleanSubRegion(region)
+		if sub == "" && host != "" {
+			sub = findCountryNameForHost(host)
+		}
+		if sub != "" && sub != "海外" && sub != "ALL" {
+			return fmt.Sprintf("家宽-%s", sub)
+		}
+		return "家宽"
+	}
+
+	// 1. WARP 官方/原生出站 -> 规范为「WARP」或「WARP-地区」
 	if strings.Contains(lowerReg, "warp") || strings.Contains(lowerHost, "warp") || strings.Contains(lowerHost, "cloudflare") {
+		sub := cleanSubRegion(region)
+		if sub == "" && host != "" {
+			sub = findCountryNameForHost(host)
+		}
+		if sub != "" && sub != "海外" && sub != "ALL" {
+			return fmt.Sprintf("WARP-%s", sub)
+		}
 		return "WARP"
 	}
 
-	// 2. Windscribe 出口
+	// 2. Windscribe 出口 -> 规范为「Windscribe-城市/地区」
 	if strings.Contains(lowerReg, "windscribe") || strings.Contains(lowerHost, "windscribe") || strings.Contains(lowerHost, "totallyacdn.com") {
 		city := ""
 		for _, c := range []string{"洛杉矶", "西雅图", "纽约", "芝加哥", "温哥华", "多伦多", "蒙特利尔", "伦敦", "法兰克福", "巴黎", "阿姆斯特丹", "苏黎世", "香港", "日本"} {
@@ -1259,13 +1416,16 @@ func formatExitRemark(region, poolType, host string) string {
 				city = "纽约"
 			}
 		}
-		if city != "" {
-			return fmt.Sprintf("Windscribe %s", city)
+		if city == "" && host != "" {
+			city = findCountryNameForHost(host)
+		}
+		if city != "" && city != "海外" && city != "ALL" {
+			return fmt.Sprintf("Windscribe-%s", city)
 		}
 		return "Windscribe"
 	}
 
-	// 3. Proton 出口
+	// 3. Proton 出口 -> 规范为「Proton-国家」
 	if strings.Contains(lowerReg, "proton") || strings.Contains(lowerHost, "proton") {
 		sub := cleanSubRegion(region)
 		if sub == "" {
@@ -1285,30 +1445,48 @@ func formatExitRemark(region, poolType, host string) string {
 				}
 			}
 		}
-		if sub != "" {
-			return fmt.Sprintf("Proton %s", sub)
+		if sub == "" && host != "" {
+			sub = findCountryNameForHost(host)
+		}
+		if sub != "" && sub != "海外" && sub != "ALL" {
+			return fmt.Sprintf("Proton-%s", sub)
 		}
 		return "Proton"
 	}
 
-	// 4. Opera 出口
+	// 4. Opera 出口 -> 规范为「Opera-地区」
 	if strings.Contains(lowerReg, "opera") || strings.Contains(lowerHost, "opera") {
 		sub := cleanSubRegion(region)
-		if sub != "" {
-			return fmt.Sprintf("Opera %s", sub)
+		if sub == "" && host != "" {
+			sub = findCountryNameForHost(host)
+		}
+		if sub != "" && sub != "海外" && sub != "ALL" {
+			return fmt.Sprintf("Opera-%s", sub)
 		}
 		return "Opera"
 	}
 
-	// 5. 自定义订阅源 SRC:<sourceID>:<subRegion>
+	// 5. 自定义订阅源 SRC:<sourceID>:<subRegion> -> 规范为「订阅名称-国家/地区」
 	if strings.HasPrefix(region, "SRC:") {
 		parts := strings.Split(region, ":")
 		srcName := "自定义"
 		if len(parts) >= 2 {
 			srcID := parts[1]
+			if srcID == "vpngate" {
+				sub := cleanSubRegion(region)
+				if sub == "" && host != "" {
+					sub = findCountryNameForHost(host)
+				}
+				if sub != "" && sub != "海外" && sub != "ALL" {
+					return fmt.Sprintf("家宽-%s", sub)
+				}
+				return "家宽"
+			}
 			if globalCustomStore != nil {
 				globalCustomStore.mu.RLock()
 				if s, ok := globalCustomStore.Sources[srcID]; ok && s.Name != "" {
+					srcName = s.Name
+				} else if s, ok := globalCustomStore.Sources["preset-"+srcID]; ok && s.Name != "" {
 					srcName = s.Name
 				}
 				globalCustomStore.mu.RUnlock()
@@ -1318,23 +1496,36 @@ func formatExitRemark(region, poolType, host string) string {
 			}
 		}
 		sub := cleanSubRegion(region)
-		if sub != "" {
-			return fmt.Sprintf("%s %s", srcName, sub)
+		if sub == "" && host != "" {
+			sub = findCountryNameForHost(host)
+		}
+		if strings.HasPrefix(sub, srcName) {
+			sub = strings.TrimPrefix(sub, srcName)
+			sub = strings.TrimLeft(sub, "- _/:\t")
+			sub = strings.TrimSpace(sub)
+		}
+		if sub != "" && sub != "海外" && sub != "ALL" {
+			return fmt.Sprintf("%s-%s", srcName, sub)
 		}
 		return srcName
 	}
 
-	// 6. VPN Gate 或标准国家/地区出口
-	if region != "" && !strings.HasPrefix(region, "SRC:") && region != "CUSTOM" {
+	// 6. 标准国家/地区出口
+	if region != "" && !strings.HasPrefix(region, "SRC:") && region != "CUSTOM" && region != "ALL" {
 		cName := countryNameCN(region, "")
 		if poolType == "residential" {
-			return fmt.Sprintf("%s家宽", cName)
+			return fmt.Sprintf("家宽-%s", cName)
 		}
 		return cName
 	}
 
 	if poolType == "residential" {
-		return "出口家宽"
+		if host != "" {
+			if cName := findCountryNameForHost(host); cName != "" && cName != "海外" {
+				return fmt.Sprintf("家宽-%s", cName)
+			}
+		}
+		return "家宽"
 	}
 	return "出口分流"
 }
@@ -1585,26 +1776,12 @@ func (s *SUI) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) 
 		slot := 0
 		region := ""
 		poolType := ""
-		clientRemark := "海外出口"
+		clientRemark := "出口分流"
 		if targetTunnel != nil {
 			slot = targetTunnel.Slot
 			region = targetTunnel.TargetRegion
 			poolType = targetTunnel.TargetPoolType
-			if targetTunnel.Kind == "custom" && targetTunnel.Node.Remark != "" && targetTunnel.Node.Remark != targetTunnel.Node.IP {
-				clientRemark = targetTunnel.Node.Remark
-			} else if targetTunnel.Node.Remark != "" && !strings.Contains(targetTunnel.Node.Remark, "://") && !strings.Contains(targetTunnel.Node.Remark, "@") && targetTunnel.Node.Remark != targetTunnel.Node.IP {
-				clientRemark = targetTunnel.Node.Remark
-			} else {
-				clientRemark = formatExitRemark(region, targetTunnel.IPType, targetTunnel.Node.HostName)
-			}
-			if clientRemark == "" || clientRemark == "出站出口" || clientRemark == "出口分流" {
-				cName := countryNameCN(targetTunnel.Node.CountryCode, targetTunnel.Node.Country)
-				if targetTunnel.IPType == "residential" {
-					clientRemark = fmt.Sprintf("%s家宽", cName)
-				} else if cName != "" && cName != "海外" {
-					clientRemark = cName
-				}
-			}
+			clientRemark = formatTunnelExitRemark(targetTunnel)
 		}
 
 		// 持久化保存分流绑定意图，确保重启或节点轮换后自动恢复
@@ -1849,24 +2026,7 @@ func (s *SUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
 	}
 	oldHostTag := sanitizeTag(oldHost)
 
-	newRemark := ""
-	if target.Kind == "custom" && target.Node.Remark != "" && target.Node.Remark != target.Node.IP {
-		newRemark = target.Node.Remark
-	} else if target.Node.Remark != "" && !strings.Contains(target.Node.Remark, "://") && !strings.Contains(target.Node.Remark, "@") && target.Node.Remark != target.Node.IP {
-		newRemark = target.Node.Remark
-	} else {
-		newRemark = formatExitRemark(target.TargetRegion, target.IPType, target.Node.HostName)
-	}
-	if newRemark == "" || newRemark == "出站出口" || newRemark == "出口分流" {
-		cName := countryNameCN(target.Node.CountryCode, target.Node.Country)
-		if target.IPType == "residential" {
-			newRemark = fmt.Sprintf("%s家宽", cName)
-		} else if cName != "" && cName != "海外" {
-			newRemark = cName
-		} else {
-			newRemark = "出口分流"
-		}
-	}
+	newRemark := formatTunnelExitRemark(target)
 
 	for userName, host := range boundMap {
 		matched := (host == oldHost || host == oldHostTag)
