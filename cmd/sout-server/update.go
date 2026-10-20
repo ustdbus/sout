@@ -623,7 +623,9 @@ func copyFileMode(src, dst string, mode os.FileMode) error {
 func restartSelf() {
 	if hasCmd("systemctl") && dirExists("/run/systemd/system") {
 		if exec.Command("systemctl", "is-active", "sout").Run() == nil {
-			_ = exec.Command("systemctl", "restart", "sout").Start()
+		cmd := exec.Command("systemctl", "restart", "sout")
+		setDetachedProcess(cmd)
+		_ = cmd.Start()
 			return
 		}
 		_ = exec.Command("systemctl", "restart", "fanout").Start()
@@ -635,7 +637,9 @@ func restartSelf() {
 			svc = "fanout"
 		}
 		// 必须通过独立后台子进程延迟重启，确保旧进程彻底退出后再拉起新版本
-		_ = exec.Command("sh", "-c", fmt.Sprintf("sleep 1 && (rc-service %s restart || (rc-service %s stop; sleep 1; killall -9 sout-server 2>/dev/null; rc-service %s zap && rc-service %s start))", svc, svc, svc, svc)).Start()
+		cmd := exec.Command("sh", "-c", fmt.Sprintf("sleep 1 && (rc-service %s restart || (rc-service %s stop 2>/dev/null; sleep 0.5; pkill -9 -x sout-server 2>/dev/null; rc-service %s zap 2>/dev/null; rc-service %s start))", svc, svc, svc, svc))
+		setDetachedProcess(cmd)
+		_ = cmd.Start()
 		return
 	}
 	// 没有 init 系统托管：直接退出，让外部守护（若有）拉起；

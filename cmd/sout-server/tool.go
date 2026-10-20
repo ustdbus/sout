@@ -2353,6 +2353,7 @@ func toolSUIInitBaseNodes(args []string) {
 		adminUser = "admin"
 	}
 	tunnelToken := strings.TrimSpace(os.Getenv("TUNNEL_TOKEN"))
+	onlyReality := (os.Getenv("ONLY_REALITY") == "true") || (domain == "" && tunnelToken == "")
 
 	if nodePort <= 0 {
 		nodePort = 2082
@@ -2408,49 +2409,51 @@ func toolSUIInitBaseNodes(args []string) {
 			return fmt.Sprintf("%s-%s", prefix, genRandSuffix()), nil
 		}
 
-		// 创建/编辑 vless-argo
-		argoTag, argoID := findTag("vless-argo")
-		argoPayload := map[string]any{
-			"id":          0,
-			"type":        "vless",
-			"tag":         argoTag,
-			"tls_id":      0,
-			"listen":      "127.0.0.1",
-			"listen_port": nodePort,
-			"transport": map[string]any{
-				"type":                   "ws",
-				"path":                   cleanWS,
-				"headers":                map[string]any{"Host": domain},
-				"early_data_header_name": "Sec-WebSocket-Protocol",
-				"max_early_data":         2560,
-			},
-			"addrs": []any{
-				map[string]any{
-					"server":      domain,
-					"server_port": 443,
-					"tls": map[string]any{
-						"enabled":     true,
-						"insecure":    false,
-						"server_name": domain,
-						"utls": map[string]any{
+		// 创建/编辑 vless-argo (仅在非纯 Reality 模式下创建)
+		if !onlyReality {
+			argoTag, argoID := findTag("vless-argo")
+			argoPayload := map[string]any{
+				"id":          0,
+				"type":        "vless",
+				"tag":         argoTag,
+				"tls_id":      0,
+				"listen":      "127.0.0.1",
+				"listen_port": nodePort,
+				"transport": map[string]any{
+					"type":                   "ws",
+					"path":                   cleanWS,
+					"headers":                map[string]any{"Host": domain},
+					"early_data_header_name": "Sec-WebSocket-Protocol",
+					"max_early_data":         2560,
+				},
+				"addrs": []any{
+					map[string]any{
+						"server":      domain,
+						"server_port": 443,
+						"tls": map[string]any{
 							"enabled":     true,
-							"fingerprint": "chrome",
+							"insecure":    false,
+							"server_name": domain,
+							"utls": map[string]any{
+								"enabled":     true,
+								"fingerprint": "chrome",
+							},
 						},
 					},
 				},
-			},
+			}
+			argoAct := "new"
+			if argoID != nil {
+				argoPayload["id"] = argoID
+				argoAct = "edit"
+			}
+			pay1, _ := json.Marshal(argoPayload)
+			_, _ = suiAPICall(baseURL, token, "POST", "save", url.Values{
+				"object": {"inbounds"},
+				"action": {argoAct},
+				"data":   {string(pay1)},
+			})
 		}
-		argoAct := "new"
-		if argoID != nil {
-			argoPayload["id"] = argoID
-			argoAct = "edit"
-		}
-		pay1, _ := json.Marshal(argoPayload)
-		_, _ = suiAPICall(baseURL, token, "POST", "save", url.Values{
-			"object": {"inbounds"},
-			"action": {argoAct},
-			"data":   {string(pay1)},
-		})
 
 		// 创建/编辑 reality
 		tlsResp, _ := suiAPICall(baseURL, token, "GET", "tls", nil)
@@ -2694,25 +2697,28 @@ func toolSUIInitBaseNodes(args []string) {
 		argoTag := fmt.Sprintf("vless-argo-%s", genRandSuffix())
 		realityTag := fmt.Sprintf("vless-reality-%s", genRandSuffix())
 
-		newInbs = append(newInbs, map[string]any{
-			"type":        "vless",
-			"tag":         argoTag,
-			"listen":      "127.0.0.1",
-			"listen_port": nodePort,
-			"users": []any{
-				map[string]any{"name": adminUser, "uuid": cUUID},
-			},
-			"transport": map[string]any{
-				"type":                   "ws",
-				"path":                   cleanWS,
-				"headers":                map[string]any{"Host": domain},
-				"early_data_header_name": "Sec-WebSocket-Protocol",
-				"max_early_data":         2560,
-			},
-		})
+		if !onlyReality {
+			newInbs = append(newInbs, map[string]any{
+				"type":        "vless",
+				"tag":         argoTag,
+				"listen":      "127.0.0.1",
+				"listen_port": nodePort,
+				"users": []any{
+					map[string]any{"name": adminUser, "uuid": cUUID},
+				},
+				"transport": map[string]any{
+					"type":                   "ws",
+					"path":                   cleanWS,
+					"headers":                map[string]any{"Host": domain},
+					"early_data_header_name": "Sec-WebSocket-Protocol",
+					"max_early_data":         2560,
+				},
+			})
+		}
 
 		priv, _ := ecdh.X25519().GenerateKey(crand.Reader)
 		privStr := base64.RawURLEncoding.EncodeToString(priv.Bytes())
+		pubStr := base64.RawURLEncoding.EncodeToString(priv.PublicKey().Bytes())
 		shortBytes := make([]byte, 4)
 		_, _ = crand.Read(shortBytes)
 		shortID := hex.EncodeToString(shortBytes)
@@ -2759,19 +2765,36 @@ func toolSUIInitBaseNodes(args []string) {
 			_ = json.Unmarshal(data, &addrsMap)
 		}
 
-		addrsMap[argoTag] = []map[string]any{
-			{
-				"server":      domain,
-				"server_port": 443,
-				"tls": map[string]any{
-					"enabled":     true,
-					"insecure":    false,
-					"server_name": domain,
-					"utls": map[string]any{
+		if !onlyReality && domain != "" {
+			addrsMap[argoTag] = []map[string]any{
+				{
+					"server":      domain,
+					"server_port": 443,
+					"tls": map[string]any{
 						"enabled":     true,
-						"fingerprint": "chrome",
+						"insecure":    false,
+						"server_name": domain,
+						"utls": map[string]any{
+							"enabled":     true,
+							"fingerprint": "chrome",
+						},
 					},
 				},
+			}
+		}
+
+		realityTLSClient := map[string]any{
+			"enabled":     true,
+			"insecure":    false,
+			"server_name": "apple.com",
+			"utls": map[string]any{
+				"enabled":     true,
+				"fingerprint": "chrome",
+			},
+			"reality": map[string]any{
+				"enabled":    true,
+				"public_key": pubStr,
+				"short_id":   shortID,
 			},
 		}
 
@@ -2780,15 +2803,7 @@ func toolSUIInitBaseNodes(args []string) {
 			rAddrs = append(rAddrs, map[string]any{
 				"server":      publicIP,
 				"server_port": realityPort,
-				"tls": map[string]any{
-					"enabled":     true,
-					"insecure":    false,
-					"server_name": "apple.com",
-					"utls": map[string]any{
-						"enabled":     true,
-						"fingerprint": "chrome",
-					},
-				},
+				"tls":         realityTLSClient,
 			})
 		}
 		var v6Host string
@@ -2799,30 +2814,18 @@ func toolSUIInitBaseNodes(args []string) {
 			rAddrs = append(rAddrs, map[string]any{
 				"server":      v6Host,
 				"server_port": realityPort,
-				"tls": map[string]any{
-					"enabled":     true,
-					"insecure":    false,
-					"server_name": "apple.com",
-					"utls": map[string]any{
-						"enabled":     true,
-						"fingerprint": "chrome",
-					},
-				},
+				"tls":         realityTLSClient,
 			})
 		}
 		if len(rAddrs) == 0 {
+			targetServer := domain
+			if targetServer == "" {
+				targetServer = "127.0.0.1"
+			}
 			rAddrs = append(rAddrs, map[string]any{
-				"server":      domain,
+				"server":      targetServer,
 				"server_port": realityPort,
-				"tls": map[string]any{
-					"enabled":     true,
-					"insecure":    false,
-					"server_name": "apple.com",
-					"utls": map[string]any{
-						"enabled":     true,
-						"fingerprint": "chrome",
-					},
-				},
+				"tls":         realityTLSClient,
 			})
 		}
 		addrsMap[realityTag] = rAddrs
@@ -2834,7 +2837,11 @@ func toolSUIInitBaseNodes(args []string) {
 
 	metaVars := fmt.Sprintf("node_port=%d\nws_path=%s\nreality_port=%d\n", nodePort, strings.Trim(wsPath, "/"), realityPort)
 	_ = os.WriteFile("/var/lib/sout/.caddy_meta_vars", []byte(metaVars), 0600)
-	fmt.Println("  [✓] 基础节点与轻量分流已配置就绪！")
+	if onlyReality {
+		fmt.Printf("  [✓] 直连 VLESS-Reality 节点已成功创建就绪 (Port: %d)！\n", realityPort)
+	} else {
+		fmt.Println("  [✓] 基础节点与轻量分流已配置就绪！")
+	}
 }
 
 func toolCFCertApply(args []string) {

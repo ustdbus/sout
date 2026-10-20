@@ -1232,6 +1232,12 @@ if [[ "$WANT_TUNNEL" == "y" ]]; then
     /usr/local/bin/sout setup_tunnel "$TUNNEL_DOMAIN" "$TUNNEL_TOKEN" "$TUNNEL_PORT" "${APPLY_CERT:-n}" "${CF_DNS_KEY:-}" "$SUI_ADMIN_PASS" "$SUI_PASS_IS_RANDOM"
   fi
 else
+  # 直连模式：自动配置免域名的直连 VLESS-Reality 节点
+  echo
+  echo "  [+] 检测到未配置 Cloudflare 隧道，正在自动为您创建直连免域名的 VLESS-Reality 节点..."
+  if [[ -x /usr/local/bin/sout ]]; then
+    /usr/local/bin/sout init_reality
+  fi
 
 IP=$(cat "${WORK_DIR}/host_ip" 2>/dev/null | tr -d ' \r\n')
 if [[ -z "$IP" ]]; then
@@ -1358,6 +1364,10 @@ else
     echo "                 (若遗忘密码，可随时在终端输入 s-ui 进行重置修改)"
     echo "  s-ui 唤起命令: s-ui"
   fi
+  echo
+  echo "  [直连节点]"
+  echo "  节点类型:      VLESS-Reality (已自动创建，无需域名，母机直连)"
+  echo "  节点获取:      登录管理面板点击右上角「复制全部节点链接」或查看节点列表"
   echo "================================================================"
   echo
 fi

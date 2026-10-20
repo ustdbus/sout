@@ -78,6 +78,11 @@ restart_backend_service() {
       rc-service s-ui restart 2>/dev/null || (rc-service s-ui zap 2>/dev/null && rc-service s-ui start 2>/dev/null) || true
     fi
   else
+    # 当从 Web 界面调起时，当前进程由 sout-server 发起，
+    # 绝不能在脚本内部提前重启 sout，否则会直接掐断父进程，导致请求中断且后续反代配置无法写入！
+    if [[ "${SOUT_CALLED_FROM_WEB:-0}" == "1" ]]; then
+      return 0
+    fi
     restart_sout_service
   fi
 }
@@ -2361,6 +2366,57 @@ METAEOF
   echo
 }
 
+init_direct_reality_node() {
+  local reality_port="${1:-}"
+  [[ -z "$reality_port" ]] && reality_port=$(rand_local_port)
+  local public_ip
+  public_ip=$(public_ip)
+  [[ "$public_ip" == "127.0.0.1" ]] && public_ip=""
+
+  local has_sui=false
+  local sui_token=""
+  local sui_admin_user="admin"
+  local sui_db="/usr/local/s-ui/db/s-ui.db"
+  if is_sui_backend && [[ -f "$sui_db" ]]; then
+    has_sui=true
+    sui_admin_user=$(get_sui_user)
+    sui_token=$(get_or_create_sui_token "$sui_db")
+  fi
+
+  local cur_cc
+  cur_cc=$(get_tcp_congestion)
+
+  local is_pure_v6="${IS_PURE_IPV6:-0}"
+  if [[ "$is_pure_v6" == "0" ]]; then
+    if ! curl -s4m 3 https://api.ipify.org >/dev/null 2>&1 && ! curl -s4m 3 http://v4.ident.me >/dev/null 2>&1; then
+      if curl -s6m 3 https://api64.ipify.org >/dev/null 2>&1 || curl -s6m 3 https://ipv6.icanhazip.com >/dev/null 2>&1; then
+        is_pure_v6="1"
+      fi
+    fi
+  fi
+
+  echo -e "  [+] 正在自动配置直连节点 (VLESS-Reality，免域名)..."
+  if SUI_API="http://127.0.0.1:2096/sui/apiv2" \
+  SUI_TOKEN="$sui_token" \
+  SUI_DB="$sui_db" \
+  HAS_SUI="$has_sui" \
+  DOMAIN="" \
+  PUBLIC_IP="$public_ip" \
+  REALITY_PORT="$reality_port" \
+  SUI_ADMIN_USER="$sui_admin_user" \
+  CONGESTION_CONTROL="$cur_cc" \
+  TUNNEL_TOKEN="" \
+  ONLY_REALITY="true" \
+  IS_PURE_IPV6="$is_pure_v6" \
+  sout_tool sui-init-base-nodes; then
+    echo -e "  ${G}[✓] 直连 VLESS-Reality 节点已成功创建就绪 (监听端口: ${reality_port})！${N}"
+  else
+    echo -e "  ${Y}[!] Reality 节点自动配置异常，请稍后检查。${N}"
+  fi
+
+  restart_backend_service
+}
+
 disable_caddy_proxy() {
   local force="${1:-}"
   if [[ "$force" != "force" && "$force" != "-y" ]]; then
@@ -3597,6 +3653,10 @@ case "${1:-}" in
   cert|ssl_cf|acme|cf_ssl) cf_ssl_menu ;;
   view_cert) view_cf_ssl_certs ;;
   apply_cert) apply_cf_ssl_cert ;;
+  init_reality|init_reality_node)
+    shift
+    init_direct_reality_node "$@"
+    ;;
   tuic|hy2|create_node|create_nodes)
     shift
     create_tuic_hy2_nodes "$@"
