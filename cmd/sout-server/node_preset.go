@@ -188,6 +188,237 @@ func getActivePanelMode(workDir string) string {
 	return mode
 }
 
+// ExistingPresetInfo 预设节点存在状态详情
+type ExistingPresetInfo struct {
+	Exists bool   `json:"exists"`
+	Tag    string `json:"tag,omitempty"`
+	Port   int    `json:"port,omitempty"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// detectExistingPresets 复合检测当前系统中是否已经存在对应类型的预设节点
+func detectExistingPresets(workDir string) map[string]ExistingPresetInfo {
+	res := map[string]ExistingPresetInfo{
+		"vless_argo":    {Exists: false},
+		"vless_reality": {Exists: false},
+		"tuic_hy2":      {Exists: false},
+	}
+
+	mode := getActivePanelMode(workDir)
+	if mode == "s-ui" {
+		if sui, err := DetectSUI(workDir); err == nil {
+			inbResp, _ := suiAPICall(sui.APIRoot(), sui.APIToken(), "GET", "inbounds", nil)
+			var inboundsList []map[string]any
+			if inbResp != nil {
+				if obj, ok := inbResp["obj"].(map[string]any); ok {
+					if list, ok := obj["inbounds"].([]any); ok {
+						for _, r := range list {
+							if m, ok := r.(map[string]any); ok {
+								inboundsList = append(inboundsList, m)
+							}
+						}
+					}
+				}
+			}
+
+			// 获取 reality TLS id 映射
+			realityTIDMap := make(map[any]bool)
+			tlsResp, _ := suiAPICall(sui.APIRoot(), sui.APIToken(), "GET", "tls", nil)
+			if tlsResp != nil {
+				if obj, ok := tlsResp["obj"].(map[string]any); ok {
+					if list, ok := obj["tls"].([]any); ok {
+						for _, t := range list {
+							if m, ok := t.(map[string]any); ok {
+								name, _ := m["name"].(string)
+								if strings.Contains(strings.ToLower(name), "reality") {
+									realityTIDMap[m["id"]] = true
+								}
+							}
+						}
+					}
+				}
+			}
+
+			for _, item := range inboundsList {
+				tag, _ := item["tag"].(string)
+				tagLower := strings.ToLower(tag)
+				typeStr, _ := item["type"].(string)
+				typeLower := strings.ToLower(typeStr)
+				port := int(getFloat(item["listen_port"]))
+				tlsID := item["tls_id"]
+
+				if typeLower == "cloudflared" || tagLower == "cf-tunnel-in" || strings.HasPrefix(tagLower, "cf-tunnel") {
+					continue
+				}
+
+				// 1. VLESS-Argo 判定 (Tag含 argo 或 VLESS+WS传输)
+				if !res["vless_argo"].Exists {
+					isWS := false
+					if tr, ok := item["transport"].(map[string]any); ok {
+						if tType, _ := tr["type"].(string); strings.ToLower(tType) == "ws" {
+							isWS = true
+						}
+					}
+					if strings.Contains(tagLower, "argo") || (typeLower == "vless" && isWS) {
+						res["vless_argo"] = ExistingPresetInfo{
+							Exists: true,
+							Tag:    tag,
+							Port:   port,
+							Detail: fmt.Sprintf("Tag: %s (回源端口: %d)", tag, port),
+						}
+					}
+				}
+
+				// 2. VLESS-Reality 判定 (Tag含 reality 或 VLESS+关联Reality TLS)
+				if !res["vless_reality"].Exists {
+					isReality := false
+					if tlsID != nil && realityTIDMap[tlsID] {
+						isReality = true
+					}
+					if strings.Contains(tagLower, "reality") || (typeLower == "vless" && isReality) {
+						res["vless_reality"] = ExistingPresetInfo{
+							Exists: true,
+							Tag:    tag,
+							Port:   port,
+							Detail: fmt.Sprintf("Tag: %s (端口: %d)", tag, port),
+						}
+					}
+				}
+
+				// 3. TUIC / Hysteria2 判定 (协议为 tuic/hy2 或 Tag含 tuic/hy2)
+				if !res["tuic_hy2"].Exists {
+					if typeLower == "tuic" || typeLower == "hy2" || typeLower == "hysteria2" ||
+						strings.Contains(tagLower, "tuic") || strings.Contains(tagLower, "hy2") || strings.Contains(tagLower, "hysteria") {
+						res["tuic_hy2"] = ExistingPresetInfo{
+							Exists: true,
+							Tag:    tag,
+							Port:   port,
+							Detail: fmt.Sprintf("Tag: %s (协议: %s, 端口: %d)", tag, typeStr, port),
+						}
+					}
+				}
+			}
+		}
+	} else {
+		// sing-box 独立轻量模式
+		if sb, err := DetectSingBox(workDir); err == nil {
+			if cfg, err := sb.loadConfig(); err == nil {
+				inboundsRaw, _ := cfg["inbounds"].([]any)
+				for _, ibRaw := range inboundsRaw {
+					ibMap, ok := ibRaw.(map[string]any)
+					if !ok {
+						continue
+					}
+					tag, _ := ibMap["tag"].(string)
+					tagLower := strings.ToLower(tag)
+					typeStr, _ := ibMap["type"].(string)
+					typeLower := strings.ToLower(typeStr)
+					port := int(getFloat(ibMap["listen_port"]))
+
+					if typeLower == "cloudflared" || tagLower == "cf-tunnel-in" || strings.HasPrefix(tagLower, "cf-tunnel") {
+						continue
+					}
+
+					// 1. VLESS-Argo 判定 (Tag含 argo 或 VLESS+WS传输)
+					if !res["vless_argo"].Exists {
+						isWS := false
+						if tr, ok := ibMap["transport"].(map[string]any); ok {
+							if tType, _ := tr["type"].(string); strings.ToLower(tType) == "ws" {
+								isWS = true
+							}
+						}
+						if strings.Contains(tagLower, "argo") || (typeLower == "vless" && isWS) {
+							res["vless_argo"] = ExistingPresetInfo{
+								Exists: true,
+								Tag:    tag,
+								Port:   port,
+								Detail: fmt.Sprintf("Tag: %s (回源端口: %d)", tag, port),
+							}
+						}
+					}
+
+					// 2. VLESS-Reality 判定 (Tag含 reality 或 VLESS+reality配置)
+					if !res["vless_reality"].Exists {
+						isReality := false
+						if tls, ok := ibMap["tls"].(map[string]any); ok {
+							if realObj, ok := tls["reality"].(map[string]any); ok && realObj != nil {
+								isReality = true
+							}
+						}
+						if strings.Contains(tagLower, "reality") || (typeLower == "vless" && isReality) {
+							res["vless_reality"] = ExistingPresetInfo{
+								Exists: true,
+								Tag:    tag,
+								Port:   port,
+								Detail: fmt.Sprintf("Tag: %s (端口: %d)", tag, port),
+							}
+						}
+					}
+
+					// 3. TUIC / Hysteria2 判定
+					if !res["tuic_hy2"].Exists {
+						if typeLower == "tuic" || typeLower == "hy2" || typeLower == "hysteria2" ||
+							strings.Contains(tagLower, "tuic") || strings.Contains(tagLower, "hy2") || strings.Contains(tagLower, "hysteria") {
+							res["tuic_hy2"] = ExistingPresetInfo{
+								Exists: true,
+								Tag:    tag,
+								Port:   port,
+								Detail: fmt.Sprintf("Tag: %s (协议: %s, 端口: %d)", tag, typeStr, port),
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 统一通用接口兜底匹配 (防止上述任何细微遗漏)
+	if p, err := openPanel(); err == nil {
+		if inbs, err := p.Inbounds(nil); err == nil {
+			for _, ib := range inbs {
+				tagLower := strings.ToLower(ib.Tag)
+				protoLower := strings.ToLower(ib.Protocol)
+				remLower := strings.ToLower(ib.Remark)
+
+				if !res["vless_argo"].Exists {
+					if strings.Contains(tagLower, "argo") || strings.Contains(remLower, "argo") {
+						res["vless_argo"] = ExistingPresetInfo{
+							Exists: true,
+							Tag:    ib.Tag,
+							Port:   ib.Port,
+							Detail: fmt.Sprintf("Tag: %s (端口: %d)", ib.Tag, ib.Port),
+						}
+					}
+				}
+				if !res["vless_reality"].Exists {
+					if strings.Contains(tagLower, "reality") || strings.Contains(remLower, "reality") {
+						res["vless_reality"] = ExistingPresetInfo{
+							Exists: true,
+							Tag:    ib.Tag,
+							Port:   ib.Port,
+							Detail: fmt.Sprintf("Tag: %s (端口: %d)", ib.Tag, ib.Port),
+						}
+					}
+				}
+				if !res["tuic_hy2"].Exists {
+					if protoLower == "tuic" || protoLower == "hy2" || protoLower == "hysteria2" ||
+						strings.Contains(tagLower, "tuic") || strings.Contains(tagLower, "hy2") || strings.Contains(tagLower, "hysteria") ||
+						strings.Contains(remLower, "tuic") || strings.Contains(remLower, "hy2") || strings.Contains(remLower, "hysteria") {
+						res["tuic_hy2"] = ExistingPresetInfo{
+							Exists: true,
+							Tag:    ib.Tag,
+							Port:   ib.Port,
+							Detail: fmt.Sprintf("Tag: %s (协议: %s, 端口: %d)", ib.Tag, ib.Protocol, ib.Port),
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return res
+}
+
 // apiNodePresetInfoHandler 返回当前节点预设信息与可用证书
 func apiNodePresetInfoHandler(w http.ResponseWriter, r *http.Request) {
 	workDir := currentBasePathDir()
@@ -217,17 +448,19 @@ func apiNodePresetInfoHandler(w http.ResponseWriter, r *http.Request) {
 	pubIP := hostPublicIP()
 	pubIPv6 := hostPublicIPv6()
 	certs := scanLocalACMECerts()
+	existing := detectExistingPresets(workDir)
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":          true,
-		"panel_mode":  mode,
-		"has_tunnel":  hasTunnel,
-		"domain":      domain,
-		"node_port":   nodePort,
-		"ws_path":     wsPath,
-		"public_ip":   pubIP,
-		"public_ipv6": pubIPv6,
-		"acme_certs":  certs,
+		"ok":             true,
+		"panel_mode":     mode,
+		"has_tunnel":     hasTunnel,
+		"domain":         domain,
+		"node_port":      nodePort,
+		"ws_path":        wsPath,
+		"public_ip":      pubIP,
+		"public_ipv6":    pubIPv6,
+		"acme_certs":     certs,
+		"existing_nodes": existing,
 	})
 }
 
@@ -260,6 +493,24 @@ func apiNodeCreatePresetHandler(mgr *Manager) http.HandlerFunc {
 		workDir := currentBasePathDir()
 		panelMode := getActivePanelMode(workDir)
 		gwStatus := GetGatewayStatus(workDir)
+
+		// 严格防重拦截：若检测到已存在此前创建过的同类型节点，严禁重复创建
+		existing := detectExistingPresets(workDir)
+		if info, ok := existing[req.Preset]; ok && info.Exists {
+			presetTitle := "该预设"
+			switch req.Preset {
+			case "vless_argo":
+				presetTitle = "VLESS-Argo"
+			case "vless_reality":
+				presetTitle = "VLESS-Reality"
+			case "tuic_hy2":
+				presetTitle = "TUIC / Hysteria2"
+			}
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": fmt.Sprintf("检测到系统中已存在此前创建过的 %s 节点 (%s)，无法重复创建！如需重新生成，请先在下方节点列表中删除已有节点。", presetTitle, info.Detail),
+			})
+			return
+		}
 
 		switch req.Preset {
 		case "vless_argo":

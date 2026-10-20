@@ -44,4 +44,33 @@ func TestNodePresetHelpers(t *testing.T) {
 	if priv == "" || pub == "" {
 		t.Errorf("genX25519Keys 返回空密钥")
 	}
+
+	// 5. 测试预设节点存在检测 detectExistingPresets
+	sbCfgContent := `{
+		"inbounds": [
+			{
+				"type": "vless",
+				"tag": "vless-argo-test123",
+				"listen_port": 2082,
+				"transport": {"type": "ws"}
+			},
+			{
+				"type": "vless",
+				"tag": "vless-reality-abc",
+				"listen_port": 2083,
+				"tls": {"enabled": true, "reality": {"enabled": true}}
+			}
+		]
+	}`
+	_ = os.WriteFile(filepath.Join(tmpDir, "singbox_config.json"), []byte(sbCfgContent), 0644)
+	existing := detectExistingPresets(tmpDir)
+	if !existing["vless_argo"].Exists {
+		t.Errorf("期望 vless_argo 判定为存在，但实际未检测到")
+	}
+	if !existing["vless_reality"].Exists {
+		t.Errorf("期望 vless_reality 判定为存在，但实际未检测到")
+	}
+	if existing["tuic_hy2"].Exists {
+		t.Errorf("期望 tuic_hy2 判定为不存在，但实际检测到存在")
+	}
 }

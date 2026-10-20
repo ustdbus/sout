@@ -900,15 +900,15 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
       <!-- 预设选项卡切换按钮 -->
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px">
         <button class="preset-tab-btn active" id="tabBtnVlessReality" style="padding:10px 8px;text-align:center;border-radius:6px;border:1px solid var(--accent);background:var(--card);cursor:pointer">
-          <div style="font-weight:600;font-size:13px;color:var(--text)">VLESS-Reality</div>
+          <div id="tabTitleVlessReality" style="font-weight:600;font-size:13px;color:var(--text)">VLESS-Reality</div>
           <div style="font-size:11px;color:var(--dim);margin-top:2px">直连 · 免域名免证书</div>
         </button>
         <button class="preset-tab-btn" id="tabBtnVlessArgo" style="padding:10px 8px;text-align:center;border-radius:6px;border:1px solid var(--line);background:var(--card);cursor:pointer">
-          <div style="font-weight:600;font-size:13px;color:var(--text)">VLESS-Argo</div>
+          <div id="tabTitleVlessArgo" style="font-weight:600;font-size:13px;color:var(--text)">VLESS-Argo</div>
           <div style="font-size:11px;color:var(--dim);margin-top:2px">隧道 · CDN路径分流</div>
         </button>
         <button class="preset-tab-btn" id="tabBtnTuicHy2" style="padding:10px 8px;text-align:center;border-radius:6px;border:1px solid var(--line);background:var(--card);cursor:pointer">
-          <div style="font-weight:600;font-size:13px;color:var(--text)">TUIC / Hysteria2</div>
+          <div id="tabTitleTuicHy2" style="font-weight:600;font-size:13px;color:var(--text)">TUIC / Hysteria2</div>
           <div style="font-size:11px;color:var(--dim);margin-top:2px">QUIC高速 · 双节点</div>
         </button>
       </div>
@@ -920,6 +920,7 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
           <div style="color:var(--dim);margin-bottom:10px">
             基于 X25519 秘钥交换与 TLS 伪装握手，<b>无需自己的域名与 SSL 证书</b>，直连速度快且抗探测性极高，是最可靠的基础兜底节点。
           </div>
+          <div id="presetRealityExistAlert" style="display:none;background:rgba(210,153,34,0.15);border:1px solid var(--warn);color:var(--warn);border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;line-height:1.5"></div>
           <div style="display:flex;flex-direction:column;gap:10px">
             <div>
               <label style="display:block;font-weight:600;margin-bottom:4px">伪装目标域名 (SNI / Dest):</label>
@@ -943,6 +944,7 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
           <div style="color:var(--dim);margin-bottom:10px">
             节点流量通过本地 127.0.0.1 回源至 Cloudflare 隧道，由 CDN 边缘 443 端口接入并伪装。
           </div>
+          <div id="presetArgoExistAlert" style="display:none;background:rgba(210,153,34,0.15);border:1px solid var(--warn);color:var(--warn);border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;line-height:1.5"></div>
           <div id="presetArgoWarn" style="display:none;background:rgba(210,153,34,0.15);border:1px solid var(--warn);color:var(--warn);border-radius:6px;padding:8px 12px;margin-bottom:10px">
             ⚠️ 检测到当前尚未配置或启动 Cloudflare 隧道，建议先在上方配置隧道，或手动在下方填入托管域名。
           </div>
@@ -975,6 +977,7 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
           <div style="color:var(--dim);margin-bottom:10px">
             基于 QUIC 协议的高速防拥塞代理协议，支持 BBR 算法，自动同时创建 TUIC 和 Hysteria2 两个独立节点。
           </div>
+          <div id="presetTuicHy2ExistAlert" style="display:none;background:rgba(210,153,34,0.15);border:1px solid var(--warn);color:var(--warn);border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;line-height:1.5"></div>
           <div style="display:flex;flex-direction:column;gap:10px">
             <div>
               <label style="display:block;font-weight:600;margin-bottom:6px">选择 TLS 证书模式:</label>
@@ -2568,6 +2571,8 @@ function openTunnelMigrationView(st) {
   }, 2500);
 }
 
+let curExistingNodes = {};
+
 async function openAddNodePresetModal() {
   openModal('addNodePresetModal');
   $('#presetBackendMode').textContent = '正在检测母机架构与引擎...';
@@ -2605,6 +2610,78 @@ async function openAddNodePresetModal() {
       });
     } else {
       certRow.style.display = 'none';
+    }
+
+    // 动态检测与展示已存在节点状态
+    curExistingNodes = info.existing_nodes || {};
+
+    // 1. Reality 判定
+    const rEx = curExistingNodes.vless_reality && curExistingNodes.vless_reality.exists;
+    const rBtn = $('#createPresetRealityBtn');
+    const rAlert = $('#presetRealityExistAlert');
+    const rTitle = $('#tabTitleVlessReality');
+    if (rTitle) {
+      rTitle.innerHTML = 'VLESS-Reality' + (rEx ? ' <span style="font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(210,153,34,0.2);color:var(--warn);font-weight:normal">已存在</span>' : '');
+    }
+    if (rEx) {
+      rAlert.style.display = 'block';
+      rAlert.innerHTML = '⚠️ <b>检测到当前系统中已存在此前创建过的 VLESS-Reality 节点</b> (' + esc(curExistingNodes.vless_reality.detail || '') + ')。<br>为防止端口与入站配置冲突，<b>无法重复创建</b>。如需重新生成，请先在下方节点列表中删除已有节点。';
+      rBtn.disabled = true;
+      rBtn.textContent = '⚠️ 已存在该节点 (不可重复创建)';
+      rBtn.style.opacity = '0.6';
+      rBtn.style.cursor = 'not-allowed';
+    } else {
+      rAlert.style.display = 'none';
+      rBtn.disabled = false;
+      rBtn.textContent = '⚡ 立即生成 VLESS-Reality 节点';
+      rBtn.style.opacity = '1';
+      rBtn.style.cursor = 'pointer';
+    }
+
+    // 2. Argo 判定
+    const aEx = curExistingNodes.vless_argo && curExistingNodes.vless_argo.exists;
+    const aBtn = $('#createPresetArgoBtn');
+    const aAlert = $('#presetArgoExistAlert');
+    const aTitle = $('#tabTitleVlessArgo');
+    if (aTitle) {
+      aTitle.innerHTML = 'VLESS-Argo' + (aEx ? ' <span style="font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(210,153,34,0.2);color:var(--warn);font-weight:normal">已存在</span>' : '');
+    }
+    if (aEx) {
+      aAlert.style.display = 'block';
+      aAlert.innerHTML = '⚠️ <b>检测到当前系统中已存在此前创建过的 VLESS-Argo 节点</b> (' + esc(curExistingNodes.vless_argo.detail || '') + ')。<br>为防止 WebSocket 路径与回源冲突，<b>无法重复创建</b>。如需重新生成，请先在下方节点列表中删除已有节点。';
+      aBtn.disabled = true;
+      aBtn.textContent = '⚠️ 已存在该节点 (不可重复创建)';
+      aBtn.style.opacity = '0.6';
+      aBtn.style.cursor = 'not-allowed';
+    } else {
+      aAlert.style.display = 'none';
+      aBtn.disabled = false;
+      aBtn.textContent = '⚡ 立即生成 VLESS-Argo 节点';
+      aBtn.style.opacity = '1';
+      aBtn.style.cursor = 'pointer';
+    }
+
+    // 3. TUIC & Hysteria2 判定
+    const tEx = curExistingNodes.tuic_hy2 && curExistingNodes.tuic_hy2.exists;
+    const tBtn = $('#createPresetTuicHy2Btn');
+    const tAlert = $('#presetTuicHy2ExistAlert');
+    const tTitle = $('#tabTitleTuicHy2');
+    if (tTitle) {
+      tTitle.innerHTML = 'TUIC / Hysteria2' + (tEx ? ' <span style="font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(210,153,34,0.2);color:var(--warn);font-weight:normal">已存在</span>' : '');
+    }
+    if (tEx) {
+      tAlert.style.display = 'block';
+      tAlert.innerHTML = '⚠️ <b>检测到当前系统中已存在此前创建过的 TUIC / Hysteria2 节点</b> (' + esc(curExistingNodes.tuic_hy2.detail || '') + ')。<br>为防止 QUIC 端口冲突，<b>无法重复创建</b>。如需重新生成，请先在下方节点列表中删除已有节点。';
+      tBtn.disabled = true;
+      tBtn.textContent = '⚠️ 已存在该节点 (不可重复创建)';
+      tBtn.style.opacity = '0.6';
+      tBtn.style.cursor = 'not-allowed';
+    } else {
+      tAlert.style.display = 'none';
+      tBtn.disabled = false;
+      tBtn.textContent = '⚡ 立即生成 TUIC & HY2 双节点';
+      tBtn.style.opacity = '1';
+      tBtn.style.cursor = 'pointer';
     }
   } catch(e) {
     $('#presetBackendMode').textContent = '检测失败: ' + e.message;
@@ -2645,6 +2722,11 @@ function initAddNodePresetEvents() {
 
   // 1. 生成 Reality
   $('#createPresetRealityBtn').onclick = async () => {
+    if (curExistingNodes.vless_reality && curExistingNodes.vless_reality.exists) {
+      toast('系统中已存在 VLESS-Reality 节点，无法重复创建！如需重新生成请先删除旧节点。', true);
+      return;
+    }
+
     const btn = $('#createPresetRealityBtn');
     const origText = btn.textContent;
     btn.disabled = true;
@@ -2676,6 +2758,11 @@ function initAddNodePresetEvents() {
 
   // 2. 生成 Argo
   $('#createPresetArgoBtn').onclick = async () => {
+    if (curExistingNodes.vless_argo && curExistingNodes.vless_argo.exists) {
+      toast('系统中已存在 VLESS-Argo 节点，无法重复创建！如需重新生成请先删除旧节点。', true);
+      return;
+    }
+
     const btn = $('#createPresetArgoBtn');
     const origText = btn.textContent;
     btn.disabled = true;
@@ -2709,6 +2796,11 @@ function initAddNodePresetEvents() {
 
   // 3. 生成 TUIC & Hysteria2
   $('#createPresetTuicHy2Btn').onclick = async () => {
+    if (curExistingNodes.tuic_hy2 && curExistingNodes.tuic_hy2.exists) {
+      toast('系统中已存在 TUIC / Hysteria2 节点，无法重复创建！如需重新生成请先删除旧节点。', true);
+      return;
+    }
+
     const btn = $('#createPresetTuicHy2Btn');
     const origText = btn.textContent;
     btn.disabled = true;

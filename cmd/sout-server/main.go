@@ -23,7 +23,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v5.0.5"
+var version = "v5.0.6"
 
 var (
 	cgroupV2Path    = "/sys/fs/cgroup/memory.max"
