@@ -257,6 +257,30 @@ func buildGatewayHandler(meta *CaddyMeta, workDir string) http.Handler {
 				http.Error(w, "sout proxy unavailable", http.StatusBadGateway)
 				return
 			}
+			// 智能重定向与兜底：访问 /sout 或 /sout/ 时自动跳转至实际面板路径，杜绝误触 Service Ready
+			if p == "/sout" || p == "/sout/" {
+				http.Redirect(w, r, "/"+meta.SoutPath+"/", http.StatusFound)
+				return
+			}
+			if strings.HasPrefix(p, "/sout/") {
+				sub := strings.TrimPrefix(p, "/sout")
+				http.Redirect(w, r, "/"+meta.SoutPath+sub, http.StatusFound)
+				return
+			}
+		} else if meta.SoutPort > 0 {
+			// 若未定义特定路径，默认以 /sout/ 作为反代入口
+			if p == "/sout" {
+				http.Redirect(w, r, "/sout/", http.StatusPermanentRedirect)
+				return
+			}
+			if strings.HasPrefix(p, "/sout/") {
+				if soutProxy != nil {
+					soutProxy.ServeHTTP(w, r)
+					return
+				}
+				http.Error(w, "sout proxy unavailable", http.StatusBadGateway)
+				return
+			}
 		}
 
 		// 5. 伪装根路径与兜底响应
