@@ -2459,7 +2459,7 @@ $('#tnSaveConfigBtn').onclick = async () => {
     btn.textContent = origText;
     if (domain) {
       toast('后端服务已切换至本地反代，正在载入新面板...');
-      openTunnelMigrationView({ domain: domain, sout_path: initialBasePath || 'sout' });
+      openTunnelMigrationView({ domain: domain, sout_path: initialBasePath || '' });
     } else {
       toast('配置隧道失败: ' + e.message, true);
     }
@@ -2472,9 +2472,21 @@ function openTunnelMigrationView(st) {
   closeModal('tunnelModal');
   openModal('tnMigrationModal');
 
-  const domain = (st && st.domain) ? st.domain : '';
-  const soutPath = (st && st.sout_path) ? st.sout_path.replace(/^\/+|\/+$/g, '') : 'sout';
-  const targetUrl = 'https://' + domain + '/' + soutPath + '/';
+  const domain = (st && st.domain) ? st.domain : (curTunnelData && curTunnelData.domain ? curTunnelData.domain : '');
+  let soutPath = (st && st.sout_path) ? st.sout_path.replace(/^\/+|\/+$/g, '') : '';
+  if (!soutPath && curTunnelData && curTunnelData.sout_path) {
+    soutPath = curTunnelData.sout_path.replace(/^\/+|\/+$/g, '');
+  }
+  if (!soutPath && typeof initialBasePath !== 'undefined' && initialBasePath) {
+    soutPath = initialBasePath.replace(/^\/+|\/+$/g, '');
+  }
+  if (!soutPath) {
+    const p = window.location.pathname.replace(/^\/+|\/+$/g, '');
+    if (p && p !== 'sout') {
+      soutPath = p;
+    }
+  }
+  const targetUrl = 'https://' + domain + (soutPath ? ('/' + soutPath + '/') : '/');
 
   $('#tnMigrateUrlInput').value = targetUrl;
   $('#tnMigrateNewTabLink').href = targetUrl;

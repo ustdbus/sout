@@ -493,7 +493,7 @@ BIN="/usr/local/bin/sout-server"
 WORK_DIR="/var/lib/sout"
 [[ ! -d "$WORK_DIR" && -d "/var/lib/fanout" ]] && WORK_DIR="/var/lib/fanout"
 DEFAULT_PORT=43322
-SOUT_VERSION="5.0.4"
+SOUT_VERSION="5.0.5"
 
 R='\033[31m'; G='\033[32m'; Y='\033[33m'; B='\033[34m'; D='\033[90m'; N='\033[0m'
 
@@ -2161,7 +2161,7 @@ setup_caddy_proxy() {
 
   local cur_bp
   cur_bp=$(cat "${WORK_DIR}/basepath" 2>/dev/null | tr -d ' \r\n/' || true)
-  sout_path="${old_sout_path:-${cur_bp:-sout}}"
+  sout_path="${old_sout_path:-${cur_bp:-$(rand_safe_path "sout")}}"
   sub_path="${old_sub_path:-$(rand_safe_path "sub")}"
   ws_path="${old_ws_path:-$(rand_safe_path "vlws")}"
 
