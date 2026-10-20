@@ -1152,3 +1152,61 @@ func createSingBoxTuicHy2Nodes(workDir, certDomain, certFile, keyFile string, is
 	}
 	return nil
 }
+
+// updateTuicHy2Cert 照着现有的 TUIC 与 Hysteria2 生成逻辑，将新的证书成对应用到现有的两个节点上
+func updateTuicHy2Cert(workDir, certDomain, certFile, keyFile string, isInsecure bool) error {
+	panelMode := getActivePanelMode(workDir)
+	if panelMode == "s-ui" {
+		sui, err := DetectSUI(workDir)
+		if err != nil {
+			return err
+		}
+		insecStr := "false"
+		if isInsecure {
+			insecStr = "true"
+		}
+
+		os.Setenv("SUI_API", sui.APIRoot())
+		os.Setenv("SUI_TOKEN", sui.APIToken())
+		os.Setenv("CERT_DOMAIN", certDomain)
+		os.Setenv("CERT_FILE", certFile)
+		os.Setenv("KEY_FILE", keyFile)
+		os.Setenv("IS_INSECURE", insecStr)
+		os.Setenv("ACTION_MODE", "change_existing_only")
+		os.Setenv("PUBLIC_IP", hostPublicIP())
+		os.Setenv("CONGESTION_CONTROL", "bbr")
+
+		toolSUIApplyTuicHy2(nil)
+		return nil
+	}
+
+	// sing-box 独立轻量模式
+	sb, err := DetectSingBox(workDir)
+	if err != nil {
+		return err
+	}
+	sbConf := getSingboxConfigFile(workDir)
+	insecStr := "false"
+	if isInsecure {
+		insecStr = "true"
+	}
+	pubIP := hostPublicIP()
+	if pubIP == "" {
+		pubIP = certDomain
+	}
+
+	os.Setenv("SB_CONF", sbConf)
+	os.Setenv("CERT_DOM", certDomain)
+	os.Setenv("CERT_FILE", certFile)
+	os.Setenv("KEY_FILE", keyFile)
+	os.Setenv("IS_INSECURE", insecStr)
+	os.Setenv("CONGESTION_CTRL", "bbr")
+	os.Setenv("NODE_SERVER", pubIP)
+
+	toolSingboxApplyTuicHy2(nil)
+
+	if cfg, err := sb.loadConfig(); err == nil {
+		_ = sb.syncToEmbedded(cfg)
+	}
+	return nil
+}

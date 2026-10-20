@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -709,6 +710,9 @@ func apiCertDeleteHandler(w http.ResponseWriter, r *http.Request) {
 		_ = os.RemoveAll(targetDir)
 	}
 
+	// 同步从 s-ui / sout 中删除和清理悬空的 TLS 模板与证书引用
+	cleanupDeletedCertTLS(domain, targetDir)
+
 	// 从 cf_ssl_domains.json 移除
 	workDir := currentBasePathDir()
 	metaFile := filepath.Join(workDir, "cf_ssl_domains.json")
@@ -723,6 +727,140 @@ func apiCertDeleteHandler(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":      true,
-		"message": fmt.Sprintf("域名 %s 的证书已成功删除", domain),
+		"message": fmt.Sprintf("域名 %s 的证书已成功删除，关联 TLS 配置已同步清除", domain),
 	})
+}
+
+// cleanupDeletedCertTLS 当证书被删除时，同步清理 s-ui 与 sing-box 中的关联 TLS 模板与证书引用
+func cleanupDeletedCertTLS(domain, targetDir string) {
+	workDir := currentBasePathDir()
+	domLower := strings.ToLower(strings.TrimSpace(domain))
+	if domLower == "" {
+		return
+	}
+
+	// 1. 若为 s-ui 模式，清理 s-ui 中的 TLS 模板记录
+	if sui, err := DetectSUI(workDir); err == nil && sui != nil {
+		tlsResp, _ := suiAPICall(sui.APIRoot(), sui.APIToken(), "GET", "tls", nil)
+		if tlsResp != nil {
+			if obj, ok := tlsResp["obj"].(map[string]any); ok {
+				if list, ok := obj["tls"].([]any); ok {
+					for _, item := range list {
+						m, ok := item.(map[string]any)
+						if !ok {
+							continue
+						}
+						name, _ := m["name"].(string)
+						tlsID := m["id"]
+						match := false
+						if strings.EqualFold(name, domLower) {
+							match = true
+						}
+						if !match {
+							if srv, ok := m["server"].(map[string]any); ok {
+								sn, _ := srv["server_name"].(string)
+								cp, _ := srv["certificate_path"].(string)
+								if strings.EqualFold(sn, domLower) || (targetDir != "" && strings.Contains(cp, targetDir)) {
+									match = true
+								}
+							}
+						}
+
+						if match && tlsID != nil {
+							// 检查并解绑关联该 tls_id 的入站，避免 s-ui 报错
+							inbResp, _ := suiAPICall(sui.APIRoot(), sui.APIToken(), "GET", "inbounds", nil)
+							if inbResp != nil {
+								if inbObj, ok := inbResp["obj"].(map[string]any); ok {
+									if inbList, ok := inbObj["inbounds"].([]any); ok {
+										for _, inb := range inbList {
+											if inbMap, ok := inb.(map[string]any); ok {
+												if inbMap["tls_id"] == tlsID {
+													inbMap["tls_id"] = 0
+													b, _ := json.Marshal(inbMap)
+													_, _ = suiAPICall(sui.APIRoot(), sui.APIToken(), "POST", "save", url.Values{
+														"object": []string{"inbounds"},
+														"action": []string{"edit"},
+														"data":   []string{string(b)},
+													})
+												}
+											}
+										}
+									}
+								}
+							}
+
+							// 调用 s-ui 原生 API 删除该 TLS 模板
+							idBytes, _ := json.Marshal(tlsID)
+							_, _ = suiAPICall(sui.APIRoot(), sui.APIToken(), "POST", "save", url.Values{
+								"object": []string{"tls"},
+								"action": []string{"del"},
+								"data":   []string{string(idBytes)},
+							})
+							log.Printf("[证书删除] 已从 s-ui 中同步删除 TLS 模板 [ID: %v, Name: %s]", tlsID, name)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 2. 若为 sing-box 独立轻量模式，检查并清理 config.json 与 singbox_inbound_addrs.json
+	if sb, err := DetectSingBox(workDir); err == nil && sb != nil {
+		if cfg, err := sb.loadConfig(); err == nil && cfg != nil {
+			changed := false
+			if inbounds, ok := cfg["inbounds"].([]any); ok {
+				for _, raw := range inbounds {
+					if ib, ok := raw.(map[string]any); ok {
+						if tlsMap, ok := ib["tls"].(map[string]any); ok && tlsMap != nil {
+							sn, _ := tlsMap["server_name"].(string)
+							cp, _ := tlsMap["certificate_path"].(string)
+							if strings.EqualFold(sn, domLower) || (targetDir != "" && strings.Contains(cp, targetDir)) {
+								delete(tlsMap, "certificate_path")
+								delete(tlsMap, "key_path")
+								tlsMap["enabled"] = false
+								ib["tls"] = tlsMap
+								changed = true
+							}
+						}
+					}
+				}
+			}
+			if changed {
+				_ = sb.saveConfig(cfg)
+				_ = sb.syncToEmbedded(cfg)
+				log.Printf("[证书删除] 已从 sing-box 独立配置中清理关联的 TLS 证书引用: %s", domain)
+			}
+		}
+
+		// 清理 singbox_inbound_addrs.json 里的客户端 TLS
+		addrsPath := filepath.Join(workDir, "singbox_inbound_addrs.json")
+		if data, err := os.ReadFile(addrsPath); err == nil {
+			var addrsData map[string]any
+			if json.Unmarshal(data, &addrsData) == nil {
+				addrChanged := false
+				for tag, listRaw := range addrsData {
+					if list, ok := listRaw.([]any); ok {
+						for _, itemRaw := range list {
+							if item, ok := itemRaw.(map[string]any); ok {
+								if tlsObj, ok := item["tls"].(map[string]any); ok {
+									sn, _ := tlsObj["server_name"].(string)
+									if strings.EqualFold(sn, domLower) {
+										tlsObj["enabled"] = false
+										tlsObj["insecure"] = false
+										addrChanged = true
+									}
+								}
+							}
+						}
+					}
+					_ = tag
+				}
+				if addrChanged {
+					if out, err := json.MarshalIndent(addrsData, "", "  "); err == nil {
+						_ = os.WriteFile(addrsPath, out, 0644)
+					}
+				}
+			}
+		}
+	}
 }

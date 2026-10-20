@@ -169,15 +169,21 @@ func sanitizeTag(name string) string {
 
 
 type NodeDetailInfo struct {
-	ID           int            `json:"id"`
-	Name         string         `json:"name"`
-	Protocol     string         `json:"protocol"`
-	Listen       string         `json:"listen"`
-	ListenPort   int            `json:"listen_port"`
-	TLSEnabled   bool           `json:"tls_enabled"`
-	SNI          string         `json:"sni"`
-	ServerHasTLS bool           `json:"server_has_tls"`
-	Addrs        []NodeAddrItem `json:"addrs"`
+	ID             int            `json:"id"`
+	Name           string         `json:"name"`
+	Protocol       string         `json:"protocol"`
+	Listen         string         `json:"listen"`
+	ListenPort     int            `json:"listen_port"`
+	TLSEnabled     bool           `json:"tls_enabled"`
+	SNI            string         `json:"sni"`
+	ServerHasTLS   bool           `json:"server_has_tls"`
+	IsTuicHy2      bool           `json:"is_tuic_hy2"`
+	CertDomain     string         `json:"cert_domain,omitempty"`
+	CertFile       string         `json:"cert_file,omitempty"`
+	KeyFile        string         `json:"key_file,omitempty"`
+	CertType       string         `json:"cert_type,omitempty"`
+	AvailableCerts []CertViewItem `json:"available_certs,omitempty"`
+	Addrs          []NodeAddrItem `json:"addrs"`
 }
 
 type InboundPatch struct {

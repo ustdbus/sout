@@ -86,3 +86,9 @@ func TestApiCertsHandler(t *testing.T) {
 		t.Errorf("期望状态码 200, 实际得到: %d", resp.StatusCode)
 	}
 }
+
+func TestCleanupDeletedCertTLSSafe(t *testing.T) {
+	// 验证 cleanupDeletedCertTLS 在空/非空目录下均能安全无 panic 运行
+	cleanupDeletedCertTLS("dummy.example.com", "/home/acme/dummy.example.com")
+	cleanupDeletedCertTLS("", "")
+}

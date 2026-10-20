@@ -3211,16 +3211,71 @@ func (s *SUI) NodeDetail(id int) (*NodeDetailInfo, error) {
 		}
 	}
 
+	certDom := ""
+	certFile := ""
+	keyFile := ""
+	certType := ""
+	isTuicHy2 := false
+	typLower := strings.ToLower(typ)
+	tagLower := strings.ToLower(tag)
+	if typLower == "tuic" || typLower == "hysteria2" || typLower == "hy2" ||
+		strings.Contains(tagLower, "tuic") || strings.Contains(tagLower, "hy2") || strings.Contains(tagLower, "hysteria") {
+		isTuicHy2 = true
+	}
+
+	if tlsID > 0 {
+		tlsResp, _ := suiAPICall(s.APIRoot(), s.APIToken(), "GET", "tls", nil)
+		if tlsResp != nil {
+			if obj, ok := tlsResp["obj"].(map[string]any); ok {
+				if list, ok := obj["tls"].([]any); ok {
+					for _, item := range list {
+						if m, ok := item.(map[string]any); ok {
+							if tId, _ := m["id"].(float64); int(tId) == tlsID {
+								certDom, _ = m["name"].(string)
+								if srv, ok := m["server"].(map[string]any); ok {
+									if cp, ok := srv["certificate_path"].(string); ok && cp != "" {
+										certFile = cp
+										if strings.Contains(cp, "/home/ssc/") {
+											certType = "self_signed"
+										} else if strings.Contains(cp, "/home/acme/") {
+											certType = "acme"
+										}
+									}
+									if kp, ok := srv["key_path"].(string); ok && kp != "" {
+										keyFile = kp
+									}
+									if sn, ok := srv["server_name"].(string); ok && sn != "" {
+										certDom = sn
+									}
+								}
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if certDom == "" && sni != "" {
+		certDom = sni
+	}
+
 	return &NodeDetailInfo{
-		ID:           id,
-		Name:         tag,
-		Protocol:     strings.ToUpper(typ),
-		Listen:       listen,
-		ListenPort:   listenPort,
-		TLSEnabled:   tlsEnabled,
-		SNI:          sni,
-		ServerHasTLS: tlsID > 0,
-		Addrs:        allAddrs,
+		ID:             id,
+		Name:           tag,
+		Protocol:       strings.ToUpper(typ),
+		Listen:         listen,
+		ListenPort:     listenPort,
+		TLSEnabled:     tlsEnabled,
+		SNI:            sni,
+		ServerHasTLS:   tlsID > 0,
+		IsTuicHy2:      isTuicHy2,
+		CertDomain:     certDom,
+		CertFile:       certFile,
+		KeyFile:        keyFile,
+		CertType:       certType,
+		AvailableCerts: GetAllCerts(),
+		Addrs:          allAddrs,
 	}, nil
 }
 

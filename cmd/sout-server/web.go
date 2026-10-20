@@ -479,8 +479,8 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
           格式示例：<code style="color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace">66.66.55.44:443</code>、<code style="color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace">[2401:b60::2]:443#HK1</code> 或纯 IP/域名（IPv6 请带方括号加端口，未写端口将使用下方监听端口）
         </div>
 
-        <!-- 客户端 TLS 开关与 SNI -->
-        <div style="background:var(--input-bg);border:1px solid var(--line);border-radius:6px;padding:9px 12px;margin-top:10px">
+        <!-- 模式 A：普通客户端 TLS 开关与 SNI -->
+        <div id="normalClientTlsCard" style="background:var(--input-bg);border:1px solid var(--line);border-radius:6px;padding:9px 12px;margin-top:10px">
           <div style="display:flex;align-items:center;justify-content:space-between">
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0;user-select:none" id="clientTlsLabel">
               <input type="checkbox" id="clientTlsToggle" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;margin:0">
@@ -504,6 +504,24 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
                 <span style="display:block;font-weight:600;font-size:13px;color:var(--text);padding:0">Chrome</span>
               </div>
             </div>
+          </div>
+        </div>
+
+        <!-- 模式 B：服务端 TLS 证书管理与换绑 (TUIC / Hysteria2) -->
+        <div id="serverCertCard" style="display:none;background:var(--input-bg);border:1px solid var(--line);border-radius:6px;padding:10px 12px;margin-top:10px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <div style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--text)">
+              <svg viewBox="0 0 24 24" style="width:15px;height:15px;color:var(--accent)"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+              <span>服务端 TLS 证书</span>
+            </div>
+            <span id="serverCertTypeBadge" style="font-size:11px;padding:1px 6px;border-radius:4px;background:rgba(31,111,235,0.15);color:var(--accent);font-weight:600">证书托管</span>
+          </div>
+          <div style="margin-bottom:8px">
+            <select id="editNodeCertSelect" style="width:100%;font-size:12px;padding:6px 8px;border-radius:4px;border:1px solid var(--line);background:var(--surface-2);color:var(--text)">
+            </select>
+          </div>
+          <div id="serverCertPairHint" style="font-size:11px;color:var(--dim);line-height:1.4">
+            💡 切换证书后将同步更新 TUIC 与 Hysteria2 节点的 TLS 证书与客户端配置
           </div>
         </div>
       </div>
@@ -1535,29 +1553,128 @@ document.addEventListener('click', async e => {
         setListenAddr(detail.listen);
         $('#nodeListenPort').value = detail.listen_port || '';
         
-        if (detail.server_has_tls) {
-          // 服务端自带证书：锁定显示
-          $('#clientTlsToggle').checked = true;
-          $('#clientTlsToggle').disabled = true;
-          $('#clientTlsLabel').style.cursor = 'not-allowed';
-          $('#clientTlsText').textContent = '客户端 TLS（已锁定）';
-          $('#clientTlsBadge').textContent = '服务端证书托管';
-          $('#clientTlsBadge').style.color = 'var(--ok)';
-          $('#clientTlsServerHint').style.display = 'block';
-          $('#clientTlsBox').style.display = 'none';
+        if (detail.is_tuic_hy2 || (detail.server_has_tls && detail.protocol !== 'VLESS')) {
+          // 服务端证书托管 (TUIC / Hysteria2) -> 解锁并显示证书换绑卡片
+          $('#normalClientTlsCard').style.display = 'none';
+          $('#serverCertCard').style.display = 'block';
+
+          const certSelect = $('#editNodeCertSelect');
+          certSelect.innerHTML = '';
+
+          const certs = detail.available_certs || [];
+          let curCertMatched = false;
+
+          certs.forEach(c => {
+            const isSelf = c.type === 'self_signed';
+            const opt = document.createElement('option');
+            const cVal = JSON.stringify({
+              domain: c.domain,
+              cert_file: c.cert_file || c.cert_path,
+              key_file: c.key_file || c.key_path,
+              cert_type: c.type
+            });
+            opt.value = cVal;
+            const typeLabel = isSelf ? '自签证书' : "Let's Encrypt / CF";
+            const daysLabel = c.days_left ? (' · 剩 ' + c.days_left + ' 天') : '';
+            opt.textContent = typeLabel + ': ' + c.domain + daysLabel;
+
+            if (detail.cert_domain && (c.domain === detail.cert_domain || (detail.sni && c.domain === detail.sni))) {
+              opt.selected = true;
+              curCertMatched = true;
+            }
+            certSelect.appendChild(opt);
+          });
+
+          if (!curCertMatched && detail.cert_domain) {
+            const opt = document.createElement('option');
+            opt.value = JSON.stringify({
+              domain: detail.cert_domain,
+              cert_file: detail.cert_file || '',
+              key_file: detail.key_file || '',
+              cert_type: detail.cert_type || 'self_signed'
+            });
+            opt.textContent = '当前正在使用: ' + detail.cert_domain + (detail.cert_type === 'self_signed' ? ' (自签)' : '');
+            opt.selected = true;
+            certSelect.insertBefore(opt, certSelect.firstChild);
+          }
+
+          const optNewSelf = document.createElement('option');
+          optNewSelf.value = '__new_self_cert__';
+          optNewSelf.textContent = '+ 现场生成新自签证书...';
+          certSelect.appendChild(optNewSelf);
+
+          function updateBadge() {
+            try {
+              if (certSelect.value === '__new_self_cert__') {
+                $('#serverCertTypeBadge').textContent = '新建自签';
+                $('#serverCertTypeBadge').style.color = 'var(--warn)';
+                return;
+              }
+              const obj = JSON.parse(certSelect.value);
+              if (obj.cert_type === 'self_signed') {
+                $('#serverCertTypeBadge').textContent = '自签 ECC';
+                $('#serverCertTypeBadge').style.color = 'var(--dim)';
+              } else {
+                $('#serverCertTypeBadge').textContent = 'CF 自动续期';
+                $('#serverCertTypeBadge').style.color = 'var(--ok)';
+              }
+            } catch(e) {}
+          }
+          certSelect.onchange = () => {
+            if (certSelect.value === '__new_self_cert__') {
+              const newDom = prompt('请输入新自签证书的伪装域名 (默认 apple.com):', 'apple.com');
+              if (newDom) {
+                api('/api/cert/apply', {
+                  method: 'POST',
+                  headers: {'Content-Type': 'application/json'},
+                  body: JSON.stringify({ mode: 'self_signed', domain: newDom.trim() })
+                }).then(res => {
+                  toast('新自签证书已生成！');
+                  const opt = document.createElement('option');
+                  opt.value = JSON.stringify({
+                    domain: newDom.trim(),
+                    cert_file: res.cert_file,
+                    key_file: res.key_file,
+                    cert_type: 'self_signed'
+                  });
+                  opt.textContent = '自签证书: ' + newDom.trim();
+                  opt.selected = true;
+                  certSelect.insertBefore(opt, certSelect.firstChild);
+                  updateBadge();
+                }).catch(err => { toast(err.message, true); });
+              }
+            }
+            updateBadge();
+          };
+          updateBadge();
+
         } else {
-          // 隧道代理/无证书节点：可自由配置
-          $('#clientTlsToggle').disabled = false;
-          $('#clientTlsLabel').style.cursor = 'pointer';
-          $('#clientTlsText').textContent = '启用客户端 TLS（适用于隧道代理节点，开启后需填入隧道域名）';
-          $('#clientTlsBadge').textContent = 'TLS';
-          $('#clientTlsBadge').style.color = 'var(--dim)';
-          $('#clientTlsServerHint').style.display = 'none';
-          
-          const isTls = !!detail.tls_enabled;
-          $('#clientTlsToggle').checked = isTls;
-          $('#clientTlsBox').style.display = isTls ? 'block' : 'none';
-          $('#clientSniInput').value = detail.sni || '';
+          $('#serverCertCard').style.display = 'none';
+          $('#normalClientTlsCard').style.display = 'block';
+
+          if (detail.server_has_tls) {
+            $('#clientTlsToggle').checked = true;
+            $('#clientTlsToggle').disabled = true;
+            $('#clientTlsLabel').style.cursor = 'not-allowed';
+            $('#clientTlsText').textContent = '客户端 TLS（Reality 伪装握手）';
+            $('#clientTlsBadge').textContent = 'Reality';
+            $('#clientTlsBadge').style.color = 'var(--accent)';
+            $('#clientTlsServerHint').style.display = 'block';
+            $('#clientTlsServerHint').textContent = '🔒 服务端已启用 Reality 伪装，客户端自动继承免证书安全握手';
+            $('#clientTlsBox').style.display = 'none';
+          } else {
+            $('#clientTlsToggle').disabled = false;
+            $('#clientTlsLabel').style.cursor = 'pointer';
+            $('#clientTlsText').textContent = '启用客户端 TLS（适用于隧道代理节点，开启后需填入隧道域名）';
+            $('#clientTlsBadge').textContent = 'TLS';
+            $('#clientTlsBadge').style.color = 'var(--dim)';
+            $('#clientTlsServerHint').style.display = 'none';
+            
+            const isTls = !!detail.tls_enabled;
+            $('#clientTlsToggle').checked = isTls;
+            $('#clientTlsBox').style.display = isTls ? 'block' : 'none';
+            $('#clientSniInput').value = detail.sni || '';
+          }
         }
 
         if(detail.addrs && detail.addrs.length){
@@ -1868,7 +1985,27 @@ $('#saveEditNodeBtn').onclick = async () => {
   }
 
   const tlsEnabled = $('#clientTlsToggle').checked;
-  const sni = $('#clientSniInput').value.trim();
+  let sni = $('#clientSniInput').value.trim();
+  let certDomain = '';
+  let certFile = '';
+  let keyFile = '';
+  let certType = '';
+
+  if ($('#serverCertCard').style.display !== 'none') {
+    const selVal = $('#editNodeCertSelect').value;
+    if (selVal && selVal !== '__new_self_cert__') {
+      try {
+        const cObj = JSON.parse(selVal);
+        certDomain = cObj.domain || '';
+        certFile = cObj.cert_file || '';
+        keyFile = cObj.key_file || '';
+        certType = cObj.cert_type || '';
+        if (certDomain && !sni) {
+          sni = certDomain;
+        }
+      } catch(e) {}
+    }
+  }
 
   const btn = $('#saveEditNodeBtn');
   btn.disabled = true;
@@ -1884,10 +2021,14 @@ $('#saveEditNodeBtn').onclick = async () => {
         listen_port: listenPort,
         tls_enabled: tlsEnabled,
         sni: sni,
+        cert_domain: certDomain,
+        cert_file: certFile,
+        key_file: keyFile,
+        cert_type: certType,
         addrs: parsedAddrs
       })
     });
-    toast('节点配置已保存并生效');
+    toast('节点配置与证书已保存并生效');
     closeModal('editNodeModal');
     poll();
   } catch(err) {

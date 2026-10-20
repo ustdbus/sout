@@ -23,7 +23,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v5.0.9"
+var version = "v5.1.0"
 
 var (
 	cgroupV2Path    = "/sys/fs/cgroup/memory.max"
@@ -1321,6 +1321,10 @@ func apiNodeUpdate(m *Manager) http.HandlerFunc {
 			ListenPort int            `json:"listen_port"`
 			TLSEnabled bool           `json:"tls_enabled"`
 			SNI        string         `json:"sni"`
+			CertDomain string         `json:"cert_domain,omitempty"`
+			CertFile   string         `json:"cert_file,omitempty"`
+			KeyFile    string         `json:"key_file,omitempty"`
+			CertType   string         `json:"cert_type,omitempty"`
 			Addrs      []NodeAddrItem `json:"addrs"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1346,6 +1350,36 @@ func apiNodeUpdate(m *Manager) http.HandlerFunc {
 			return
 		}
 
+		// 若为 TUIC / Hysteria2 节点且指定了证书切换，照着现有生成逻辑成对更新 TUIC 与 Hy2 的 TLS
+		curDetail, _ := p.NodeDetail(req.ID)
+		if curDetail != nil && curDetail.IsTuicHy2 && req.CertDomain != "" {
+			certDomain := strings.TrimSpace(req.CertDomain)
+			certFile := strings.TrimSpace(req.CertFile)
+			keyFile := strings.TrimSpace(req.KeyFile)
+			certType := strings.TrimSpace(req.CertType)
+			if certType == "" {
+				if strings.Contains(certFile, "/home/ssc/") {
+					certType = "self_signed"
+				} else {
+					certType = "acme"
+				}
+			}
+			isInsecure := (certType == "self_signed")
+			if certFile == "" || keyFile == "" {
+				if certType == "self_signed" {
+					certFile = filepath.Join("/home/ssc", certDomain, "fullchain.pem")
+					keyFile = filepath.Join("/home/ssc", certDomain, "privkey.pem")
+				} else {
+					certFile = filepath.Join("/home/acme", certDomain, "fullchain.pem")
+					keyFile = filepath.Join("/home/acme", certDomain, "privkey.pem")
+				}
+			}
+			workDir := currentBasePathDir()
+			_ = updateTuicHy2Cert(workDir, certDomain, certFile, keyFile, isInsecure)
+			req.TLSEnabled = true
+			req.SNI = certDomain
+		}
+
 		var cleanedAddrs []NodeAddrItem
 		for _, a := range req.Addrs {
 			cleanedAddrs = append(cleanedAddrs, sanitizeNodeAddrItem(a, req.ListenPort))
@@ -1357,7 +1391,7 @@ func apiNodeUpdate(m *Manager) http.HandlerFunc {
 			return
 		}
 		invalidateInbounds()
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "msg": "节点配置已更新"})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "msg": "节点配置与证书已更新生效"})
 	}
 }
 

@@ -2699,16 +2699,54 @@ func (sb *SingBox) NodeDetail(id int) (*NodeDetailInfo, error) {
 		}
 	}
 
+	certDom := ""
+	certFile := ""
+	keyFile := ""
+	certType := ""
+	isTuicHy2 := false
+	protoLower := strings.ToLower(proto)
+	tagLower := strings.ToLower(tag)
+	if protoLower == "tuic" || protoLower == "hysteria2" || protoLower == "hy2" ||
+		strings.Contains(tagLower, "tuic") || strings.Contains(tagLower, "hy2") || strings.Contains(tagLower, "hysteria") {
+		isTuicHy2 = true
+	}
+
+	if tlsMap, ok := ibMap["tls"].(map[string]any); ok && tlsMap != nil {
+		if cp, ok := tlsMap["certificate_path"].(string); ok && cp != "" {
+			certFile = cp
+			if strings.Contains(cp, "/home/ssc/") {
+				certType = "self_signed"
+			} else if strings.Contains(cp, "/home/acme/") {
+				certType = "acme"
+			}
+		}
+		if kp, ok := tlsMap["key_path"].(string); ok && kp != "" {
+			keyFile = kp
+		}
+		if sn, ok := tlsMap["server_name"].(string); ok && sn != "" {
+			certDom = sn
+		}
+	}
+	if certDom == "" && sni != "" {
+		certDom = sni
+	}
+
 	return &NodeDetailInfo{
-		ID:           id,
-		Name:         tag,
-		Protocol:     proto,
-		Listen:       listen,
-		ListenPort:   port,
-		TLSEnabled:   tlsEnabled,
-		SNI:          sni,
-		ServerHasTLS: serverHasTLS,
-		Addrs:        addrs,
+		ID:             id,
+		Name:           tag,
+		Protocol:       proto,
+		Listen:         listen,
+		ListenPort:     port,
+		TLSEnabled:     tlsEnabled,
+		SNI:            sni,
+		ServerHasTLS:   serverHasTLS,
+		IsTuicHy2:      isTuicHy2,
+		CertDomain:     certDom,
+		CertFile:       certFile,
+		KeyFile:        keyFile,
+		CertType:       certType,
+		AvailableCerts: GetAllCerts(),
+		Addrs:          addrs,
 	}, nil
 }
 
