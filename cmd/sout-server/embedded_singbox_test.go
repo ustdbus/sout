@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"net/netip"
 	"testing"
 
@@ -129,7 +128,12 @@ func TestInboundBoxConfigRouteRules(t *testing.T) {
 		},
 	}
 
-	opt, err := decodeSingBoxOptions[option.Options](context.Background(), boxConfig)
+	engine, err := newEmbeddedEngine("127.0.0.1")
+	if err != nil {
+		t.Fatalf("newEmbeddedEngine failed: %v", err)
+	}
+
+	opt, err := decodeSingBoxOptions[option.Options](engine.inboundCtx, boxConfig)
 	if err != nil {
 		t.Fatalf("sing-box options decode failed: %v", err)
 	}

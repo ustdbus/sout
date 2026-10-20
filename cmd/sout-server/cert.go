@@ -87,7 +87,7 @@ func getCFZoneID(cfToken, domain string) (string, error) {
 		if len(res.Errors) > 0 {
 			msg += " (" + res.Errors[0].Message + ")"
 		}
-		return "", fmt.Errorf(msg)
+		return "", fmt.Errorf("%s", msg)
 	}
 
 	bestZoneID := ""
@@ -147,7 +147,7 @@ func createCFTXTRecord(cfToken, zoneID, name, content string) (string, error) {
 		if len(res.Errors) > 0 {
 			msg += ": " + res.Errors[0].Message
 		}
-		return "", fmt.Errorf(msg)
+		return "", fmt.Errorf("%s", msg)
 	}
 	return res.Result.ID, nil
 }

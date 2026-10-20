@@ -14,7 +14,7 @@ func TestJSONGetSet(t *testing.T) {
 	// 1. json-set 顶层 string
 	toolJSONSet([]string{f, "name", "sout", "--type", "string"})
 	// 2. json-set 顶层 int
-	toolJSONSet([]string{f, "port", "8899", "--type", "int"})
+	toolJSONSet([]string{f, "port", "43322", "--type", "int"})
 	// 3. json-set 顶层 bool
 	toolJSONSet([]string{f, "ssl", "true", "--type", "bool"})
 	// 4. json-set 点分 key 与自动类型推断
@@ -38,8 +38,8 @@ func TestJSONGetSet(t *testing.T) {
 	}
 
 	vPort, ok := getNestedValue(root, "port")
-	if !ok || vPort != int64(8899) {
-		t.Errorf("期望 port 为 8899，实际获取: %v", vPort)
+	if !ok || (vPort != int64(43322) && vPort != float64(43322)) {
+		t.Errorf("期望 port 为 43322，实际获取: %v", vPort)
 	}
 
 	vSSL, ok := getNestedValue(root, "ssl")

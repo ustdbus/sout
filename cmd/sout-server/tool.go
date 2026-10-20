@@ -791,23 +791,23 @@ func toolCFDNSClean(args []string) {
 
 func toolGatewaySoutSync(args []string) {
 	if len(args) < 2 {
-		fmt.Println("8899|False")
+		fmt.Println("43322|False")
 		return
 	}
 	settingsPath := args[0]
 	domain := args[1]
 	data, err := os.ReadFile(settingsPath)
 	if err != nil {
-		fmt.Println("8899|False")
+		fmt.Println("43322|False")
 		return
 	}
 	var d map[string]any
 	if err := json.Unmarshal(data, &d); err != nil {
-		fmt.Println("8899|False")
+		fmt.Println("43322|False")
 		return
 	}
 
-	p := 8899
+	p := 43322
 	if portVal, ok := d["port"].(float64); ok && portVal > 0 {
 		p = int(portVal)
 	}

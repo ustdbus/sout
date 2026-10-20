@@ -305,11 +305,11 @@ func TestInitLowMemoryProtectionIntegration(t *testing.T) {
 	initLowMemoryProtection()
 
 	curLimit := debug.SetMemoryLimit(-1)
-	if curLimit != 38*1024*1024 {
-		t.Errorf("initLowMemoryProtection() SetMemoryLimit = %d, want %d", curLimit, 38*1024*1024)
+	if curLimit != 45*1024*1024 {
+		t.Errorf("initLowMemoryProtection() SetMemoryLimit = %d, want %d", curLimit, 45*1024*1024)
 	}
 	curGC := debug.SetGCPercent(100)
-	if curGC != 40 {
-		t.Errorf("initLowMemoryProtection() SetGCPercent = %d, want 40", curGC)
+	if curGC != 80 {
+		t.Errorf("initLowMemoryProtection() SetGCPercent = %d, want 80", curGC)
 	}
 }

@@ -297,6 +297,10 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
       </div>
     </div>
   </h1>
+  <button class="primary" id="addNodeBtnNav" style="margin-left:12px;gap:6px;box-shadow:0 2px 6px var(--accent-glow)">
+    <svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+    添加节点
+  </button>
   <span class="spacer"></span>
 
   <button id="settingsBtn" style="gap:6px">
@@ -353,6 +357,10 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
     </h2>
     <span class="desc" id="nodesDesc">点击每个节点的「+」从上方隧道池中选择出口绑定</span>
     <span class="spacer"></span>
+    <button class="primary" id="addNodeBtnSection" style="gap:6px">
+      <svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+      添加节点
+    </button>
     <button id="refreshNodesBtn">
       <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
       刷新节点
@@ -733,7 +741,7 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
               <div id="tnSoutPath" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--accent);font-size:11px">/sout/</div>
             </div>
             <div style="text-align:right">
-              <span id="tnSoutPort" class="pool-tag residential" style="font-size:11px">127.0.0.1:8899</span>
+              <span id="tnSoutPort" class="pool-tag residential" style="font-size:11px">127.0.0.1:43322</span>
             </div>
           </div>
           <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid var(--line)">
@@ -819,6 +827,206 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
     <div class="foot">
       <span class="spacer"></span>
       <button data-close="tunnelModal">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: 隧道平滑切换迁移指引 (绝不强跳，杜绝503丢失页面) -->
+<div class="modal" id="tnMigrationModal" data-static="true">
+  <div class="sheet" style="max-width:580px;border:1px solid var(--accent);box-shadow:0 8px 32px rgba(0,0,0,0.6)">
+    <div class="head">
+      <h2 style="display:flex;align-items:center;gap:8px;color:var(--text)">
+        <span style="display:inline-block">🌀</span>
+        Cloudflare 边缘隧道正在平滑接入
+      </h2>
+    </div>
+    <div class="body" style="padding-top:16px;line-height:1.6">
+      <div style="background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:14px">
+        <div style="font-weight:600;font-size:13px;color:var(--accent);margin-bottom:4px">
+          🎉 隧道配置已应用成功，后端服务已切入本地反代保护！
+        </div>
+        <div style="font-size:12px;color:var(--dim)">
+          Cloudflare 全球 CDN 边缘节点正在建立路由分发与 TLS 握手，通常需要 10~30 秒。请妥善保存以下新访问信息：
+        </div>
+      </div>
+
+      <!-- 新地址常驻卡片 -->
+      <div style="background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:14px">
+        <div style="font-size:12px;color:var(--dim);margin-bottom:6px">📌 新的 Web 管理面板访问地址：</div>
+        <div style="display:flex;align-items:center;gap:8px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px 12px;margin-bottom:8px">
+          <input id="tnMigrateUrlInput" type="text" readonly style="flex:1;background:transparent;border:none;color:var(--accent);font-weight:600;font-size:13px;outline:none;font-family:ui-monospace,monospace">
+          <button id="tnMigrateCopyBtn" class="primary" style="padding:4px 12px;font-size:12px">一键复制</button>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;justify-content:space-between">
+          <span style="font-size:11px;color:var(--dim)">访问口令保持不变，原直连公网已收敛安全保护</span>
+          <a id="tnMigrateNewTabLink" href="#" target="_blank" style="font-size:12px;color:var(--accent);text-decoration:underline">在新标签页打开 ↗</a>
+        </div>
+      </div>
+
+      <!-- 实时探测状态 -->
+      <div style="background:var(--input-bg);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:16px">
+        <div style="display:flex;align-items:center;gap:8px;font-size:12px">
+          <span id="tnMigrateDot" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--warn)"></span>
+          <span id="tnMigrateStatusText" style="color:var(--text);font-weight:500">正在等待 Cloudflare 边缘网络建立路由... (探测中 0/25)</span>
+        </div>
+        <div id="tnMigrateTip" style="font-size:11px;color:var(--dim);margin-top:6px">
+          提示：若遇 Cloudflare 503/521/522 报错无需慌张，这仅表示边缘节点尚在握手同步中，稍候刷新即可就绪。
+        </div>
+      </div>
+
+      <!-- 操作区域 -->
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button id="tnMigrateStayBtn" style="font-size:12px">留在当前页</button>
+        <button id="tnMigrateGoBtn" class="primary" style="font-size:12px;padding:8px 18px;font-weight:600" disabled>等待边缘网络就绪…</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: 添加节点 (快捷预设与兜底) -->
+<div class="modal" id="addNodePresetModal">
+  <div class="sheet" style="max-width:640px">
+    <div class="head">
+      <h2 style="display:flex;align-items:center;gap:8px">
+        <svg viewBox="0 0 24 24" style="color:var(--accent)"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+        添加节点 (快捷预设与兜底)
+      </h2>
+      <span class="spacer"></span>
+      <button class="icon" data-close="addNodePresetModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="body" style="padding-top:14px">
+      <!-- 模式提示横幅 -->
+      <div style="background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:8px 12px;margin-bottom:14px;font-size:12px;display:flex;align-items:center;justify-content:space-between">
+        <span>当前后端模式: <b id="presetBackendMode" style="color:var(--accent)">检测中...</b></span>
+        <span style="font-size:11px;color:var(--dim)">独立配置 · 严格隔离 · 复用引擎逻辑</span>
+      </div>
+
+      <!-- 预设选项卡切换按钮 -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px">
+        <button class="preset-tab-btn active" id="tabBtnVlessReality" style="padding:10px 8px;text-align:center;border-radius:6px;border:1px solid var(--accent);background:var(--card);cursor:pointer">
+          <div style="font-weight:600;font-size:13px;color:var(--text)">VLESS-Reality</div>
+          <div style="font-size:11px;color:var(--dim);margin-top:2px">直连 · 免域名免证书</div>
+        </button>
+        <button class="preset-tab-btn" id="tabBtnVlessArgo" style="padding:10px 8px;text-align:center;border-radius:6px;border:1px solid var(--line);background:var(--card);cursor:pointer">
+          <div style="font-weight:600;font-size:13px;color:var(--text)">VLESS-Argo</div>
+          <div style="font-size:11px;color:var(--dim);margin-top:2px">隧道 · CDN路径分流</div>
+        </button>
+        <button class="preset-tab-btn" id="tabBtnTuicHy2" style="padding:10px 8px;text-align:center;border-radius:6px;border:1px solid var(--line);background:var(--card);cursor:pointer">
+          <div style="font-weight:600;font-size:13px;color:var(--text)">TUIC / Hysteria2</div>
+          <div style="font-size:11px;color:var(--dim);margin-top:2px">QUIC高速 · 双节点</div>
+        </button>
+      </div>
+
+      <!-- 内容卡片 1: VLESS-Reality (默认) -->
+      <div id="tabContentVlessReality" class="preset-tab-content" style="display:block">
+        <div style="background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:14px;font-size:12px;line-height:1.6">
+          <div style="font-weight:600;font-size:13px;color:var(--accent);margin-bottom:6px">🛡️ VLESS-Reality (直连抗封锁推荐)</div>
+          <div style="color:var(--dim);margin-bottom:10px">
+            基于 X25519 秘钥交换与 TLS 伪装握手，<b>无需自己的域名与 SSL 证书</b>，直连速度快且抗探测性极高，是最可靠的基础兜底节点。
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div>
+              <label style="display:block;font-weight:600;margin-bottom:4px">伪装目标域名 (SNI / Dest):</label>
+              <input id="presetRealitySNI" type="text" value="apple.com" placeholder="例如 apple.com 或 www.microsoft.com" style="width:100%;box-sizing:border-box">
+            </div>
+            <div>
+              <label style="display:block;font-weight:600;margin-bottom:4px">公网监听端口 (留空或 0 为自动分配):</label>
+              <input id="presetRealityPort" type="number" placeholder="默认 2083 (被占则自动分配空闲端口)" style="width:100%;box-sizing:border-box">
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end">
+          <button id="createPresetRealityBtn" class="primary" style="padding:8px 20px">⚡ 立即生成 VLESS-Reality 节点</button>
+        </div>
+      </div>
+
+      <!-- 内容卡片 2: VLESS-Argo -->
+      <div id="tabContentVlessArgo" class="preset-tab-content" style="display:none">
+        <div style="background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:14px;font-size:12px;line-height:1.6">
+          <div style="font-weight:600;font-size:13px;color:var(--accent);margin-bottom:6px">☁️ VLESS-Argo (Cloudflare 隧道路径分流)</div>
+          <div style="color:var(--dim);margin-bottom:10px">
+            节点流量通过本地 127.0.0.1 回源至 Cloudflare 隧道，由 CDN 边缘 443 端口接入并伪装。
+          </div>
+          <div id="presetArgoWarn" style="display:none;background:rgba(210,153,34,0.15);border:1px solid var(--warn);color:var(--warn);border-radius:6px;padding:8px 12px;margin-bottom:10px">
+            ⚠️ 检测到当前尚未配置或启动 Cloudflare 隧道，建议先在上方配置隧道，或手动在下方填入托管域名。
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div>
+              <label style="display:block;font-weight:600;margin-bottom:4px">托管域名 (Domain):</label>
+              <input id="presetArgoDomain" type="text" placeholder="例如 node.example.com" style="width:100%;box-sizing:border-box">
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div>
+                <label style="display:block;font-weight:600;margin-bottom:4px">回源端口 (Port):</label>
+                <input id="presetArgoPort" type="number" value="2082" placeholder="默认 2082" style="width:100%;box-sizing:border-box">
+              </div>
+              <div>
+                <label style="display:block;font-weight:600;margin-bottom:4px">WebSocket 分流路径:</label>
+                <input id="presetArgoPath" type="text" value="/wsargo" placeholder="例如 /wsargo" style="width:100%;box-sizing:border-box">
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end">
+          <button id="createPresetArgoBtn" class="primary" style="padding:8px 20px">⚡ 立即生成 VLESS-Argo 节点</button>
+        </div>
+      </div>
+
+      <!-- 内容卡片 3: TUIC / Hysteria2 -->
+      <div id="tabContentTuicHy2" class="preset-tab-content" style="display:none">
+        <div style="background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:14px;font-size:12px;line-height:1.6">
+          <div style="font-weight:600;font-size:13px;color:var(--accent);margin-bottom:6px">🚀 TUIC / Hysteria2 (下一代 UDP/QUIC 极速双节点)</div>
+          <div style="color:var(--dim);margin-bottom:10px">
+            基于 QUIC 协议的高速防拥塞代理协议，支持 BBR 算法，自动同时创建 TUIC 和 Hysteria2 两个独立节点。
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div>
+              <label style="display:block;font-weight:600;margin-bottom:6px">选择 TLS 证书模式:</label>
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                  <input type="radio" name="tuicCertType" value="self_signed" checked>
+                  <span><b>自动生成 10 年期自签证书</b> (完全免域名/免证书门槛，自动开启 Insecure 兼容)</span>
+                </label>
+                <label id="tuicLocalCertRow" style="display:none;align-items:center;gap:6px;cursor:pointer">
+                  <input type="radio" name="tuicCertType" value="local_acme">
+                  <span><b>使用本地已有的有效证书</b> (扫描 /home/acme/ 目录发现)</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                  <input type="radio" name="tuicCertType" value="custom">
+                  <span><b>手动指定证书与私钥路径</b></span>
+                </label>
+              </div>
+            </div>
+
+            <div id="tuicLocalCertSelectBox" style="display:none;margin-top:6px">
+              <label style="display:block;font-weight:600;margin-bottom:4px">选择本地证书域名:</label>
+              <select id="tuicLocalCertSelect" style="width:100%;box-sizing:border-box;background:var(--input-bg);color:var(--text);border:1px solid var(--line);padding:8px;border-radius:6px"></select>
+            </div>
+
+            <div id="tuicCustomCertBox" style="display:none;margin-top:6px;flex-direction:column;gap:8px">
+              <div>
+                <label style="display:block;font-weight:600;margin-bottom:4px">证书对应域名:</label>
+                <input id="tuicCustomDomain" type="text" placeholder="例如 example.com" style="width:100%;box-sizing:border-box">
+              </div>
+              <div>
+                <label style="display:block;font-weight:600;margin-bottom:4px">公钥证书文件路径 (fullchain.pem):</label>
+                <input id="tuicCustomCertFile" type="text" placeholder="/etc/ssl/fullchain.pem" style="width:100%;box-sizing:border-box">
+              </div>
+              <div>
+                <label style="display:block;font-weight:600;margin-bottom:4px">私钥文件路径 (privkey.pem):</label>
+                <input id="tuicCustomKeyFile" type="text" placeholder="/etc/ssl/privkey.pem" style="width:100%;box-sizing:border-box">
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end">
+          <button id="createPresetTuicHy2Btn" class="primary" style="padding:8px 20px">⚡ 立即生成 TUIC & HY2 双节点</button>
+        </div>
+      </div>
+    </div>
+    <div class="foot">
+      <span class="spacer"></span>
+      <button data-close="addNodePresetModal">关闭</button>
     </div>
   </div>
 </div>
@@ -2115,7 +2323,7 @@ async function refreshTunnelView() {
 
     $('#tnBackPortHint').textContent = '回源 127.0.0.1:' + (t.tunnel_port || 8081);
     $('#tnSoutPath').textContent = '/' + soutPath + '/';
-    $('#tnSoutPort').textContent = '127.0.0.1:' + (t.sout_port || 8899);
+    $('#tnSoutPort').textContent = '127.0.0.1:' + (t.sout_port || 43322);
 
     $('#tnWsPath').textContent = '/' + (wsPath || 'wsargo*');
     $('#tnNodePort').textContent = '127.0.0.1:' + (t.node_port || 26060);
@@ -2246,32 +2454,307 @@ $('#tnSaveConfigBtn').onclick = async () => {
         protocol: protocol
       })
     });
+    btn.disabled = false;
+    btn.textContent = origText;
     toast(res.message || '隧道配置成功，服务正在生效...');
-    let countdown = 15;
-    btn.textContent = '隧道已启动，正在等待 Cloudflare 边缘就绪 (' + countdown + 's)…';
-    const timer = setInterval(async () => {
-      countdown--;
-      if (countdown > 0) {
-        btn.textContent = '隧道已启动，正在等待 Cloudflare 边缘就绪 (' + countdown + 's)…';
-      } else {
-        clearInterval(timer);
-        btn.textContent = '正在平滑载入…';
-        if (res.status && res.status.domain && res.status.sout_path) {
-          const targetUrl = 'https://' + res.status.domain + '/' + res.status.sout_path.replace(/^\/+|\/+$/g, '') + '/';
-          location.href = targetUrl;
-        } else {
-          refreshTunnelView();
-          btn.disabled = false;
-          btn.textContent = origText;
-        }
-      }
-    }, 1000);
+    openTunnelMigrationView(res.status);
   } catch(e) {
     toast('配置隧道失败: ' + e.message, true);
     btn.disabled = false;
     btn.textContent = origText;
   }
 };
+
+let migrationProbeTimer = null;
+
+function openTunnelMigrationView(st) {
+  closeModal('tunnelModal');
+  openModal('tnMigrationModal');
+
+  const domain = (st && st.domain) ? st.domain : '';
+  const soutPath = (st && st.sout_path) ? st.sout_path.replace(/^\/+|\/+$/g, '') : 'sout';
+  const targetUrl = 'https://' + domain + '/' + soutPath + '/';
+
+  $('#tnMigrateUrlInput').value = targetUrl;
+  $('#tnMigrateNewTabLink').href = targetUrl;
+
+  $('#tnMigrateCopyBtn').onclick = () => {
+    navigator.clipboard.writeText(targetUrl).then(() => {
+      toast('新面板访问地址已成功复制到剪贴板！');
+    }).catch(() => {
+      $('#tnMigrateUrlInput').select();
+      document.execCommand('copy');
+      toast('新面板访问地址已复制！');
+    });
+  };
+
+  $('#tnMigrateStayBtn').onclick = () => {
+    if (migrationProbeTimer) clearInterval(migrationProbeTimer);
+    closeModal('tnMigrationModal');
+    toast('已保留在当前页面。请务必保存新面板地址：' + targetUrl);
+  };
+
+  const dot = $('#tnMigrateDot');
+  const statusTxt = $('#tnMigrateStatusText');
+  const goBtn = $('#tnMigrateGoBtn');
+
+  dot.style.background = 'var(--warn)';
+  statusTxt.textContent = '正在等待 Cloudflare 边缘网络建立路由... (探测中 0/25)';
+  statusTxt.style.color = 'var(--text)';
+  goBtn.disabled = true;
+  goBtn.textContent = '等待边缘网络就绪…';
+
+  let count = 0;
+  const maxTries = 25;
+  if (migrationProbeTimer) clearInterval(migrationProbeTimer);
+
+  migrationProbeTimer = setInterval(async () => {
+    count++;
+    statusTxt.textContent = '正在探测 Cloudflare 边缘网络连通状态... (第 ' + count + '/' + maxTries + ' 次)';
+
+    try {
+      await fetch(targetUrl, { mode: 'no-cors', cache: 'no-store' });
+      clearInterval(migrationProbeTimer);
+      migrationProbeTimer = null;
+
+      dot.style.background = 'var(--ok)';
+      statusTxt.textContent = '● Cloudflare 边缘隧道已就绪！可以安全访问！';
+      statusTxt.style.color = 'var(--ok)';
+
+      let cd = 3;
+      goBtn.disabled = false;
+      goBtn.textContent = '立即前往新面板 (' + cd + 's)';
+
+      const cdTimer = setInterval(() => {
+        cd--;
+        if (cd > 0) {
+          goBtn.textContent = '立即前往新面板 (' + cd + 's)';
+        } else {
+          clearInterval(cdTimer);
+          location.href = targetUrl;
+        }
+      }, 1000);
+
+      goBtn.onclick = () => {
+        clearInterval(cdTimer);
+        location.href = targetUrl;
+      };
+    } catch(e) {
+      if (count >= maxTries) {
+        clearInterval(migrationProbeTimer);
+        migrationProbeTimer = null;
+        dot.style.background = 'var(--warn)';
+        statusTxt.textContent = '○ 边缘网络可能仍处于握手分发中，请手动在新标签页打开';
+        goBtn.disabled = false;
+        goBtn.textContent = '在新标签页手动尝试打开 ↗';
+        goBtn.onclick = () => {
+          window.open(targetUrl, '_blank');
+        };
+      }
+    }
+  }, 2500);
+}
+
+async function openAddNodePresetModal() {
+  openModal('addNodePresetModal');
+  $('#presetBackendMode').textContent = '正在检测母机架构与引擎...';
+
+  try {
+    const info = await api('/api/node/preset_info');
+    const modeText = (info.panel_mode === 's-ui') ? 's-ui 外挂面板模式' : 'sing-box 独立轻量模式';
+    $('#presetBackendMode').textContent = modeText;
+
+    if (info.domain) {
+      $('#presetArgoDomain').value = info.domain;
+      $('#presetArgoWarn').style.display = 'none';
+    } else {
+      $('#presetArgoDomain').value = '';
+      $('#presetArgoWarn').style.display = 'block';
+    }
+
+    if (info.node_port > 0) {
+      $('#presetArgoPort').value = info.node_port;
+    }
+    if (info.ws_path) {
+      $('#presetArgoPath').value = info.ws_path;
+    }
+
+    const certRow = $('#tuicLocalCertRow');
+    const certSelect = $('#tuicLocalCertSelect');
+    if (info.acme_certs && info.acme_certs.length > 0) {
+      certRow.style.display = 'flex';
+      certSelect.innerHTML = '';
+      info.acme_certs.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = JSON.stringify(c);
+        opt.textContent = c.domain + ' (' + c.cert + ')';
+        certSelect.appendChild(opt);
+      });
+    } else {
+      certRow.style.display = 'none';
+    }
+  } catch(e) {
+    $('#presetBackendMode').textContent = '检测失败: ' + e.message;
+  }
+}
+
+function initAddNodePresetEvents() {
+  const navBtn = $('#addNodeBtnNav');
+  if (navBtn) navBtn.onclick = () => openAddNodePresetModal();
+
+  const secBtn = $('#addNodeBtnSection');
+  if (secBtn) secBtn.onclick = () => openAddNodePresetModal();
+
+  const tabs = [
+    { btn: $('#tabBtnVlessReality'), content: $('#tabContentVlessReality') },
+    { btn: $('#tabBtnVlessArgo'), content: $('#tabContentVlessArgo') },
+    { btn: $('#tabBtnTuicHy2'), content: $('#tabContentTuicHy2') }
+  ];
+
+  tabs.forEach(t => {
+    if (!t.btn) return;
+    t.btn.onclick = () => {
+      tabs.forEach(o => {
+        if (o.btn) o.btn.style.borderColor = 'var(--line)';
+        if (o.content) o.content.style.display = 'none';
+      });
+      t.btn.style.borderColor = 'var(--accent)';
+      t.content.style.display = 'block';
+    };
+  });
+
+  const radios = document.querySelectorAll('input[name="tuicCertType"]');
+  radios.forEach(r => {
+    r.onchange = () => {
+      const checked = document.querySelector('input[name="tuicCertType"]:checked');
+      const val = checked ? checked.value : 'self_signed';
+      $('#tuicLocalCertSelectBox').style.display = (val === 'local_acme') ? 'block' : 'none';
+      $('#tuicCustomCertBox').style.display = (val === 'custom') ? 'flex' : 'none';
+    };
+  });
+
+  // 1. 生成 Reality
+  $('#createPresetRealityBtn').onclick = async () => {
+    const btn = $('#createPresetRealityBtn');
+    const origText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '正在生成 VLESS-Reality 节点...';
+
+    const sni = $('#presetRealitySNI').value.trim() || 'apple.com';
+    const port = parseInt($('#presetRealityPort').value.trim(), 10) || 0;
+
+    try {
+      const res = await api('/api/node/create_preset', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          preset: 'vless_reality',
+          sni: sni,
+          port: port
+        })
+      });
+      toast(res.message || 'VLESS-Reality 节点创建成功！');
+      closeModal('addNodePresetModal');
+      await refreshNodes();
+    } catch(e) {
+      toast('创建 VLESS-Reality 失败: ' + e.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = origText;
+    }
+  };
+
+  // 2. 生成 Argo
+  $('#createPresetArgoBtn').onclick = async () => {
+    const btn = $('#createPresetArgoBtn');
+    const origText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '正在生成 VLESS-Argo 节点...';
+
+    const domain = $('#presetArgoDomain').value.trim();
+    const port = parseInt($('#presetArgoPort').value.trim(), 10) || 2082;
+    const wsPath = $('#presetArgoPath').value.trim() || '/wsargo';
+
+    try {
+      const res = await api('/api/node/create_preset', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          preset: 'vless_argo',
+          domain: domain,
+          port: port,
+          ws_path: wsPath
+        })
+      });
+      toast(res.message || 'VLESS-Argo 节点创建成功！');
+      closeModal('addNodePresetModal');
+      await refreshNodes();
+    } catch(e) {
+      toast('创建 VLESS-Argo 失败: ' + e.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = origText;
+    }
+  };
+
+  // 3. 生成 TUIC & Hysteria2
+  $('#createPresetTuicHy2Btn').onclick = async () => {
+    const btn = $('#createPresetTuicHy2Btn');
+    const origText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '正在生成 TUIC & Hysteria2 节点...';
+
+    const checked = document.querySelector('input[name="tuicCertType"]:checked');
+    const certType = checked ? checked.value : 'self_signed';
+    let domain = 'apple.com';
+    let certFile = '';
+    let keyFile = '';
+
+    if (certType === 'local_acme') {
+      const selVal = $('#tuicLocalCertSelect').value;
+      if (selVal) {
+        try {
+          const cObj = JSON.parse(selVal);
+          domain = cObj.domain;
+          certFile = cObj.cert;
+          keyFile = cObj.key;
+        } catch(e) {}
+      }
+    } else if (certType === 'custom') {
+      domain = $('#tuicCustomDomain').value.trim();
+      certFile = $('#tuicCustomCertFile').value.trim();
+      keyFile = $('#tuicCustomKeyFile').value.trim();
+      if (!domain || !certFile || !keyFile) {
+        toast('请完整填写自定义域名、公钥与私钥路径！', true);
+        btn.disabled = false;
+        btn.textContent = origText;
+        return;
+      }
+    }
+
+    try {
+      const res = await api('/api/node/create_preset', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          preset: 'tuic_hy2',
+          cert_type: certType,
+          domain: domain,
+          cert_file: certFile,
+          key_file: keyFile
+        })
+      });
+      toast(res.message || 'TUIC 与 Hysteria2 节点创建成功！');
+      closeModal('addNodePresetModal');
+      await refreshNodes();
+    } catch(e) {
+      toast('创建 TUIC/Hysteria2 失败: ' + e.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = origText;
+    }
+  };
+}
 
 let initialBasePath = '';
 
@@ -3150,6 +3633,7 @@ document.addEventListener('click', function(e){
 document.addEventListener('keydown', function(e){ if(e.key === 'Escape') closeThemeMenu(); });
 applyTheme(document.documentElement.getAttribute('data-theme') || 'forest', false);
 
+initAddNodePresetEvents();
 poll();
 setInterval(poll, 3000);
 api('/api/custom/source/list').then(l => { allSourcesList = l || []; renderSourceTabs(); }).catch(() => {});

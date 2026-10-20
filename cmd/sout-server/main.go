@@ -23,7 +23,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v5.0.0"
+var version = "v5.0.1"
 
 var (
 	cgroupV2Path    = "/sys/fs/cgroup/memory.max"
@@ -176,7 +176,7 @@ func main() {
 	initLowMemoryProtection()
 	initLogCapture()
 	var (
-		webPort  = flag.Int("web", 8899, "Web 管理端口")
+		webPort  = flag.Int("web", 43322, "Web 管理端口")
 		maxSlots = flag.Int("max", 20, "最多同时运行的隧道数")
 		workDir  = flag.String("dir", "/var/lib/sout", "工作目录")
 	)
@@ -308,6 +308,8 @@ func main() {
 	mux.HandleFunc("/api/custom/warp/generate", apiCustomWARPGenerate(mgr))
 	mux.HandleFunc("/api/logs", apiLogsHandler)
 	mux.HandleFunc("/api/tunnel", apiTunnelHandler)
+	mux.HandleFunc("/api/node/preset_info", apiNodePresetInfoHandler)
+	mux.HandleFunc("/api/node/create_preset", apiNodeCreatePresetHandler(mgr))
 
 	mux.HandleFunc("/sub", handleSub(mgr))
 	mux.HandleFunc("/sub/", handleSub(mgr))

@@ -54,6 +54,14 @@ func (s *SUI) base() string {
 	return fmt.Sprintf("%s://%s:%d%s", s.Scheme, s.Host, s.Port, s.BasePath)
 }
 
+func (s *SUI) APIRoot() string {
+	return s.base() + "apiv2"
+}
+
+func (s *SUI) APIToken() string {
+	return s.token
+}
+
 func localSUIClient() *http.Client {
 	return &http.Client{
 		Timeout: 20 * time.Second,

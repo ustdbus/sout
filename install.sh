@@ -6,7 +6,7 @@ REPO="${REPO:-ustdbus/sout}"
 BIN="/usr/local/bin/sout-server"
 WORK_DIR="/var/lib/sout"
 [[ -d "/usr/local/sout" && ! -d "/var/lib/sout" ]] && cp -rf /usr/local/sout /var/lib/sout 2>/dev/null || true
-WEB_PORT=8899
+WEB_PORT=43322
 
 # ==============================================================================
 # 统一 JSON 字段读取：替代 grep -oE/cut/awk 解析（键不存在或解析失败时输出空，由调用点 :- 兜底）
@@ -1017,7 +1017,7 @@ OPENRCEOF
 
 svc_enable_start() {
   echo "      正在启动服务..."
-  local web_p="${WEB_PORT:-8899}"
+  local web_p="${WEB_PORT:-43322}"
   if [[ -f "${WORK_DIR}/settings.json" ]]; then
     local parsed_p
     parsed_p=$(json_get "${WORK_DIR}/settings.json" port)
@@ -1196,7 +1196,7 @@ if [[ "$is_pure_ipv6" -eq 1 ]]; then
   echo "      正在自动申请注册 Cloudflare WARP 账号并建立前置出口隧道..."
   sout_pw=$(cat "${WORK_DIR}/password" 2>/dev/null | tr -d ' \r\n')
   cur_port=$(json_get "${WORK_DIR}/settings.json" port)
-  cur_port="${cur_port:-8899}"
+  cur_port="${cur_port:-43322}"
   sout_bp=$(cat "${WORK_DIR}/basepath" 2>/dev/null | tr -d ' \r\n')
   sout_bp="/${sout_bp#/}"
   sout_bp="${sout_bp%/}/"
@@ -1254,7 +1254,7 @@ BP="/${BP#/}"
 BP="${BP%/}/"
 
 ACTUAL_PORT=$(json_get "${WORK_DIR}/settings.json" port)
-WEB_PORT="${ACTUAL_PORT:-8899}"
+WEB_PORT="${ACTUAL_PORT:-43322}"
 
 GATEWAY_META="${WORK_DIR}/gateway_meta.json"
 [[ ! -f "$GATEWAY_META" && -f "${WORK_DIR}/caddy_meta.json" ]] && GATEWAY_META="${WORK_DIR}/caddy_meta.json"

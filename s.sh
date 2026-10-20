@@ -287,7 +287,7 @@ _openrc_clean_ports() {
   local name="$1"
   case "$name" in
     sout|fanout)
-      local p="8899"
+      local p="43322"
       if [[ -f "/var/lib/sout/settings.json" ]]; then
         local sp
         sp=$(json_get "/var/lib/sout/settings.json" port)
@@ -492,8 +492,8 @@ BIN="/usr/local/bin/sout-server"
 [[ ! -f "$BIN" && -f "/usr/local/bin/fanout" ]] && BIN="/usr/local/bin/fanout"
 WORK_DIR="/var/lib/sout"
 [[ ! -d "$WORK_DIR" && -d "/var/lib/fanout" ]] && WORK_DIR="/var/lib/fanout"
-DEFAULT_PORT=8899
-SOUT_VERSION="4.9.8"
+DEFAULT_PORT=43322
+SOUT_VERSION="5.0.1"
 
 R='\033[31m'; G='\033[32m'; Y='\033[33m'; B='\033[34m'; D='\033[90m'; N='\033[0m'
 
@@ -1207,7 +1207,7 @@ change_listen_and_port() {
   cur_addr=$(web_listen_addr)
   cur_port=$(web_port)
   [[ -z "$cur_addr" ]] && cur_addr="0.0.0.0"
-  [[ -z "$cur_port" ]] && cur_port="8899"
+  [[ -z "$cur_port" ]] && cur_port="43322"
 
   echo
   echo -e "  当前监听地址: ${B}${cur_addr}${N}"
@@ -2444,8 +2444,8 @@ disable_caddy_proxy() {
 
   rm -f "${WORK_DIR}/gateway_meta.json" "${WORK_DIR}/caddy_meta.json" 2>/dev/null || true
 
-  # 恢复 sout 为默认端口 8899 和 0.0.0.0 监听
-  json_set "$WORK_DIR/settings.json" "port" "8899" --type int
+  # 恢复 sout 为默认端口 43322 和 0.0.0.0 监听
+  json_set "$WORK_DIR/settings.json" "port" "43322" --type int
   json_set "$WORK_DIR/settings.json" "listen_addr" "0.0.0.0"
   json_set "$WORK_DIR/settings.json" "panel_url" ""
 
@@ -2483,7 +2483,7 @@ disable_caddy_proxy() {
     restart_sout_service
   fi
   echo -e "  ${G}[✓] 已成功关闭隧道反代，所有服务已恢复公网 0.0.0.0 直连模式 (已还原证书与配置)：${N}"
-  echo -e "      • sout 管理面板: ${B}http://${public_ip}:8899/$(cat "${WORK_DIR}/basepath" 2>/dev/null || echo "")/${N}"
+  echo -e "      • sout 管理面板: ${B}http://${public_ip}:43322/$(cat "${WORK_DIR}/basepath" 2>/dev/null || echo "")/${N}"
   echo -e "      • s-ui 管理面板: ${B}${final_proto}://${show_web_host}${final_wpath}${N}"
   echo -e "      • s-ui 订阅地址: ${B}${final_sub_proto}://${show_sub_host}${final_spath}${N}"
 }
@@ -2567,11 +2567,11 @@ reload_caddy_proxy() {
   fi
 
   # 1. 动态探测并自动纠偏 sout 面板配置 (确保监听 127.0.0.1 并更新完整 URL)
-  sout_port="8899"
+  sout_port="43322"
   local sout_needs_restart=0
   if [[ -f "${WORK_DIR}/settings.json" ]]; then
     local sout_info
-    sout_info=$(sout_tool gateway-sout-sync "${WORK_DIR}/settings.json" "${domain}" 2>/dev/null || echo "8899|false")
+    sout_info=$(sout_tool gateway-sout-sync "${WORK_DIR}/settings.json" "${domain}" 2>/dev/null || echo "43322|false")
     sout_port=$(echo "$sout_info" | cut -d'|' -f1)
     if [[ "$(echo "$sout_info" | cut -d'|' -f2 | tr '[:upper:]' '[:lower:]')" == "true" ]]; then
       sout_needs_restart=1
@@ -3446,7 +3446,7 @@ caddy_menu() {
             sout_port=$(json_get "$CADDY_META" sout_port)
             sui_port=$(json_get "$CADDY_META" sui_port)
             node_port=$(json_get "$CADDY_META" node_port)
-            [[ -z "$sout_port" ]] && sout_port="8899"
+            [[ -z "$sout_port" ]] && sout_port="43322"
             [[ -z "$sui_port" ]] && sui_port="0"
             [[ -z "$node_port" ]] && node_port="2082"
 
