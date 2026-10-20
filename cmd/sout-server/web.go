@@ -896,19 +896,16 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
         当前模式: <b id="presetBackendMode" style="color:var(--accent)">检测中...</b>
       </div>
 
-      <!-- 预设选项卡切换按钮 -->
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px">
-        <button class="preset-tab-btn active" id="tabBtnVlessReality" style="padding:10px 8px;text-align:center;border-radius:6px;border:1px solid var(--accent);background:var(--card);cursor:pointer">
-          <div id="tabTitleVlessReality" style="font-weight:600;font-size:13px;color:var(--text)">VLESS-Reality</div>
-          <div style="font-size:11px;color:var(--dim);margin-top:2px">直连 · 无需证书</div>
+      <!-- 预设选项卡切换按钮 (3列等宽自适应占满) -->
+      <div style="display:grid;grid-template-columns:repeat(3, minmax(0, 1fr));gap:8px;margin-bottom:16px;width:100%;box-sizing:border-box">
+        <button class="preset-tab-btn active" id="tabBtnVlessReality" style="padding:10px 4px;text-align:center;border-radius:6px;border:1px solid var(--accent);background:var(--card);cursor:pointer;min-width:0;width:100%;box-sizing:border-box">
+          <div id="tabTitleVlessReality" style="font-weight:600;font-size:13px;color:var(--text);display:flex;align-items:center;justify-content:center;gap:4px;flex-wrap:wrap">VLESS-Reality</div>
         </button>
-        <button class="preset-tab-btn" id="tabBtnVlessArgo" style="padding:10px 8px;text-align:center;border-radius:6px;border:1px solid var(--line);background:var(--card);cursor:pointer">
-          <div id="tabTitleVlessArgo" style="font-weight:600;font-size:13px;color:var(--text)">VLESS-Argo</div>
-          <div style="font-size:11px;color:var(--dim);margin-top:2px">隧道 · CDN分流</div>
+        <button class="preset-tab-btn" id="tabBtnVlessArgo" style="padding:10px 4px;text-align:center;border-radius:6px;border:1px solid var(--line);background:var(--card);cursor:pointer;min-width:0;width:100%;box-sizing:border-box">
+          <div id="tabTitleVlessArgo" style="font-weight:600;font-size:13px;color:var(--text);display:flex;align-items:center;justify-content:center;gap:4px;flex-wrap:wrap">VLESS-Argo</div>
         </button>
-        <button class="preset-tab-btn" id="tabBtnTuicHy2" style="padding:10px 8px;text-align:center;border-radius:6px;border:1px solid var(--line);background:var(--card);cursor:pointer">
-          <div id="tabTitleTuicHy2" style="font-weight:600;font-size:13px;color:var(--text)">TUIC / Hysteria2</div>
-          <div style="font-size:11px;color:var(--dim);margin-top:2px">QUIC · 双节点</div>
+        <button class="preset-tab-btn" id="tabBtnTuicHy2" style="padding:10px 4px;text-align:center;border-radius:6px;border:1px solid var(--line);background:var(--card);cursor:pointer;min-width:0;width:100%;box-sizing:border-box">
+          <div id="tabTitleTuicHy2" style="font-weight:600;font-size:12px;color:var(--text);display:flex;align-items:center;justify-content:center;gap:4px;flex-wrap:wrap">TUIC / Hysteria2</div>
         </button>
       </div>
 
@@ -2620,7 +2617,7 @@ async function openAddNodePresetModal() {
     const rAlert = $('#presetRealityExistAlert');
     const rTitle = $('#tabTitleVlessReality');
     if (rTitle) {
-      rTitle.innerHTML = 'VLESS-Reality' + (rEx ? ' <span style="font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(210,153,34,0.2);color:var(--warn);font-weight:normal">已存在</span>' : '');
+      rTitle.innerHTML = '<span>VLESS-Reality</span>' + (rEx ? ' <span style="font-size:10px;padding:1px 4px;border-radius:4px;background:rgba(210,153,34,0.2);color:var(--warn);font-weight:normal;white-space:nowrap">已存在</span>' : '');
     }
     if (rEx) {
       rAlert.style.display = 'block';
@@ -2643,7 +2640,7 @@ async function openAddNodePresetModal() {
     const aAlert = $('#presetArgoExistAlert');
     const aTitle = $('#tabTitleVlessArgo');
     if (aTitle) {
-      aTitle.innerHTML = 'VLESS-Argo' + (aEx ? ' <span style="font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(210,153,34,0.2);color:var(--warn);font-weight:normal">已存在</span>' : '');
+      aTitle.innerHTML = '<span>VLESS-Argo</span>' + (aEx ? ' <span style="font-size:10px;padding:1px 4px;border-radius:4px;background:rgba(210,153,34,0.2);color:var(--warn);font-weight:normal;white-space:nowrap">已存在</span>' : '');
     }
     if (aEx) {
       aAlert.style.display = 'block';
@@ -2666,7 +2663,7 @@ async function openAddNodePresetModal() {
     const tAlert = $('#presetTuicHy2ExistAlert');
     const tTitle = $('#tabTitleTuicHy2');
     if (tTitle) {
-      tTitle.innerHTML = 'TUIC / Hysteria2' + (tEx ? ' <span style="font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(210,153,34,0.2);color:var(--warn);font-weight:normal">已存在</span>' : '');
+      tTitle.innerHTML = '<span style="font-size:12px">TUIC / Hysteria2</span>' + (tEx ? ' <span style="font-size:10px;padding:1px 4px;border-radius:4px;background:rgba(210,153,34,0.2);color:var(--warn);font-weight:normal;white-space:nowrap">已存在</span>' : '');
     }
     if (tEx) {
       tAlert.style.display = 'block';
