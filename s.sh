@@ -2065,7 +2065,8 @@ setup_caddy_proxy() {
   local protocol="${TUNNEL_PROTOCOL:-quic}"
   [[ "$protocol" != "http2" ]] && protocol="quic"
 
-  local meta_f="${WORK_DIR}/caddy_meta.json"
+  local meta_f="$CADDY_META"
+  [[ ! -f "$meta_f" && -f "${WORK_DIR}/caddy_meta.json" ]] && meta_f="${WORK_DIR}/caddy_meta.json"
   if [[ -f "$meta_f" ]]; then
     if [[ -z "$tunnel_token" || "$tunnel_token" == *"..."* || "$tunnel_token" == *"***"* ]]; then
       local exist_token exist_dom
@@ -2132,7 +2133,8 @@ setup_caddy_proxy() {
 
   local old_sout_port="" old_sui_port="" old_sub_port="" old_node_port="" old_reality_port=""
   local old_sout_path="" old_sui_path="" old_sub_path="" old_ws_path=""
-  local meta_f="${WORK_DIR}/caddy_meta.json"
+  local meta_f="$CADDY_META"
+  [[ ! -f "$meta_f" && -f "${WORK_DIR}/caddy_meta.json" ]] && meta_f="${WORK_DIR}/caddy_meta.json"
   if [[ -f "$meta_f" ]]; then
     old_sout_port=$(json_get "$meta_f" "sout_port")
     old_sui_port=$(json_get "$meta_f" "sui_port")
@@ -2289,6 +2291,10 @@ setup_caddy_proxy() {
 }
 METAEOF
   chmod 600 "$CADDY_META"
+  # 保持 gateway_meta.json 与 caddy_meta.json 严格镜像双向同步
+  cp -f "$CADDY_META" "${WORK_DIR}/gateway_meta.json" 2>/dev/null || true
+  cp -f "$CADDY_META" "${WORK_DIR}/caddy_meta.json" 2>/dev/null || true
+  chmod 600 "${WORK_DIR}/gateway_meta.json" "${WORK_DIR}/caddy_meta.json" 2>/dev/null || true
 
   # 必须重启 sout 服务以应用新的内部端口 (127.0.0.1:${sout_port}) 和访问路径 (/${sout_path}/)
   if [[ "${SOUT_CALLED_FROM_WEB:-0}" != "1" ]]; then
@@ -2711,6 +2717,11 @@ reload_caddy_proxy() {
   if [[ "$cur_mode" != "quick_tunnel" ]]; then
     json_set "$CADDY_META" "tunnel_engine" "sing-box"
   fi
+
+  # 保持 gateway_meta.json 与 caddy_meta.json 严格镜像双向同步
+  cp -f "$CADDY_META" "${WORK_DIR}/gateway_meta.json" 2>/dev/null || true
+  cp -f "$CADDY_META" "${WORK_DIR}/caddy_meta.json" 2>/dev/null || true
+  chmod 600 "${WORK_DIR}/gateway_meta.json" "${WORK_DIR}/caddy_meta.json" 2>/dev/null || true
 
 
   # 重启/重载 sout 服务以激活内置网关

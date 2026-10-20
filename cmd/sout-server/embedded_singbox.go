@@ -8,8 +8,10 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	stdlog "log"
 	"net"
 	"net/netip"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -208,6 +210,56 @@ func newEmbeddedEngine(listenIP string) (*embeddedEngine, error) {
 	return engine, nil
 }
 
+func validateInboundTLSFiles(cfg map[string]any, tag string) bool {
+	if cfg == nil {
+		return false
+	}
+	typ, _ := cfg["type"].(string)
+	if typ == "cloudflared" || strings.HasPrefix(tag, "cf-tunnel") {
+		return true
+	}
+
+	tlsRaw, ok := cfg["tls"]
+	if !ok || tlsRaw == nil {
+		return true
+	}
+	tlsMap, ok := tlsRaw.(map[string]any)
+	if !ok || tlsMap == nil {
+		return true
+	}
+	enabled, hasEnabled := tlsMap["enabled"].(bool)
+	if hasEnabled && !enabled {
+		return true
+	}
+
+	// Reality 模式不需要外部证书文件，直接放行
+	if realityRaw, ok := tlsMap["reality"]; ok && realityRaw != nil {
+		if realityMap, ok := realityRaw.(map[string]any); ok {
+			if rEnabled, _ := realityMap["enabled"].(bool); rEnabled {
+				return true
+			}
+		}
+	}
+
+	// 校验 certificate_path
+	if certPath, ok := tlsMap["certificate_path"].(string); ok && certPath != "" {
+		if fi, err := os.Stat(certPath); err != nil || fi.IsDir() {
+			stdlog.Printf("[sing-box] 入站 [%s] 证书文件不存在 (%s)，已自动临时跳过该入站以保护 Cloudflare 隧道及核心服务", tag, certPath)
+			return false
+		}
+	}
+
+	// 校验 key_path
+	if keyPath, ok := tlsMap["key_path"].(string); ok && keyPath != "" {
+		if fi, err := os.Stat(keyPath); err != nil || fi.IsDir() {
+			stdlog.Printf("[sing-box] 入站 [%s] 私钥文件不存在 (%s)，已自动临时跳过该入站以保护 Cloudflare 隧道及核心服务", tag, keyPath)
+			return false
+		}
+	}
+
+	return true
+}
+
 func (e *embeddedEngine) rebuildInboundBoxLocked() error {
 	inboundsRaw := make([]any, 0, len(e.inboundConfigs))
 	var tags []string
@@ -217,6 +269,9 @@ func (e *embeddedEngine) rebuildInboundBoxLocked() error {
 	sort.Strings(tags)
 	for _, tag := range tags {
 		cfg := e.inboundConfigs[tag]
+		if !validateInboundTLSFiles(cfg, tag) {
+			continue
+		}
 		typ, _ := cfg["type"].(string)
 		if users, ok := cfg["users"].([]any); ok {
 			for _, u := range users {
@@ -289,6 +344,37 @@ func (e *embeddedEngine) rebuildInboundBoxLocked() error {
 		Options: opt,
 	})
 	if err != nil {
+		// 容灾兜底救援：若全量入站构建失败，但配置了 cf-tunnel-in，则启动最小化应急隧道以保证管理通道与 Cloudflare 隧道绝不瘫痪
+		if cfCfg, hasCF := e.inboundConfigs["cf-tunnel-in"]; hasCF {
+			stdlog.Printf("[sing-box] 警告: 全量 inboundBox 创建失败 (%v)，立即启动最小化应急隧道保护...", err)
+			emergencyBoxConfig := map[string]any{
+				"log": map[string]any{"level": "warn", "timestamp": true},
+				"dns": dnsConfig,
+				"inbounds": []any{cfCfg},
+				"outbounds": []any{
+					map[string]any{"type": "direct", "tag": "direct"},
+					map[string]any{"type": soutDynamicOutboundType, "tag": soutDynamicOutboundType},
+				},
+				"route": map[string]any{
+					"rules": []any{
+						map[string]any{"inbound": []any{"cf-tunnel-in"}, "outbound": "direct"},
+					},
+					"final": "direct",
+				},
+			}
+			if emOpt, emErr := decodeSingBoxOptions[option.Options](e.inboundCtx, emergencyBoxConfig); emErr == nil {
+				if emBox, emErr2 := sbox.New(sbox.Options{Context: e.inboundCtx, Options: emOpt}); emErr2 == nil {
+					if emErr3 := emBox.Start(); emErr3 == nil {
+						if e.inboundBox != nil {
+							_ = safeCloseBox(e.inboundBox)
+						}
+						e.inboundBox = emBox
+						stdlog.Printf("[sing-box] 最小化应急隧道已成功启动，Web 面板与 Cloudflare 隧道连接已恢复！")
+						return nil
+					}
+				}
+			}
+		}
 		return fmt.Errorf("创建 inboundBox 失败: %w", err)
 	}
 

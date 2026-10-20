@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -75,6 +76,20 @@ func LoadBasePath(dir string) (string, bool, error) {
 		}
 	} else if !os.IsNotExist(err) {
 		return "", false, err
+	}
+
+	// 优先检查 gateway_meta.json / caddy_meta.json 是否已有隧道路径，实现隧道与直连路径双向继承与一致
+	for _, metaName := range []string{"gateway_meta.json", "caddy_meta.json"} {
+		if metaData, err := os.ReadFile(filepath.Join(dir, metaName)); err == nil {
+			var meta struct {
+				SoutPath string `json:"sout_path"`
+			}
+			if json.Unmarshal(metaData, &meta) == nil && strings.TrimSpace(meta.SoutPath) != "" {
+				bp := normalizeBasePath(meta.SoutPath)
+				_ = os.WriteFile(path, []byte(strings.TrimPrefix(bp, "/")+"\n"), 0600)
+				return bp, false, nil
+			}
+		}
 	}
 
 	bp, err := randomBasePath(10)

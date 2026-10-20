@@ -23,7 +23,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v5.1.0"
+var version = "v5.1.1"
 
 var (
 	cgroupV2Path    = "/sys/fs/cgroup/memory.max"
@@ -598,7 +598,7 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 					return
 				}
 				cleanNewBP := strings.Trim(newBP, "/")
-				if oldBP != "" && cleanNewBP != "" && oldBP != cleanNewBP {
+				if cleanNewBP != "" {
 					syncGatewayBasePath(currentBasePathDir(), oldBP, cleanNewBP)
 				}
 			}
@@ -663,21 +663,28 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 }
 
 func syncGatewayBasePath(dir, oldBP, newBP string) {
-	if oldBP == "" || newBP == "" || oldBP == newBP {
+	if newBP == "" {
 		return
 	}
 	if dir == "" {
 		dir = "/var/lib/sout"
 	}
-	// 1. 同步更新 caddy_meta.json
-	metaPath := filepath.Join(dir, "caddy_meta.json")
-	if data, err := os.ReadFile(metaPath); err == nil {
-		var meta map[string]any
-		if err := json.Unmarshal(data, &meta); err == nil {
-			if cur, _ := meta["sout_path"].(string); cur == oldBP {
-				meta["sout_path"] = newBP
-				if out, err := json.MarshalIndent(meta, "", "  "); err == nil {
-					_ = os.WriteFile(metaPath, out, 0600)
+	cleanNew := strings.Trim(newBP, "/")
+	cleanOld := strings.Trim(oldBP, "/")
+
+	// 1. 同步更新 gateway_meta.json 与 caddy_meta.json，保证双向严格一致
+	for _, metaFile := range []string{"gateway_meta.json", "caddy_meta.json"} {
+		metaPath := filepath.Join(dir, metaFile)
+		if data, err := os.ReadFile(metaPath); err == nil {
+			var meta map[string]any
+			if err := json.Unmarshal(data, &meta); err == nil {
+				cur, _ := meta["sout_path"].(string)
+				curClean := strings.Trim(cur, "/")
+				if cleanOld == "" || curClean == cleanOld || curClean == "" || curClean != cleanNew {
+					meta["sout_path"] = cleanNew
+					if out, err := json.MarshalIndent(meta, "", "  "); err == nil {
+						_ = os.WriteFile(metaPath, out, 0600)
+					}
 				}
 			}
 		}

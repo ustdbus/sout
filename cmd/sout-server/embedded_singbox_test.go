@@ -145,3 +145,43 @@ func TestInboundBoxConfigRouteRules(t *testing.T) {
 		t.Fatalf("expected 3 route rules, got %d", len(opt.Route.Rules))
 	}
 }
+
+func TestValidateInboundTLSFiles(t *testing.T) {
+	// 1. cf-tunnel-in 无条件放行
+	cfIn := map[string]any{
+		"type": "cloudflared",
+		"tag":  "cf-tunnel-in",
+	}
+	if !validateInboundTLSFiles(cfIn, "cf-tunnel-in") {
+		t.Fatalf("cf-tunnel-in should always pass validation")
+	}
+
+	// 2. Reality 模式无证书放行
+	realityIn := map[string]any{
+		"type": "vless",
+		"tag":  "vless-reality",
+		"tls": map[string]any{
+			"enabled": true,
+			"reality": map[string]any{
+				"enabled": true,
+			},
+		},
+	}
+	if !validateInboundTLSFiles(realityIn, "vless-reality") {
+		t.Fatalf("reality inbound should pass validation without cert files")
+	}
+
+	// 3. 证书文件不存在的 TUIC / Hy2 必须被拦截跳过
+	tuicInvalid := map[string]any{
+		"type": "tuic",
+		"tag":  "tuic-ww4f",
+		"tls": map[string]any{
+			"enabled":          true,
+			"certificate_path": "/path/to/non_existent_fullchain.pem",
+			"key_path":         "/path/to/non_existent_privkey.pem",
+		},
+	}
+	if validateInboundTLSFiles(tuicInvalid, "tuic-ww4f") {
+		t.Fatalf("inbound with missing cert file must be rejected to protect tunnel")
+	}
+}
