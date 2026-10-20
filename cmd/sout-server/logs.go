@@ -255,7 +255,7 @@ func fetchLogsRaw(source string, lines int) string {
 		isSingboxTunnel := false
 		if b, err := os.ReadFile("/etc/sing-box/config.json"); err == nil && (strings.Contains(string(b), "\"cloudflared\"") || strings.Contains(string(b), "\"cf-tunnel-in\"")) {
 			isSingboxTunnel = true
-		} else if b, err := os.ReadFile(filepath.Join(currentBasePathDir(), "caddy_meta.json")); err == nil && strings.Contains(string(b), "\"tunnel_engine\": \"sing-box\"") {
+		} else if b, err := os.ReadFile(filepath.Join(currentBasePathDir(), "gateway_meta.json")); err == nil && strings.Contains(string(b), "\"tunnel_engine\": \"sing-box\"") {
 			isSingboxTunnel = true
 		}
 

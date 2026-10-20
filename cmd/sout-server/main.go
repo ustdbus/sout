@@ -672,23 +672,23 @@ func syncGatewayBasePath(dir, oldBP, newBP string) {
 	cleanNew := strings.Trim(newBP, "/")
 	cleanOld := strings.Trim(oldBP, "/")
 
-	// 1. 同步更新 gateway_meta.json 与 caddy_meta.json，保证双向严格一致
-	for _, metaFile := range []string{"gateway_meta.json", "caddy_meta.json"} {
-		metaPath := filepath.Join(dir, metaFile)
-		if data, err := os.ReadFile(metaPath); err == nil {
-			var meta map[string]any
-			if err := json.Unmarshal(data, &meta); err == nil {
-				cur, _ := meta["sout_path"].(string)
-				curClean := strings.Trim(cur, "/")
-				if cleanOld == "" || curClean == cleanOld || curClean == "" || curClean != cleanNew {
-					meta["sout_path"] = cleanNew
-					if out, err := json.MarshalIndent(meta, "", "  "); err == nil {
-						_ = os.WriteFile(metaPath, out, 0600)
-					}
+	// 1. 同步更新 gateway_meta.json
+	metaPath := filepath.Join(dir, "gateway_meta.json")
+	if data, err := os.ReadFile(metaPath); err == nil {
+		var meta map[string]any
+		if err := json.Unmarshal(data, &meta); err == nil {
+			cur, _ := meta["sout_path"].(string)
+			curClean := strings.Trim(cur, "/")
+			if cleanOld == "" || curClean == cleanOld || curClean == "" || curClean != cleanNew {
+				meta["sout_path"] = cleanNew
+				if out, err := json.MarshalIndent(meta, "", "  "); err == nil {
+					_ = os.WriteFile(metaPath, out, 0600)
 				}
 			}
 		}
 	}
+	// 清理已废弃的旧版本 caddy_meta.json 遗留文件
+	_ = os.Remove(filepath.Join(dir, "caddy_meta.json"))
 
 	// 2. 动态热重载 sout-server 内置轻量反代网关
 	ReloadGateway(dir)
@@ -806,12 +806,7 @@ func apiTunnelHandler(w http.ResponseWriter, r *http.Request) {
 		// 读取当前保存的网关元数据，以便在仅修改端口或协议时沿用已有配置
 		var oldMeta GatewayMeta
 		metaPath := filepath.Join(currentBasePathDir(), "gateway_meta.json")
-		if data, err := os.ReadFile(metaPath); err != nil {
-			metaPath = filepath.Join(currentBasePathDir(), "caddy_meta.json")
-			if data2, err2 := os.ReadFile(metaPath); err2 == nil {
-				_ = json.Unmarshal(data2, &oldMeta)
-			}
-		} else {
+		if data, err := os.ReadFile(metaPath); err == nil {
 			_ = json.Unmarshal(data, &oldMeta)
 		}
 

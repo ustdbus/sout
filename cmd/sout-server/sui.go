@@ -2180,9 +2180,9 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 	} else if out.TLS.ServerName != "" && net.ParseIP(out.TLS.ServerName) == nil {
 		tunnelHost = out.TLS.ServerName
 	}
-	var caddyWsPath string
+	var gatewayWsPath string
 	if s != nil && s.workDir != "" {
-		metaPath := filepath.Join(s.workDir, "caddy_meta.json")
+		metaPath := filepath.Join(s.workDir, "gateway_meta.json")
 		if b, err := os.ReadFile(metaPath); err == nil {
 			var meta struct {
 				Domain string `json:"domain"`
@@ -2192,7 +2192,7 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 				if meta.Domain != "" && tunnelHost == "" {
 					tunnelHost = strings.TrimSpace(meta.Domain)
 				}
-				caddyWsPath = strings.TrimSpace(meta.WsPath)
+				gatewayWsPath = strings.TrimSpace(meta.WsPath)
 			}
 		}
 		if tunnelHost == "" {
@@ -2312,8 +2312,8 @@ func (s *SUI) buildLinksFromInbound(outJsonBytes, addrsBytes, clientConfigBytes 
 			}
 			v.Set("type", tp)
 			path := out.Transport.Path
-			if isArgo && (path == "" || path == "/") && caddyWsPath != "" {
-				path = "/" + strings.TrimPrefix(caddyWsPath, "/")
+			if isArgo && (path == "" || path == "/") && gatewayWsPath != "" {
+				path = "/" + strings.TrimPrefix(gatewayWsPath, "/")
 			}
 			if path != "" {
 				maxEd := out.Transport.MaxEarlyData

@@ -865,7 +865,6 @@ pause() {
 }
 
 GATEWAY_META="${WORK_DIR}/gateway_meta.json"
-[[ ! -f "$GATEWAY_META" && -f "${WORK_DIR}/caddy_meta.json" ]] && GATEWAY_META="${WORK_DIR}/caddy_meta.json"
 CADDY_META="$GATEWAY_META"
 
 is_sui_backend() {
@@ -1021,23 +1020,23 @@ show_info() {
 
   if [[ "$c_en" == "true" ]]; then
     local c_mode="tunnel" c_dom="" c_sout_p="sout" c_sui_p="sui" c_sub_p="sub" c_tun_p="8081"
-    if [[ -f "$CADDY_META" ]]; then
-      c_mode=$(json_get "$CADDY_META" mode)
+    if [[ -f "$GATEWAY_META" ]]; then
+      c_mode=$(json_get "$GATEWAY_META" mode)
       [[ -z "$c_mode" ]] && c_mode="tunnel"
-      c_dom=$(json_get "$CADDY_META" domain)
-      c_sout_p=$(json_get "$CADDY_META" sout_path)
+      c_dom=$(json_get "$GATEWAY_META" domain)
+      c_sout_p=$(json_get "$GATEWAY_META" sout_path)
       [[ -z "$c_sout_p" ]] && c_sout_p="sout"
-      c_sui_p=$(json_get "$CADDY_META" sui_path)
+      c_sui_p=$(json_get "$GATEWAY_META" sui_path)
       [[ -z "$c_sui_p" ]] && c_sui_p="sui"
-      c_sub_p=$(json_get "$CADDY_META" sub_path)
+      c_sub_p=$(json_get "$GATEWAY_META" sub_path)
       [[ -z "$c_sub_p" ]] && c_sub_p="sub"
       local tp
-      tp=$(json_get "$CADDY_META" tunnel_port)
+      tp=$(json_get "$GATEWAY_META" tunnel_port)
       [[ -n "$tp" ]] && c_tun_p="$tp"
     fi
 
     local tun_eng=""
-    [[ -f "$CADDY_META" ]] && tun_eng=$(json_get "$CADDY_META" tunnel_engine)
+    [[ -f "$GATEWAY_META" ]] && tun_eng=$(json_get "$GATEWAY_META" tunnel_engine)
     if [[ -z "$tun_eng" ]] && grep -q '"cf-tunnel-in"' /etc/sing-box/config.json 2>/dev/null; then
       tun_eng="sing-box"
     fi
@@ -1817,9 +1816,9 @@ check_and_update() {
   fi
 
   # 7. 若开启了 Cloudflare 隧道，联动重启隧道并执行内置轻量反代网关重新探测分流
-  if [[ -f "$CADDY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$CADDY_META" 2>/dev/null; then
+  if [[ -f "$GATEWAY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$GATEWAY_META" 2>/dev/null; then
     local t_eng
-    t_eng=$(json_get "$CADDY_META" tunnel_engine)
+    t_eng=$(json_get "$GATEWAY_META" tunnel_engine)
     if [[ "$t_eng" == "sing-box" ]] || grep -q '"cf-tunnel-in"' /etc/sing-box/config.json 2>/dev/null || is_sui_backend; then
       systemctl stop cloudflared 2>/dev/null || true
       systemctl disable cloudflared 2>/dev/null || true
@@ -1856,7 +1855,6 @@ N='[0m'
 
 WORK_DIR="/var/lib/sout"
 GATEWAY_META="${WORK_DIR}/gateway_meta.json"
-[[ ! -f "$GATEWAY_META" && -f "${WORK_DIR}/caddy_meta.json" ]] && GATEWAY_META="${WORK_DIR}/caddy_meta.json"
 CADDY_META="$GATEWAY_META"
 
 pause() {
@@ -2041,8 +2039,8 @@ rand_safe_path() {
 }
 
 is_tunnel_gateway_enabled() {
-  if [[ -f "$CADDY_META" ]]; then
-    if grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$CADDY_META"; then
+  if [[ -f "$GATEWAY_META" ]]; then
+    if grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$GATEWAY_META"; then
       echo "true"
       return
     fi
@@ -2065,8 +2063,7 @@ setup_caddy_proxy() {
   local protocol="${TUNNEL_PROTOCOL:-quic}"
   [[ "$protocol" != "http2" ]] && protocol="quic"
 
-  local meta_f="$CADDY_META"
-  [[ ! -f "$meta_f" && -f "${WORK_DIR}/caddy_meta.json" ]] && meta_f="${WORK_DIR}/caddy_meta.json"
+  local meta_f="$GATEWAY_META"
   if [[ -f "$meta_f" ]]; then
     if [[ -z "$tunnel_token" || "$tunnel_token" == *"..."* || "$tunnel_token" == *"***"* ]]; then
       local exist_token exist_dom
@@ -2133,8 +2130,7 @@ setup_caddy_proxy() {
 
   local old_sout_port="" old_sui_port="" old_sub_port="" old_node_port="" old_reality_port=""
   local old_sout_path="" old_sui_path="" old_sub_path="" old_ws_path=""
-  local meta_f="$CADDY_META"
-  [[ ! -f "$meta_f" && -f "${WORK_DIR}/caddy_meta.json" ]] && meta_f="${WORK_DIR}/caddy_meta.json"
+  local meta_f="$GATEWAY_META"
   if [[ -f "$meta_f" ]]; then
     old_sout_port=$(json_get "$meta_f" "sout_port")
     old_sui_port=$(json_get "$meta_f" "sui_port")
@@ -2270,7 +2266,7 @@ setup_caddy_proxy() {
     meta_mode="quick_tunnel"
     meta_engine="standalone"
   fi
-  cat > "$CADDY_META" <<METAEOF
+  cat > "$GATEWAY_META" <<METAEOF
 {
   "enabled": true,
   "mode": "${meta_mode}",
@@ -2290,11 +2286,8 @@ setup_caddy_proxy() {
   "ws_path": "${ws_path}"
 }
 METAEOF
-  chmod 600 "$CADDY_META"
-  # 保持 gateway_meta.json 与 caddy_meta.json 严格镜像双向同步
-  cp -f "$CADDY_META" "${WORK_DIR}/gateway_meta.json" 2>/dev/null || true
-  cp -f "$CADDY_META" "${WORK_DIR}/caddy_meta.json" 2>/dev/null || true
-  chmod 600 "${WORK_DIR}/gateway_meta.json" "${WORK_DIR}/caddy_meta.json" 2>/dev/null || true
+  chmod 600 "$GATEWAY_META"
+  rm -f "${WORK_DIR}/caddy_meta.json" 2>/dev/null || true
 
   # 必须重启 sout 服务以应用新的内部端口 (127.0.0.1:${sout_port}) 和访问路径 (/${sout_path}/)
   if [[ "${SOUT_CALLED_FROM_WEB:-0}" != "1" ]]; then
@@ -2531,7 +2524,7 @@ caddy_interactive_setup() {
 }
 
 reload_caddy_proxy() {
-  if [[ ! -f "$CADDY_META" ]] || ! grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$CADDY_META" 2>/dev/null; then
+  if [[ ! -f "$GATEWAY_META" ]] || ! grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$GATEWAY_META" 2>/dev/null; then
     echo
     echo -e "  ${Y}================================================================${N}"
     echo -e "  ${Y}💡 提示: 检测到您尚未配置 Cloudflare 隧道连接${N}"
@@ -2544,9 +2537,9 @@ reload_caddy_proxy() {
   echo -e "  ${B}[+] 正在扫描并重新识别各组件 (隧道/sout/s-ui/节点) 最新路径与端口...${N}"
 
   local domain tunnel_port sout_p sui_p sub_p ws_p sout_port sui_port sub_port node_port meta_mode has_sui="false"
-  meta_mode=$(json_get "$CADDY_META" mode)
-  domain=$(json_get "$CADDY_META" domain)
-  tunnel_port=$(json_get "$CADDY_META" tunnel_port)
+  meta_mode=$(json_get "$GATEWAY_META" mode)
+  domain=$(json_get "$GATEWAY_META" domain)
+  tunnel_port=$(json_get "$GATEWAY_META" tunnel_port)
 
   # 0. 动态探测 Cloudflare 隧道的实时端口与活跃域名
   if [[ -f /etc/systemd/system/cloudflared.service ]]; then
@@ -2585,7 +2578,7 @@ reload_caddy_proxy() {
       sout_needs_restart=1
     fi
   fi
-  sout_p=$(json_get "$CADDY_META" sout_path)
+  sout_p=$(json_get "$GATEWAY_META" sout_path)
   local bp_val
   bp_val=$(web_basepath)
   [[ -n "$bp_val" ]] && sout_p="$bp_val"
@@ -2604,16 +2597,16 @@ reload_caddy_proxy() {
   # 2. 检查后端类型；若为 s-ui 则动态探测并自动纠偏 s-ui 面板配置
   sui_port=0
   sui_p=""
-  sub_p=$(json_get "$CADDY_META" sub_path)
+  sub_p=$(json_get "$GATEWAY_META" sub_path)
   [[ -z "$sub_p" ]] && sub_p="sub"
-  sub_port=$(json_get "$CADDY_META" sub_port)
+  sub_port=$(json_get "$GATEWAY_META" sub_port)
   [[ -z "$sub_port" ]] && sub_port="2097"
 
   local sui_needs_restart=0
   if is_sui_backend && [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
     has_sui="true"
     sui_port="2096"
-    sui_p=$(json_get "$CADDY_META" sui_path)
+    sui_p=$(json_get "$GATEWAY_META" sui_path)
     [[ -z "$sui_p" ]] && sui_p="sui"
     local sui_info
     sui_info=$(sout_tool sui-sync-listen "/usr/local/s-ui/db/s-ui.db" "$domain" "$sub_p" 2>/dev/null || echo "2096|sui|false|2097")
@@ -2637,8 +2630,8 @@ reload_caddy_proxy() {
   fi
 
   # 3. 动态识别/创建 s-ui 隧道节点入站 (核心：识别监听在 127.0.0.1 的隧道节点并同步更新域名SNI)
-  ws_p=$(json_get "$CADDY_META" ws_path)
-  node_port=$(json_get "$CADDY_META" node_port)
+  ws_p=$(json_get "$GATEWAY_META" ws_path)
+  node_port=$(json_get "$GATEWAY_META" node_port)
   [[ -z "$node_port" ]] && node_port="2082"
 
   if is_sui_backend && [[ -f /usr/local/s-ui/db/s-ui.db ]]; then
@@ -2676,7 +2669,7 @@ reload_caddy_proxy() {
     fi
   fi
 
-  # 4. 更新分流元数据 caddy_meta.json
+  # 4. 更新分流元数据 gateway_meta.json
   local save_sout_path="${sout_p:-$sout_path}"
   [[ -z "$save_sout_path" ]] && save_sout_path=$(web_basepath)
   local save_sui_path="${sui_path:-$sui_p}"
@@ -2697,31 +2690,28 @@ reload_caddy_proxy() {
   save_ws_path=$(echo "$save_ws_path" | sed -e 's|^/*||' -e 's|/*$||')
   save_sui_path=$(echo "$save_sui_path" | sed -e 's|^/*||' -e 's|/*$||')
 
-  json_set "$CADDY_META" "domain" "$domain"
-  json_set "$CADDY_META" "tunnel_port" "$tunnel_port" --type int
-  json_set "$CADDY_META" "sout_port" "$sout_port" --type int
-  json_set "$CADDY_META" "sout_path" "$save_sout_path"
+  json_set "$GATEWAY_META" "domain" "$domain"
+  json_set "$GATEWAY_META" "tunnel_port" "$tunnel_port" --type int
+  json_set "$GATEWAY_META" "sout_port" "$sout_port" --type int
+  json_set "$GATEWAY_META" "sout_path" "$save_sout_path"
   if [[ "$has_sui" == "true" ]]; then
-    json_set "$CADDY_META" "sui_port" "$sui_port" --type int
-    json_set "$CADDY_META" "sui_path" "$save_sui_path"
+    json_set "$GATEWAY_META" "sui_port" "$sui_port" --type int
+    json_set "$GATEWAY_META" "sui_path" "$save_sui_path"
   else
-    json_set "$CADDY_META" "sui_port" "0" --type int
-    json_set "$CADDY_META" "sui_path" ""
+    json_set "$GATEWAY_META" "sui_port" "0" --type int
+    json_set "$GATEWAY_META" "sui_path" ""
   fi
-  json_set "$CADDY_META" "sub_port" "$sub_port" --type int
-  json_set "$CADDY_META" "sub_path" "$save_sub_path"
-  json_set "$CADDY_META" "ws_path" "$save_ws_path"
-  json_set "$CADDY_META" "node_port" "$node_port" --type int
+  json_set "$GATEWAY_META" "sub_port" "$sub_port" --type int
+  json_set "$GATEWAY_META" "sub_path" "$save_sub_path"
+  json_set "$GATEWAY_META" "ws_path" "$save_ws_path"
+  json_set "$GATEWAY_META" "node_port" "$node_port" --type int
   local cur_mode
-  cur_mode=$(json_get "$CADDY_META" "mode" "tunnel")
+  cur_mode=$(json_get "$GATEWAY_META" "mode" "tunnel")
   if [[ "$cur_mode" != "quick_tunnel" ]]; then
-    json_set "$CADDY_META" "tunnel_engine" "sing-box"
+    json_set "$GATEWAY_META" "tunnel_engine" "sing-box"
   fi
 
-  # 保持 gateway_meta.json 与 caddy_meta.json 严格镜像双向同步
-  cp -f "$CADDY_META" "${WORK_DIR}/gateway_meta.json" 2>/dev/null || true
-  cp -f "$CADDY_META" "${WORK_DIR}/caddy_meta.json" 2>/dev/null || true
-  chmod 600 "${WORK_DIR}/gateway_meta.json" "${WORK_DIR}/caddy_meta.json" 2>/dev/null || true
+  rm -f "${WORK_DIR}/caddy_meta.json" 2>/dev/null || true
 
 
   # 重启/重载 sout 服务以激活内置网关
@@ -3398,7 +3388,7 @@ caddy_menu() {
     echo -e "${B}========================================${N}"
     local en dom cf_st tun_eng
     en=$(is_caddy_enabled)
-    tun_eng=$(json_get "$CADDY_META" tunnel_engine)
+    tun_eng=$(json_get "$GATEWAY_META" tunnel_engine)
     if [[ -z "$tun_eng" ]] && grep -q '"cf-tunnel-in"' /etc/sing-box/config.json 2>/dev/null; then
       tun_eng="sing-box"
     fi
@@ -3425,9 +3415,9 @@ caddy_menu() {
     fi
     
     if [[ "$en" == "true" ]]; then
-      dom=$(json_get "$CADDY_META" domain)
+      dom=$(json_get "$GATEWAY_META" domain)
       local tun_p
-      tun_p=$(json_get "$CADDY_META" tunnel_port)
+      tun_p=$(json_get "$GATEWAY_META" tunnel_port)
       [[ -z "$tun_p" ]] && tun_p="8081"
 
       local cf_desc
@@ -3452,15 +3442,15 @@ caddy_menu() {
       read -rp "  请选择 [0-4]: " opt || exit 0
       case "$opt" in
         1)
-          if [[ -f "$CADDY_META" ]]; then
+          if [[ -f "$GATEWAY_META" ]]; then
             local sout_p sui_p sub_p ws_p sout_port sui_port node_port
-            sout_p=$(json_get "$CADDY_META" sout_path)
-            sui_p=$(json_get "$CADDY_META" sui_path)
-            sub_p=$(json_get "$CADDY_META" sub_path)
-            ws_p=$(json_get "$CADDY_META" ws_path)
-            sout_port=$(json_get "$CADDY_META" sout_port)
-            sui_port=$(json_get "$CADDY_META" sui_port)
-            node_port=$(json_get "$CADDY_META" node_port)
+            sout_p=$(json_get "$GATEWAY_META" sout_path)
+            sui_p=$(json_get "$GATEWAY_META" sui_path)
+            sub_p=$(json_get "$GATEWAY_META" sub_path)
+            ws_p=$(json_get "$GATEWAY_META" ws_path)
+            sout_port=$(json_get "$GATEWAY_META" sout_port)
+            sui_port=$(json_get "$GATEWAY_META" sui_port)
+            node_port=$(json_get "$GATEWAY_META" node_port)
             [[ -z "$sout_port" ]] && sout_port="43322"
             [[ -z "$sui_port" ]] && sui_port="0"
             [[ -z "$node_port" ]] && node_port="2082"
@@ -3615,7 +3605,7 @@ need_root
 
 do_restart_tunnel_cmd() {
   local tun_eng svc_cmd_target
-  tun_eng=$(json_get "$CADDY_META" tunnel_engine)
+  tun_eng=$(json_get "$GATEWAY_META" tunnel_engine)
   if [[ -z "$tun_eng" ]] && grep -q '"cf-tunnel-in"' /etc/sing-box/config.json 2>/dev/null; then
     tun_eng="sing-box"
   fi

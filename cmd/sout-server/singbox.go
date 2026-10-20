@@ -1310,9 +1310,9 @@ func (sb *SingBox) buildLinksForUser(proto, tag string, listenPort int, ibMap, u
 
 	isArgoWs := (proto == "vmess" || (proto == "vless" && (transportType == "ws" || strings.Contains(tag, "argo")))) && wsHost != "" && net.ParseIP(wsHost) == nil
 	if !isArgoWs && strings.Contains(tag, "argo") {
-		// 尝试从 caddy_meta.json 或 tunnel_domain 补齐域名
+		// 尝试从 gateway_meta.json 或 tunnel_domain 补齐域名
 		if sb.workDir != "" {
-			metaPath := filepath.Join(sb.workDir, "caddy_meta.json")
+			metaPath := filepath.Join(sb.workDir, "gateway_meta.json")
 			if b, err := os.ReadFile(metaPath); err == nil {
 				var meta struct {
 					Domain string `json:"domain"`

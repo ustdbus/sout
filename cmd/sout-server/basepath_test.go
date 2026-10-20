@@ -37,31 +37,34 @@ func TestLoadBasePath_InheritsFromGatewayMeta(t *testing.T) {
 	}
 }
 
-func TestSyncGatewayBasePath_BothFiles(t *testing.T) {
+func TestSyncGatewayBasePath_GatewayMeta(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// 模拟同时存在 gateway_meta.json 和 caddy_meta.json
-	for _, f := range []string{"gateway_meta.json", "caddy_meta.json"} {
-		m := map[string]any{
-			"enabled":   true,
-			"sout_path": "oldPath",
-		}
-		b, _ := json.Marshal(m)
-		_ = os.WriteFile(filepath.Join(tmpDir, f), b, 0600)
+	// 模拟已存在 gateway_meta.json 以及废弃残留的 caddy_meta.json
+	m := map[string]any{
+		"enabled":   true,
+		"sout_path": "oldPath",
 	}
+	b, _ := json.Marshal(m)
+	_ = os.WriteFile(filepath.Join(tmpDir, "gateway_meta.json"), b, 0600)
+	_ = os.WriteFile(filepath.Join(tmpDir, "caddy_meta.json"), b, 0600)
 
 	// 执行同步更新路径到 newPath
 	syncGatewayBasePath(tmpDir, "oldPath", "newPath")
 
-	for _, f := range []string{"gateway_meta.json", "caddy_meta.json"} {
-		data, err := os.ReadFile(filepath.Join(tmpDir, f))
-		if err != nil {
-			t.Fatalf("failed to read %s: %v", f, err)
-		}
-		var m map[string]any
-		_ = json.Unmarshal(data, &m)
-		if m["sout_path"] != "newPath" {
-			t.Fatalf("expected %s sout_path to be newPath, got %v", f, m["sout_path"])
-		}
+	// 验证 gateway_meta.json 已更新
+	data, err := os.ReadFile(filepath.Join(tmpDir, "gateway_meta.json"))
+	if err != nil {
+		t.Fatalf("failed to read gateway_meta.json: %v", err)
+	}
+	var res map[string]any
+	_ = json.Unmarshal(data, &res)
+	if res["sout_path"] != "newPath" {
+		t.Fatalf("expected gateway_meta.json sout_path to be newPath, got %v", res["sout_path"])
+	}
+
+	// 验证废弃的旧 caddy_meta.json 已被自动清理
+	if _, err := os.Stat(filepath.Join(tmpDir, "caddy_meta.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected legacy caddy_meta.json to be deleted")
 	}
 }

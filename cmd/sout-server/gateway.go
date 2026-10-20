@@ -67,7 +67,7 @@ func ShutdownGateway() {
 	log.Println("[Gateway] 内置轻量反代网关已关闭")
 }
 
-// ReloadGateway 根据 gateway_meta.json / caddy_meta.json 动态重载或重启网关
+// ReloadGateway 根据 gateway_meta.json 动态重载或重启网关
 func ReloadGateway(workDir string) {
 	globalGateway.mu.Lock()
 	defer globalGateway.mu.Unlock()
@@ -79,10 +79,6 @@ func ReloadGateway(workDir string) {
 
 	metaPath := filepath.Join(workDir, "gateway_meta.json")
 	data, err := os.ReadFile(metaPath)
-	if err != nil {
-		metaPath = filepath.Join(workDir, "caddy_meta.json")
-		data, err = os.ReadFile(metaPath)
-	}
 	if err != nil {
 		stopGatewayLocked()
 		return
@@ -309,11 +305,6 @@ func GetGatewayStatus(workDir string) map[string]any {
 
 	metaPath := filepath.Join(workDir, "gateway_meta.json")
 	data, err := os.ReadFile(metaPath)
-	if err != nil {
-		metaPath = filepath.Join(workDir, "caddy_meta.json")
-		data, err = os.ReadFile(metaPath)
-	}
-
 	if err == nil {
 		var meta GatewayMeta
 		if json.Unmarshal(data, &meta) == nil {
