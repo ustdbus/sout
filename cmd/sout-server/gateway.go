@@ -80,6 +80,16 @@ func ReloadGateway(workDir string) {
 	metaPath := filepath.Join(workDir, "gateway_meta.json")
 	data, err := os.ReadFile(metaPath)
 	if err != nil {
+		// 历史存量平滑迁移：若存在旧版 caddy_meta.json，自动无缝迁移重命名为 gateway_meta.json
+		legacyPath := filepath.Join(workDir, "caddy_meta.json")
+		if legacyData, lerr := os.ReadFile(legacyPath); lerr == nil {
+			_ = os.WriteFile(metaPath, legacyData, 0600)
+			_ = os.Remove(legacyPath)
+			data = legacyData
+			err = nil
+		}
+	}
+	if err != nil {
 		stopGatewayLocked()
 		return
 	}

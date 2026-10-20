@@ -79,7 +79,18 @@ func LoadBasePath(dir string) (string, bool, error) {
 	}
 
 	// 优先检查 gateway_meta.json 是否已有隧道路径，实现隧道与直连路径双向继承与一致
-	if metaData, err := os.ReadFile(filepath.Join(dir, "gateway_meta.json")); err == nil {
+	gwPath := filepath.Join(dir, "gateway_meta.json")
+	metaData, err := os.ReadFile(gwPath)
+	if err != nil {
+		legacyPath := filepath.Join(dir, "caddy_meta.json")
+		if legacyData, lerr := os.ReadFile(legacyPath); lerr == nil {
+			_ = os.WriteFile(gwPath, legacyData, 0600)
+			_ = os.Remove(legacyPath)
+			metaData = legacyData
+			err = nil
+		}
+	}
+	if err == nil {
 		var meta struct {
 			SoutPath string `json:"sout_path"`
 		}
