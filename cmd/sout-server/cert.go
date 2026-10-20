@@ -471,3 +471,258 @@ func startCertRenewalDaemon(workDir string) {
 		_ = RenewAllCerts(workDir)
 	}
 }
+
+// CertViewItem 证书视图项
+type CertViewItem struct {
+	Domain    string   `json:"domain"`
+	Type      string   `json:"type"` // "acme" 或 "self_signed"
+	CertFile  string   `json:"cert_file"`
+	KeyFile   string   `json:"key_file"`
+	CertPath  string   `json:"cert_path"`
+	KeyPath   string   `json:"key_path"`
+	CertDir   string   `json:"cert_dir"`
+	Issuer    string   `json:"issuer"`
+	DNSNames  []string `json:"dns_names"`
+	NotBefore string   `json:"not_before"`
+	NotAfter  string   `json:"not_after"`
+	DaysLeft  int      `json:"days_left"`
+	IsValid   bool     `json:"is_valid"`
+}
+
+// GetAllCerts 收集 /home/acme 与 /home/ssc 下的所有证书
+func GetAllCerts() []CertViewItem {
+	var res []CertViewItem
+	seen := make(map[string]bool)
+
+	// 1. 扫描 /home/acme (Let's Encrypt / Cloudflare DNS 证书)
+	acmeDir := "/home/acme"
+	if entries, err := os.ReadDir(acmeDir); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			dom := entry.Name()
+			dPath := filepath.Join(acmeDir, dom)
+			certFile := ""
+			for _, name := range []string{"fullchain.pem", "cert.crt", "cert.pem", dom + ".cer"} {
+				cand := filepath.Join(dPath, name)
+				if fi, err := os.Stat(cand); err == nil && fi.Size() > 0 {
+					certFile = cand
+					break
+				}
+			}
+			keyFile := ""
+			for _, name := range []string{"privkey.pem", "private.key", "key.pem", dom + ".key"} {
+				cand := filepath.Join(dPath, name)
+				if fi, err := os.Stat(cand); err == nil && fi.Size() > 0 {
+					keyFile = cand
+					break
+				}
+			}
+
+			if certFile != "" && keyFile != "" {
+				item := CertViewItem{
+					Domain:   dom,
+					Type:     "acme",
+					CertFile: certFile,
+					KeyFile:  keyFile,
+					CertPath: certFile,
+					KeyPath:  keyFile,
+					CertDir:  dPath,
+					Issuer:   "Let's Encrypt",
+				}
+				if info, err := ParseCertInfo(certFile); err == nil {
+					if iss, ok := info["issuer"].(string); ok && iss != "" {
+						item.Issuer = iss
+					}
+					if dns, ok := info["dns_names"].([]string); ok {
+						item.DNSNames = dns
+					}
+					if nb, ok := info["not_before"].(string); ok {
+						item.NotBefore = nb
+					}
+					if na, ok := info["not_after"].(string); ok {
+						item.NotAfter = na
+					}
+					if dl, ok := info["days_left"].(int); ok {
+						item.DaysLeft = dl
+					}
+					if iv, ok := info["is_valid"].(bool); ok {
+						item.IsValid = iv
+					}
+				}
+				seen[dom] = true
+				res = append(res, item)
+			}
+		}
+	}
+
+	// 2. 扫描 /home/ssc (自签证书)
+	sscDir := "/home/ssc"
+	if entries, err := os.ReadDir(sscDir); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			dom := entry.Name()
+			dPath := filepath.Join(sscDir, dom)
+			certFile := filepath.Join(dPath, "fullchain.pem")
+			keyFile := filepath.Join(dPath, "privkey.pem")
+
+			if fi, err := os.Stat(certFile); err == nil && fi.Size() > 0 {
+				if fi2, err2 := os.Stat(keyFile); err2 == nil && fi2.Size() > 0 {
+					item := CertViewItem{
+						Domain:   dom,
+						Type:     "self_signed",
+						CertFile: certFile,
+						KeyFile:  keyFile,
+						CertPath: certFile,
+						KeyPath:  keyFile,
+						CertDir:  dPath,
+						Issuer:   "自签证书 (Self-Signed)",
+					}
+					if info, err := ParseCertInfo(certFile); err == nil {
+						if nb, ok := info["not_before"].(string); ok {
+							item.NotBefore = nb
+						}
+						if na, ok := info["not_after"].(string); ok {
+							item.NotAfter = na
+						}
+						if dl, ok := info["days_left"].(int); ok {
+							item.DaysLeft = dl
+						}
+						if iv, ok := info["is_valid"].(bool); ok {
+							item.IsValid = iv
+						}
+					}
+					res = append(res, item)
+				}
+			}
+		}
+	}
+
+	return res
+}
+
+func apiCertsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "只支持 GET 请求"})
+		return
+	}
+	certs := GetAllCerts()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":    true,
+		"certs": certs,
+	})
+}
+
+func apiCertApplyHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "只支持 POST 请求"})
+		return
+	}
+
+	var req struct {
+		Mode   string `json:"mode"` // "cloudflare" 或 "self_signed"
+		Domain string `json:"domain"`
+		Token  string `json:"token"`
+		Force  bool   `json:"force"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "参数解析失败: " + err.Error()})
+		return
+	}
+
+	domain := strings.TrimSpace(req.Domain)
+	if domain == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "域名不能为空"})
+		return
+	}
+
+	workDir := currentBasePathDir()
+
+	switch req.Mode {
+	case "cloudflare":
+		token := strings.TrimSpace(req.Token)
+		if token == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Cloudflare API Token 不能为空"})
+			return
+		}
+		certDir := filepath.Join("/home/acme", domain)
+		if err := IssueCFCert(domain, token, certDir, workDir, req.Force); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "申请证书失败: " + err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":       true,
+			"message":  fmt.Sprintf("域名 %s 的 Cloudflare SSL 证书已成功签发！", domain),
+			"cert_dir": certDir,
+		})
+
+	case "self_signed":
+		certFile, keyFile, err := createSelfSignedCert(domain)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "生成自签证书失败: " + err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":        true,
+			"message":   fmt.Sprintf("域名 %s 的自签证书已生成成功！", domain),
+			"cert_file": certFile,
+			"key_file":  keyFile,
+		})
+
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "未知申请模式: " + req.Mode})
+	}
+}
+
+func apiCertDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "只支持 POST 请求"})
+		return
+	}
+
+	var req struct {
+		Domain string `json:"domain"`
+		Type   string `json:"type"` // "acme" 或 "self_signed"
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "参数解析失败: " + err.Error()})
+		return
+	}
+
+	domain := strings.TrimSpace(req.Domain)
+	if domain == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "域名不能为空"})
+		return
+	}
+
+	targetDir := ""
+	if req.Type == "self_signed" {
+		targetDir = filepath.Join("/home/ssc", domain)
+	} else {
+		targetDir = filepath.Join("/home/acme", domain)
+	}
+
+	if targetDir != "" {
+		_ = os.RemoveAll(targetDir)
+	}
+
+	// 从 cf_ssl_domains.json 移除
+	workDir := currentBasePathDir()
+	metaFile := filepath.Join(workDir, "cf_ssl_domains.json")
+	if data, err := os.ReadFile(metaFile); err == nil {
+		var domains map[string]CFDomainEntry
+		if json.Unmarshal(data, &domains) == nil {
+			delete(domains, domain)
+			out, _ := json.MarshalIndent(domains, "", "  ")
+			_ = os.WriteFile(metaFile, out, 0644)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      true,
+		"message": fmt.Sprintf("域名 %s 的证书已成功删除", domain),
+	})
+}

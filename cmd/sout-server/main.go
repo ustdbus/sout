@@ -23,7 +23,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v5.0.8"
+var version = "v5.0.9"
 
 var (
 	cgroupV2Path    = "/sys/fs/cgroup/memory.max"
@@ -310,6 +310,9 @@ func main() {
 	mux.HandleFunc("/api/tunnel", apiTunnelHandler)
 	mux.HandleFunc("/api/node/preset_info", apiNodePresetInfoHandler)
 	mux.HandleFunc("/api/node/create_preset", apiNodeCreatePresetHandler(mgr))
+	mux.HandleFunc("/api/certs", apiCertsHandler)
+	mux.HandleFunc("/api/cert/apply", apiCertApplyHandler)
+	mux.HandleFunc("/api/cert/delete", apiCertDeleteHandler)
 
 	mux.HandleFunc("/sub", handleSub(mgr))
 	mux.HandleFunc("/sub/", handleSub(mgr))

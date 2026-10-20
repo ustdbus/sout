@@ -309,6 +309,10 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
     </svg>
     隧道
   </button>
+  <button id="certBtn" style="gap:6px">
+    <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+    证书
+  </button>
   <button id="exportAll">
     <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
     导出订阅链接
@@ -1026,6 +1030,89 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
   </div>
 </div>
 
+<!-- Modal: SSL 证书管理 -->
+<div class="modal" id="certModal">
+  <div class="sheet" style="max-width:680px">
+    <div class="head">
+      <h2 style="display:flex;align-items:center;gap:8px">
+        <svg viewBox="0 0 24 24" style="color:var(--accent)"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+        SSL 证书管理
+      </h2>
+      <span class="spacer"></span>
+      <button class="icon" data-close="certModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="body" style="padding-top:14px">
+      <!-- 选项卡切换: 查看证书 vs 申请证书 -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px">
+        <button class="preset-tab-btn active" id="tabBtnCertList" style="padding:10px 4px;text-align:center;border-radius:6px;border:1px solid var(--accent);background:var(--card);cursor:pointer">
+          <div style="font-weight:600;font-size:13px;color:var(--text)">已存在证书 (<span id="certCountBadge">0</span>)</div>
+        </button>
+        <button class="preset-tab-btn" id="tabBtnCertApply" style="padding:10px 4px;text-align:center;border-radius:6px;border:1px solid var(--line);background:var(--card);cursor:pointer">
+          <div style="font-weight:600;font-size:13px;color:var(--text)">申请证书</div>
+        </button>
+      </div>
+
+      <!-- Tab 1: 查看已有证书 -->
+      <div id="tabContentCertList" style="display:block">
+        <div id="certListContainer" style="display:flex;flex-direction:column;gap:10px;min-height:100px">
+          <div style="text-align:center;color:var(--dim);padding:24px 0">正在加载证书...</div>
+        </div>
+      </div>
+
+      <!-- Tab 2: 申请证书 -->
+      <div id="tabContentCertApply" style="display:none">
+        <div style="background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:14px;font-size:12px">
+          <div style="margin-bottom:12px">
+            <label style="display:block;font-weight:600;margin-bottom:6px">申请模式:</label>
+            <div style="display:flex;gap:16px">
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                <input type="radio" name="applyCertMode" value="cloudflare" checked>
+                <span>Cloudflare DNS-01 验证 (自动续期)</span>
+              </label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                <input type="radio" name="applyCertMode" value="self_signed">
+                <span>自签证书 (无需域名)</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Cloudflare 表单 -->
+          <div id="applyCFBox" style="display:flex;flex-direction:column;gap:10px">
+            <div>
+              <label style="display:block;font-weight:600;margin-bottom:4px">域名:</label>
+              <input id="inputCertDomain" type="text" placeholder="例如 node.example.com" style="width:100%;box-sizing:border-box">
+            </div>
+            <div>
+              <label style="display:block;font-weight:600;margin-bottom:4px">Cloudflare API Token:</label>
+              <input id="inputCertToken" type="password" placeholder="需包含 Zone.DNS:Edit 权限" style="width:100%;box-sizing:border-box">
+            </div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <input type="checkbox" id="inputCertForce">
+              <label for="inputCertForce" style="cursor:pointer;color:var(--dim)">若本地已有有效证书，仍强制重新申请并覆盖</label>
+            </div>
+          </div>
+
+          <!-- 自签证书表单 -->
+          <div id="applySelfBox" style="display:none;flex-direction:column;gap:10px">
+            <div>
+              <label style="display:block;font-weight:600;margin-bottom:4px">伪装域名 (默认 apple.com):</label>
+              <input id="inputSelfDomain" type="text" value="apple.com" placeholder="例如 apple.com" style="width:100%;box-sizing:border-box">
+            </div>
+          </div>
+        </div>
+
+        <div style="display:flex;justify-content:flex-end">
+          <button id="submitApplyCertBtn" class="primary" style="padding:8px 20px">申请证书</button>
+        </div>
+      </div>
+    </div>
+    <div class="foot">
+      <span class="spacer"></span>
+      <button data-close="certModal">关闭</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal 6: 添加自定义出口 -->
 <div class="modal" id="customExitModal">
   <div class="sheet" style="max-width:580px">
@@ -1186,9 +1273,9 @@ function toast(msg, bad){
   toastTimer = setTimeout(() => { el.className = 'toast'; }, 2400);
 }
 
-async function copy(text){
+async function copy(text, label){
   if(navigator.clipboard && window.isSecureContext){
-    try{ await navigator.clipboard.writeText(text); toast('已复制链接'); return; }
+    try{ await navigator.clipboard.writeText(text); toast(label || '已复制链接'); return; }
     catch(e){}
   }
   const ta = document.createElement('textarea');
@@ -1201,7 +1288,7 @@ async function copy(text){
   let ok = false;
   try{ ok = document.execCommand('copy'); }catch(e){}
   ta.remove();
-  toast(ok ? '已复制链接' : '复制失败，请手动选中', !ok);
+  toast(ok ? (label || '已复制链接') : '复制失败，请手动选中', !ok);
 }
 
 function openModal(id){ $('#' + id).classList.add('open'); }
@@ -2854,6 +2941,187 @@ function initAddNodePresetEvents() {
   };
 }
 
+function initCertEvents() {
+  const modal = $('#certModal');
+  if (!modal) return;
+
+  function switchCertTab(tab) {
+    if (tab === 'list') {
+      $('#tabBtnCertList').classList.add('active');
+      $('#tabBtnCertList').style.borderColor = 'var(--accent)';
+      $('#tabBtnCertApply').classList.remove('active');
+      $('#tabBtnCertApply').style.borderColor = 'var(--line)';
+      $('#tabContentCertList').style.display = 'block';
+      $('#tabContentCertApply').style.display = 'none';
+      loadCerts();
+    } else {
+      $('#tabBtnCertApply').classList.add('active');
+      $('#tabBtnCertApply').style.borderColor = 'var(--accent)';
+      $('#tabBtnCertList').classList.remove('active');
+      $('#tabBtnCertList').style.borderColor = 'var(--line)';
+      $('#tabContentCertApply').style.display = 'block';
+      $('#tabContentCertList').style.display = 'none';
+    }
+  }
+
+  $('#tabBtnCertList').onclick = () => switchCertTab('list');
+  $('#tabBtnCertApply').onclick = () => switchCertTab('apply');
+
+  document.querySelectorAll('input[name="applyCertMode"]').forEach(radio => {
+    radio.onchange = () => {
+      const isCF = radio.value === 'cloudflare';
+      $('#applyCFBox').style.display = isCF ? 'flex' : 'none';
+      $('#applySelfBox').style.display = isCF ? 'none' : 'flex';
+    };
+  });
+
+  $('#certBtn').onclick = () => {
+    openModal('certModal');
+    switchCertTab('list');
+  };
+
+  async function loadCerts() {
+    const container = $('#certListContainer');
+    container.innerHTML = '<div style="text-align:center;color:var(--dim);padding:24px 0">正在加载证书...</div>';
+    try {
+      const res = await api('/api/certs');
+      const certs = (res && res.certs) || [];
+      $('#certCountBadge').textContent = certs.length;
+
+      if (!certs.length) {
+        container.innerHTML = '<div style="text-align:center;color:var(--dim);padding:28px 0;background:var(--surface-2);border-radius:6px;border:1px dashed var(--line);font-size:12px">暂无本地证书，请点击上方「申请证书」添加</div>';
+        return;
+      }
+
+      container.innerHTML = certs.map(c => {
+        const isAcme = c.type === 'acme';
+        const typeBadge = isAcme
+          ? '<span style="background:rgba(31,111,235,0.15);color:var(--accent);font-size:11px;padding:2px 6px;border-radius:4px;font-weight:600">Let\'s Encrypt / CF DNS</span>'
+          : '<span style="background:rgba(139,148,158,0.15);color:var(--dim);font-size:11px;padding:2px 6px;border-radius:4px;font-weight:600">自签证书</span>';
+
+        let expireBadge = '';
+        if (c.is_valid) {
+          expireBadge = '<span style="color:var(--ok);font-size:11px;font-weight:600">剩余 ' + c.days_left + ' 天</span>';
+        } else {
+          expireBadge = '<span style="color:var(--bad);font-size:11px;font-weight:600">已过期</span>';
+        }
+
+        const issuerText = c.issuer ? ('颁发机构: ' + esc(c.issuer)) : '';
+        const expireDateText = c.not_after ? ('到期: ' + esc(c.not_after)) : '';
+
+        return '<div style="background:var(--card);border:1px solid var(--line);border-radius:6px;padding:12px 14px;display:flex;flex-direction:column;gap:8px">'
+          + '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">'
+          +   '<div style="display:flex;align-items:center;gap:8px">'
+          +     '<span style="font-weight:600;font-size:13px;color:var(--text)">' + esc(c.domain) + '</span>'
+          +     typeBadge
+          +   '</div>'
+          +   '<div style="display:flex;align-items:center;gap:10px">'
+          +     expireBadge
+          +     '<button class="icon danger" data-del-cert-domain="' + esc(c.domain) + '" data-del-cert-type="' + esc(c.type) + '" title="删除此证书" style="padding:2px">' + ICON.trash + '</button>'
+          +   '</div>'
+          + '</div>'
+          + (issuerText || expireDateText ? ('<div style="font-size:11px;color:var(--dim);display:flex;gap:12px;flex-wrap:wrap">' + (issuerText ? '<span>' + issuerText + '</span>' : '') + (expireDateText ? '<span>' + expireDateText + '</span>' : '') + '</div>') : '')
+          + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;background:var(--surface-2);border-radius:4px;padding:8px 10px;font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">'
+          +   '<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(c.cert_path) + '">'
+          +     '<span style="color:var(--dim)">证书: </span>'
+          +     '<span style="color:var(--text)">' + esc(c.cert_path) + '</span>'
+          +   '</div>'
+          +   '<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(c.key_path) + '">'
+          +     '<span style="color:var(--dim)">私钥: </span>'
+          +     '<span style="color:var(--text)">' + esc(c.key_path) + '</span>'
+          +   '</div>'
+          + '</div>'
+          + '<div style="display:flex;justify-content:flex-end;gap:8px">'
+          +   '<button type="button" class="chip-btn" data-copy-val="' + esc(c.cert_path) + '" style="font-size:11px;padding:2px 8px">复制证书路径</button>'
+          +   '<button type="button" class="chip-btn" data-copy-val="' + esc(c.key_path) + '" style="font-size:11px;padding:2px 8px">复制私钥路径</button>'
+          + '</div>'
+          + '</div>';
+      }).join('');
+    } catch(err) {
+      container.innerHTML = '<div style="color:var(--bad);text-align:center;padding:20px 0;font-size:12px">加载证书失败: ' + esc(err.message) + '</div>';
+    }
+  }
+
+  $('#certListContainer').onclick = async e => {
+    const copyBtn = e.target.closest('[data-copy-val]');
+    if (copyBtn) {
+      const val = copyBtn.dataset.copyVal;
+      await copy(val, '已复制路径');
+      return;
+    }
+
+    const delBtn = e.target.closest('[data-del-cert-domain]');
+    if (delBtn) {
+      const domain = delBtn.dataset.delCertDomain;
+      const type = delBtn.dataset.delCertType;
+      if (!confirm('确定删除域名「' + domain + '」的证书吗？')) return;
+      try {
+        await api('/api/cert/delete', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ domain: domain, type: type })
+        });
+        toast('证书已删除');
+        loadCerts();
+      } catch(err) {
+        toast('删除失败: ' + err.message, true);
+      }
+    }
+  };
+
+  $('#submitApplyCertBtn').onclick = async () => {
+    const checked = document.querySelector('input[name="applyCertMode"]:checked');
+    const mode = checked ? checked.value : 'cloudflare';
+    let domain = '';
+    let token = '';
+    let force = false;
+
+    if (mode === 'cloudflare') {
+      domain = $('#inputCertDomain').value.trim();
+      token = $('#inputCertToken').value.trim();
+      force = $('#inputCertForce').checked;
+      if (!domain) {
+        toast('请填写申请域名', true);
+        return;
+      }
+      if (!token) {
+        toast('请填写 Cloudflare API Token', true);
+        return;
+      }
+    } else {
+      domain = $('#inputSelfDomain').value.trim() || 'apple.com';
+    }
+
+    const btn = $('#submitApplyCertBtn');
+    const origText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = mode === 'cloudflare' ? '正在申请证书 (约需 10-30 秒)...' : '正在生成自签证书...';
+
+    try {
+      const res = await api('/api/cert/apply', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          mode: mode,
+          domain: domain,
+          token: token,
+          force: force
+        })
+      });
+      toast(res.message || '证书签发成功！');
+      if (mode === 'cloudflare') {
+        $('#inputCertDomain').value = '';
+      }
+      switchCertTab('list');
+    } catch(err) {
+      toast('申请证书失败: ' + err.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = origText;
+    }
+  };
+}
+
 let initialBasePath = '';
 
 $('#settingsBtn').onclick = async () => {
@@ -3732,6 +4000,7 @@ document.addEventListener('keydown', function(e){ if(e.key === 'Escape') closeTh
 applyTheme(document.documentElement.getAttribute('data-theme') || 'forest', false);
 
 initAddNodePresetEvents();
+initCertEvents();
 poll();
 setInterval(poll, 3000);
 api('/api/custom/source/list').then(l => { allSourcesList = l || []; renderSourceTabs(); }).catch(() => {});
