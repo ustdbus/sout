@@ -26,6 +26,9 @@ func isIgnoredLogLine(line string) bool {
 	if strings.Contains(line, "mux connection closed: read frame header: EOF") {
 		return true
 	}
+	if strings.Contains(line, "inbound/cloudflared") && (strings.Contains(line, "EOF") || strings.Contains(line, "connection reset")) {
+		return true
+	}
 	return false
 }
 

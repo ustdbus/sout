@@ -140,7 +140,9 @@ func ReloadGateway(workDir string) {
 	globalGateway.port = meta.TunnelPort
 	for _, ln := range listeners {
 		srv := &http.Server{
-			Handler: handler,
+			Handler:           handler,
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       60 * time.Second,
 		}
 		globalGateway.servers = append(globalGateway.servers, srv)
 		go func(l net.Listener, s *http.Server) {
@@ -265,18 +267,14 @@ func buildGatewayHandler(meta *CaddyMeta, workDir string) http.Handler {
 			}
 		}
 
-		// 5. 伪装根路径与兜底响应
-		if p == "/" || p == "" {
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("Service Ready"))
-			return
+		// 5. 其他未匹配路径（含根路径 /）直接掐断回源连接，触发 Cloudflare 原生 502 错误页，消除源站指纹
+		if hj, ok := w.(http.Hijacker); ok {
+			if conn, _, err := hj.Hijack(); err == nil {
+				_ = conn.Close()
+				return
+			}
 		}
-
-		// 其他未匹配路径一律返回 Service Ready
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("Service Ready"))
+		panic(http.ErrAbortHandler)
 	})
 }
 
