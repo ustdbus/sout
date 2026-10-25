@@ -145,6 +145,29 @@ func (w *rotatingLogWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// healDevStdStreams 修复旧版本曾将 /dev/stderr 或 /dev/stdout 误当作普通日志文件 Rename 为 .1 的问题。
+func healDevStdStreams() {
+	for _, item := range []struct {
+		path   string
+		target string
+	}{
+		{"/dev/stdout", "/proc/self/fd/1"},
+		{"/dev/stderr", "/proc/self/fd/2"},
+	} {
+		if fi, err := os.Lstat(item.path + ".1"); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			_ = os.Remove(item.path + ".1")
+		}
+		if fi, err := os.Lstat(item.path); err == nil && fi.Mode().IsRegular() {
+			_ = os.Remove(item.path)
+			_ = os.Symlink(item.target, item.path)
+		} else if os.IsNotExist(err) {
+			if _, perr := os.Stat(item.target); perr == nil {
+				_ = os.Symlink(item.target, item.path)
+			}
+		}
+	}
+}
+
 // logFileWriter 为一个已被重定向的流创建轮转写入器；未被重定向到文件则返回 nil，
 // 以免在这里凭空创建重复的日志文件。
 func logFileWriter(stream *os.File) io.Writer {
@@ -152,15 +175,19 @@ func logFileWriter(stream *os.File) io.Writer {
 		return nil
 	}
 	fi, err := stream.Stat()
-	if err != nil {
-		return nil
-	}
-	if fi.Mode()&os.ModeCharDevice != 0 || fi.Mode()&os.ModeNamedPipe != 0 {
-		// 终端或管道（如 systemd journal），不需要内部轮转
+	if err != nil || !fi.Mode().IsRegular() {
+		// 终端、管道（如 systemd journal）或非普通文件，不需要内部轮转
 		return nil
 	}
 	path := stream.Name()
-	if path == "" || !filepath.IsAbs(path) {
+	if path == "" || strings.HasPrefix(path, "/dev/") || strings.HasPrefix(path, "/proc/") {
+		link, lerr := os.Readlink("/proc/self/fd/" + strconv.Itoa(int(stream.Fd())))
+		if lerr != nil {
+			return nil
+		}
+		path = strings.TrimSuffix(link, " (deleted)")
+	}
+	if path == "" || !filepath.IsAbs(path) || strings.HasPrefix(path, "/dev/") || strings.HasPrefix(path, "/proc/") {
 		return nil
 	}
 	w, err := newRotatingLogWriter(path, logRotateMaxBytes)
@@ -184,6 +211,7 @@ func (w filteredLogWriter) Write(p []byte) (int, error) {
 // initLogCapture 同时接管 stdout / stderr 与内存环形缓冲。
 // 无 systemd 时 OpenRC 会把这两个流重定向到文件，这里为其加上大小上限。
 func initLogCapture() {
+	healDevStdStreams()
 	var outWriter io.Writer = os.Stderr
 	if fw := logFileWriter(os.Stderr); fw != nil {
 		// 已被重定向到文件：仅由轮转写入器与内存缓冲接管，避免同一份日志向同一文件写入两次

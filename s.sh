@@ -1764,8 +1764,8 @@ check_and_update() {
   # 2. 下载与校验完成后，执行页缓存回收，并彻底停止旧服务进行毫秒级替换
   (sync; echo 3 > /proc/sys/vm/drop_caches) 2>/dev/null || true
   svc_stop 2>/dev/null || true
-  pkill -9 -f "/usr/local/bin/sout-server" 2>/dev/null || true
-  pkill -9 -f "sout-server" 2>/dev/null || true
+  pkill -9 -x "sout-server" 2>/dev/null || true
+  pkill -9 -x "fanout" 2>/dev/null || true
   sleep 0.5
 
   # 4. 将解包出的二进制安全覆盖至 /usr/local/bin/sout-server 并赋予可执行权限
@@ -1795,7 +1795,7 @@ check_and_update() {
 
   mkdir -p "${WORK_DIR}" 2>/dev/null || true
   echo "$tag_name" > "${WORK_DIR}/version" 2>/dev/null || true
-  rm -rf "$tmp_dir" /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/fanout /tmp/s.sh /tmp/f.sh 2>/dev/null || true
+  rm -rf "$tmp_dir" /tmp/sout-linux-*.tar.gz /tmp/sout-server /tmp/fanout /tmp/s.sh /tmp/f.sh /var/tmp/sout* /var/tmp/fanout /var/tmp/f.sh /var/tmp/install.sh 2>/dev/null || true
 
   echo
   echo -e "  ${B}[+] 正在启动服务并加载最新版本配置...${N}"
