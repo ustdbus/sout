@@ -23,7 +23,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v5.1.7"
+var version = "v5.1.8"
 
 var (
 	cgroupV2Path    = "/sys/fs/cgroup/memory.max"
@@ -226,22 +226,36 @@ func main() {
 		log.Printf("节点链接后端: %s", p.Describe())
 	}
 
+	initCustomStore(*workDir)
+	initBranchToggle(*workDir)
 	mgr := NewManager(*maxSlots, *workDir)
-	log.Printf("正在拉取节点列表...")
-	if n, err := mgr.RefreshNodes(); err != nil {
-		log.Printf("拉取失败（可在 Web 界面重试）: %v", err)
-	} else {
-		log.Printf("已获取 %d 个节点", n)
-	}
 
-	if n, err := mgr.restoreState(); err != nil {
-		log.Printf("恢复上次状态失败: %v", err)
-	} else if n > 0 {
-		log.Printf("正在恢复上次的 %d 条隧道", n)
-	}
-
-	go mgr.WatchHealth()
-	go mgr.WatchExitReady()
+	go func() {
+		_, cachedFetched := mgr.Nodes()
+		hasCache := !cachedFetched.IsZero()
+		if hasCache {
+			if n, err := mgr.restoreState(); err != nil {
+				log.Printf("恢复上次状态失败: %v", err)
+			} else if n > 0 {
+				log.Printf("正在恢复上次的 %d 条隧道", n)
+			}
+		}
+		log.Printf("正在拉取节点列表...")
+		if n, err := mgr.RefreshNodes(); err != nil {
+			log.Printf("拉取失败（可在 Web 界面重试）: %v", err)
+		} else {
+			log.Printf("已获取 %d 个节点", n)
+		}
+		if !hasCache {
+			if n, err := mgr.restoreState(); err != nil {
+				log.Printf("恢复上次状态失败: %v", err)
+			} else if n > 0 {
+				log.Printf("正在恢复上次的 %d 条隧道", n)
+			}
+		}
+		go mgr.WatchHealth()
+		go mgr.WatchExitReady()
+	}()
 	go startCertRenewalDaemon(*workDir)
 
 	stop := make(chan os.Signal, 1)
@@ -290,8 +304,6 @@ func main() {
 	mux.HandleFunc("/api/panel/client/add", apiClientAdd(mgr))
 	mux.HandleFunc("/api/panel/client/del", apiClientDelete(mgr))
 	mux.HandleFunc("/api/panel/client/reset", apiClientReset(mgr))
-	initCustomStore(*workDir)
-	initBranchToggle(*workDir)
 	StartAutoUpdateWorker(mgr)
 
 	mux.HandleFunc("/api/branch/toggle", apiBranchToggle(mgr))

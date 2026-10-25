@@ -1631,27 +1631,24 @@ func toolSUIFindLocalInbound(args []string) {
 	if hasCmd("sqlite3") {
 		out, errCmd := exec.Command("sqlite3", dbPath, "SELECT options FROM inbounds;").Output()
 		if errCmd == nil {
-			lines := strings.Split(string(out), "\n")
-			for _, line := range lines {
-				line = strings.TrimSpace(line)
-				if line == "" {
-					continue
-				}
+			dec := json.NewDecoder(bytes.NewReader(out))
+			for {
 				var opt map[string]any
-				if json.Unmarshal([]byte(line), &opt) == nil {
-					listen, _ := opt["listen"].(string)
-					lp, _ := opt["listen_port"].(float64)
-					if listen == "127.0.0.1" && lp > 0 {
-						p := strconv.Itoa(int(lp))
-						path := "vlws"
-						if tr, ok := opt["transport"].(map[string]any); ok {
-							if tp, ok := tr["path"].(string); ok && tp != "" {
-								path = strings.Trim(tp, "/")
-							}
+				if err := dec.Decode(&opt); err != nil {
+					break
+				}
+				listen, _ := opt["listen"].(string)
+				lp, _ := opt["listen_port"].(float64)
+				if listen == "127.0.0.1" && lp > 0 {
+					p := strconv.Itoa(int(lp))
+					path := "vlws"
+					if tr, ok := opt["transport"].(map[string]any); ok {
+						if tp, ok := tr["path"].(string); ok && tp != "" {
+							path = strings.Trim(tp, "/")
 						}
-						fmt.Printf("FOUND|%s|%s\n", p, path)
-						return
 					}
+					fmt.Printf("FOUND|%s|%s\n", p, path)
+					return
 				}
 			}
 			fmt.Println("CREATE")
