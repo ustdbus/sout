@@ -1007,10 +1007,7 @@ func (m *Manager) WatchExitReady() {
 				continue
 			}
 			t.mu.Lock()
-			key := t.ExitIP
-			if key == "" {
-				key = "up"
-			}
+			key := fmt.Sprintf("up|%s|%d|%s", t.Node.HostName, t.Port, t.Cred.User)
 			t.mu.Unlock()
 
 			m.syncMu.Lock()

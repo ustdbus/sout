@@ -52,6 +52,9 @@ func (m *Manager) WatchHealth() {
 				log.Printf("自定义/WARP 隧道 %d (%s) 探测未通过，正在原地重新建立连接...", t.Slot, t.Node.HostName)
 				fails[t.Slot] = 0
 				t.stop()
+				m.syncMu.Lock()
+				delete(m.syncedExitIP, t.Slot)
+				m.syncMu.Unlock()
 				go m.bringUp(t, false)
 				continue
 			}
@@ -91,6 +94,9 @@ func (m *Manager) tunnelHealthy(t *Tunnel) bool {
 // 否则 rebind 找不到旧绑定，入站会掉成孤儿。
 func (m *Manager) reconnect(t *Tunnel, oldHost string) {
 	t.stop()
+	m.syncMu.Lock()
+	delete(m.syncedExitIP, t.Slot)
+	m.syncMu.Unlock()
 	t.mu.Lock()
 	t.Status = "starting"
 	t.Err = "正在换节点重连"
