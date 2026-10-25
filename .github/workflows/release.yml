@@ -51,14 +51,12 @@ jobs:
           if [ -z "$TAG" ] || [ "$TAG" = "main" ]; then
             TAG="v1.0.0"
           fi
-          go mod tidy
+          go mod download
           mkdir -p dist/${{ matrix.pkg_name }}
           go build -trimpath -tags "with_gvisor with_quic with_utls with_wireguard with_cloudflared netgo osusergo" -ldflags "-s -w -X main.version=${TAG}" -o dist/${{ matrix.pkg_name }}/sout-server ./cmd/sout-server
-          cp dist/${{ matrix.pkg_name }}/sout-server dist/${{ matrix.pkg_name }}/fanout
           cp s.sh dist/${{ matrix.pkg_name }}/
-          cp s.sh dist/${{ matrix.pkg_name }}/f.sh
           cp sout.service dist/${{ matrix.pkg_name }}/
-          tar -czf ${{ matrix.pkg_name }}.tar.gz -C dist/${{ matrix.pkg_name }} sout-server fanout s.sh f.sh sout.service
+          tar --owner=0 --group=0 -czf ${{ matrix.pkg_name }}.tar.gz -C dist/${{ matrix.pkg_name }} sout-server s.sh sout.service
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
