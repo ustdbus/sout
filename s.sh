@@ -382,7 +382,7 @@ systemctl() {
           rc-service "$name" stop >/dev/null 2>&1 || true
           _openrc_force_stop "$name"
           _openrc_clean_ports "$name"
-          for _ in {1..15}; do
+          for _ in $(seq 1 15); do
             if ! pgrep -f "sout-server" >/dev/null 2>&1; then
               break
             fi
@@ -394,7 +394,7 @@ systemctl() {
           rc-service "$name" stop >/dev/null 2>&1 || true
           _openrc_force_stop "$name"
           _openrc_clean_ports "$name"
-          for _ in {1..10}; do
+          for _ in $(seq 1 10); do
             if ! pgrep -f "sout-server" >/dev/null 2>&1; then
               break
             fi
@@ -865,7 +865,6 @@ pause() {
 }
 
 GATEWAY_META="${WORK_DIR}/gateway_meta.json"
-CADDY_META="$GATEWAY_META"
 
 is_sui_backend() {
   local m
@@ -1825,42 +1824,19 @@ check_and_update() {
       rc-service cloudflared stop 2>/dev/null || true
       rc-update del cloudflared default 2>/dev/null || true
       pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
-      rm -f /etc/systemd/system/cloudflared.service /etc/init.d/cloudflared 2>/dev/null || true
+      rm -f /etc/systemd/system/cloudflared.service /etc/init.d/cloudflared /usr/local/bin/cloudflared 2>/dev/null || true
     else
       echo -e "  ${B}[+] 检测到已开启 Cloudflare 隧道反代，正在自动重启隧道服务...${N}"
       systemctl restart cloudflared 2>/dev/null || rc-service cloudflared restart 2>/dev/null || service cloudflared restart 2>/dev/null || true
     fi
     echo -e "  ${B}[+] 正在自动执行内置轻量反代网关重新探测并分流...${N}"
-    reload_caddy_proxy
+    reload_gateway_proxy
   fi
 
   echo
   echo -e "  ${G}🎉 恭喜！sout 已成功更新至 ${tag_name}，所有关联服务已自动重启生效。${N}"
 }
 
-#!/usr/bin/env bash
-# ==============================================================================
-# sout - Cloudflare 隧道连接与轻量网关分流独立管理脚本
-# ==============================================================================
-
-set -e
-
-R='[0;31m'
-G='[0;32m'
-Y='[0;33m'
-B='[0;34m'
-C='[0;36m'
-D='[0;90m'
-N='[0m'
-
-WORK_DIR="/var/lib/sout"
-GATEWAY_META="${WORK_DIR}/gateway_meta.json"
-CADDY_META="$GATEWAY_META"
-
-pause() {
-  echo
-  read -rp "  按回车键继续..." _ || exit 0
-}
 
 get_sys_arch() {
   local a
@@ -1882,7 +1858,7 @@ install_cloudflared_bin() {
   echo -e "  ${B}[+] 正在获取 Cloudflare 官方隧道客户端 cloudflared (${arch})...${N}"
   local url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch}"
   
-  if ! curl -fL --retry 3 --connect-timeout 10 -o /usr/local/bin/cloudflared "$url"; then
+  if ! curl -fL --retry 3 --connect-timeout 10 --max-time 120 -o /usr/local/bin/cloudflared "$url"; then
     echo -e "  ${R}[✗] cloudflared 二进制下载失败，请检查网络连接${N}" >&2
     return 1
   fi
@@ -2003,7 +1979,7 @@ EOF
 get_quick_tunnel_domain() {
   local max_wait=20
   local d=""
-  for ((i=1; i<=max_wait; i++)); do
+  for _ in $(seq 1 "$max_wait"); do
     if command -v journalctl >/dev/null 2>&1; then
       d=$(journalctl -u cloudflared -n 50 --no-pager 2>/dev/null | grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' | tail -1 | sed 's|https://||' | tr -d ' \r\n')
     fi
@@ -2052,7 +2028,7 @@ is_caddy_enabled() {
   is_tunnel_gateway_enabled
 }
 
-setup_caddy_proxy() {
+setup_gateway_proxy() {
   local domain="${1:-}"
   local tunnel_token="${2:-}"
   local tunnel_port="${3:-8081}"
@@ -2191,7 +2167,7 @@ setup_caddy_proxy() {
     rc-service cloudflared stop 2>/dev/null || true
     rc-update del cloudflared default 2>/dev/null || true
     pkill -9 -f "/usr/local/bin/cloudflared" 2>/dev/null || true
-    rm -f /etc/systemd/system/cloudflared.service /etc/init.d/cloudflared 2>/dev/null || true
+    rm -f /etc/systemd/system/cloudflared.service /etc/init.d/cloudflared /usr/local/bin/cloudflared 2>/dev/null || true
   fi
 
   if [[ "$is_quick" == "true" ]]; then
@@ -2241,7 +2217,10 @@ setup_caddy_proxy() {
     echo -e "  ${Y}[!] 节点 API 自动配置未完成，请稍后手动检查。${N}"
   fi
 
-  if [[ -f "${WORK_DIR}/.caddy_meta_vars" ]]; then
+  if [[ -f "${WORK_DIR}/.gateway_meta_vars" ]]; then
+    source "${WORK_DIR}/.gateway_meta_vars"
+    rm -f "${WORK_DIR}/.gateway_meta_vars"
+  elif [[ -f "${WORK_DIR}/.caddy_meta_vars" ]]; then
     source "${WORK_DIR}/.caddy_meta_vars"
     rm -f "${WORK_DIR}/.caddy_meta_vars"
   fi
@@ -2418,7 +2397,11 @@ init_direct_reality_node() {
   restart_backend_service
 }
 
-disable_caddy_proxy() {
+setup_caddy_proxy() {
+  setup_gateway_proxy "$@"
+}
+
+disable_gateway_proxy() {
   local force="${1:-}"
   if [[ "$force" != "force" && "$force" != "-y" ]]; then
     echo
@@ -2489,7 +2472,11 @@ disable_caddy_proxy() {
   echo -e "      • s-ui 订阅地址: ${B}${final_sub_proto}://${show_sub_host}${final_spath}${N}"
 }
 
-caddy_interactive_setup() {
+disable_caddy_proxy() {
+  disable_gateway_proxy "$@"
+}
+
+gateway_interactive_setup() {
   echo
   echo -e "${B}================================================================${N}"
   echo -e "${B}  🚀 Cloudflare 隧道连接与轻量网关分流一键配置 (免开端口/杜绝525)${N}"
@@ -2520,10 +2507,10 @@ caddy_interactive_setup() {
   tunnel_port=$(echo "$tunnel_port" | tr -d ' \r\n')
   tunnel_port="${tunnel_port:-8081}"
 
-  setup_caddy_proxy "$domain" "$tunnel_token" "$tunnel_port"
+  setup_gateway_proxy "$domain" "$tunnel_token" "$tunnel_port"
 }
 
-reload_caddy_proxy() {
+reload_gateway_proxy() {
   if [[ ! -f "$GATEWAY_META" ]] || ! grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$GATEWAY_META" 2>/dev/null; then
     echo
     echo -e "  ${Y}================================================================${N}"
@@ -3379,7 +3366,11 @@ create_tuic_hy2_nodes() {
   sout_tool sui-apply-tuic-hy2
 }
 
-caddy_menu() {
+reload_caddy_proxy() {
+  reload_gateway_proxy "$@"
+}
+
+gateway_menu() {
   while true; do
     [[ ! -t 0 ]] && exit 0
     echo
@@ -3628,14 +3619,18 @@ do_restart_tunnel_cmd() {
       rc-service cloudflared start >/dev/null 2>&1 || true
     fi
   fi
-  reload_caddy_proxy >/dev/null 2>&1 || true
+  reload_gateway_proxy >/dev/null 2>&1 || true
   echo "OK"
+}
+
+caddy_menu() {
+  gateway_menu "$@"
 }
 
 case "${1:-}" in
   setup_tunnel|setup_caddy|setup_gateway)
     shift
-    setup_caddy_proxy "$@"
+    setup_gateway_proxy "$@"
     ;;
   start|restart) svc_restart ;;
   stop)      svc_stop ;;
@@ -3645,15 +3640,15 @@ case "${1:-}" in
   listen|port) change_listen_and_port ;;
   url)       change_panel_url ;;
   ssl)       change_ssl ;;
-  caddy|cf|tunnel|gateway) caddy_menu ;;
-  reload_caddy|reload_gateway) reload_caddy_proxy ;;
+  caddy|cf|tunnel|gateway) gateway_menu ;;
+  reload_caddy|reload_gateway) reload_gateway_proxy ;;
   restart_tunnel|restart_gateway)
     shift
     do_restart_tunnel_cmd
     ;;
   disable_tunnel|delete_tunnel|stop_tunnel|disable_caddy|disable_gateway)
     shift
-    disable_caddy_proxy force
+    disable_gateway_proxy force
     ;;
   cert|ssl_cf|acme|cf_ssl) cf_ssl_menu ;;
   view_cert) view_cf_ssl_certs ;;

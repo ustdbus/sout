@@ -2836,7 +2836,7 @@ func toolSUIInitBaseNodes(args []string) {
 	}
 
 	metaVars := fmt.Sprintf("node_port=%d\nws_path=%s\nreality_port=%d\n", nodePort, strings.Trim(wsPath, "/"), realityPort)
-	_ = os.WriteFile("/var/lib/sout/.caddy_meta_vars", []byte(metaVars), 0600)
+	_ = atomicWriteFile("/var/lib/sout/.gateway_meta_vars", []byte(metaVars), 0600)
 	if onlyReality {
 		fmt.Printf("  [✓] 直连 VLESS-Reality 节点已成功创建就绪 (Port: %d)！\n", realityPort)
 	} else {

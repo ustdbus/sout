@@ -946,6 +946,8 @@ svc_install() {
 Description=sout - s-ui 动态家宽出口插件 (VPN Gate)
 After=network.target network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -1097,7 +1099,7 @@ else
     rm -rf "$TMP"
     exit 1
   fi
-  tar xzf "$TMP/f.tar.gz" -C "$TMP"
+  tar --no-same-owner -xzf "$TMP/f.tar.gz" -C "$TMP" 2>/dev/null || tar xzf "$TMP/f.tar.gz" -C "$TMP"
 
   # 下载并解包成功后，安全停止旧服务并执行毫秒级替换
   svc_stop 2>/dev/null || true
@@ -1258,7 +1260,6 @@ WEB_PORT="${ACTUAL_PORT:-43322}"
 
 GATEWAY_META="${WORK_DIR}/gateway_meta.json"
 [[ ! -f "$GATEWAY_META" && -f "${WORK_DIR}/caddy_meta.json" ]] && GATEWAY_META="${WORK_DIR}/caddy_meta.json"
-CADDY_META="$GATEWAY_META"
 backend_mode=$(cat "${WORK_DIR}/panel_mode" 2>/dev/null || echo "")
 
 if [[ -f "$GATEWAY_META" ]] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$GATEWAY_META"; then
