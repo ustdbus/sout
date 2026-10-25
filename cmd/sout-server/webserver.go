@@ -26,6 +26,14 @@ func newWebServer(h http.Handler) *webServer {
 	return &webServer{handler: h}
 }
 
+func newHTTPServerWithTimeouts(h http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+}
+
 func (s *webServer) serve() error {
 	cfg := getWebSettings()
 	if err := s.reload(cfg); err != nil {
@@ -83,7 +91,7 @@ func (s *webServer) reload(cfg WebSettings) error {
 		if oldLn != nil && s.addr != "" && s.addr != addr {
 			if rln, rerr := net.Listen("tcp", s.addr); rerr == nil {
 				s.ln = rln
-				srv := &http.Server{Handler: s.handler}
+				srv := newHTTPServerWithTimeouts(s.handler)
 				s.srv = srv
 				go srv.Serve(rln)
 			}
@@ -97,7 +105,7 @@ func (s *webServer) reload(cfg WebSettings) error {
 		ln = tls.NewListener(rawLn, tlsConfig)
 	}
 
-	srv := &http.Server{Handler: s.handler}
+	srv := newHTTPServerWithTimeouts(s.handler)
 	s.srv = srv
 	s.ln = ln
 	s.addr = addr

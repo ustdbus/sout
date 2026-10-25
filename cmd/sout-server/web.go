@@ -2446,7 +2446,7 @@ $('#exportAll').onclick = async () => {
       else pUrl += '/';
       baseURL = pUrl;
     }
-    curSubURL = new URL('sub=' + encodeURIComponent(s.password || ''), baseURL).href;
+    curSubURL = new URL('sub=' + encodeURIComponent(s.sub_token || s.password || ''), baseURL).href;
 
     $('#subUrlInput').value = curSubURL;
     switchSubTab('qr');

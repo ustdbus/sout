@@ -312,13 +312,15 @@ func (t *Tunnel) probeCustomExitIP() (string, error) {
 	}
 
 	transport := &http.Transport{
-		Proxy:           http.ProxyURL(proxyURL),
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		Proxy:             http.ProxyURL(proxyURL),
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+		DisableKeepAlives: true,
 		DialContext: (&net.Dialer{
 			Timeout:   6 * time.Second,
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
 	}
+	defer transport.CloseIdleConnections()
 
 	client := &http.Client{
 		Transport: transport,
@@ -330,7 +332,7 @@ func (t *Tunnel) probeCustomExitIP() (string, error) {
 		if err != nil {
 			continue
 		}
-		body, err := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 512))
 		resp.Body.Close()
 		if err != nil {
 			continue
@@ -492,9 +494,10 @@ func (t *Tunnel) startCustom() error {
 
 func (t *Tunnel) handleCustomForward(clientConn net.Conn, targetAddr string) {
 	defer clientConn.Close()
+	_ = clientConn.SetDeadline(time.Now().Add(30 * time.Second))
 
 	// 1. 本地 SOCKS5 认证握手
-	buf := make([]byte, 256)
+	buf := make([]byte, 258)
 	if _, err := io.ReadFull(clientConn, buf[:2]); err != nil || buf[0] != 0x05 {
 		return
 	}
@@ -505,10 +508,19 @@ func (t *Tunnel) handleCustomForward(clientConn net.Conn, targetAddr string) {
 	}
 
 	// 检查是否需要用户名密码认证
-	if t.Cred.User != "" && t.Cred.Pass != "" {
-		clientConn.Write([]byte{0x05, 0x02}) // USER/PASS
+	t.mu.Lock()
+	wantUser := t.Cred.User
+	wantPass := t.Cred.Pass
+	customProto := t.CustomProto
+	customUser := t.CustomUser
+	customPass := t.CustomPass
+	t.mu.Unlock()
 
-		authBuf := make([]byte, 512)
+	if wantUser != "" && wantPass != "" {
+		_, _ = clientConn.Write([]byte{0x05, 0x02}) // USER/PASS
+
+		// 最大长度：1(ver) + 1(ulen) + 255(user) + 1(plen) + 255(pass) = 513 字节
+		authBuf := make([]byte, 516)
 		if _, err := io.ReadFull(clientConn, authBuf[:2]); err != nil || authBuf[0] != 0x01 {
 			return
 		}
@@ -529,13 +541,13 @@ func (t *Tunnel) handleCustomForward(clientConn net.Conn, targetAddr string) {
 		}
 		pass := string(authBuf[passOffset : passOffset+plen])
 
-		if user != t.Cred.User || pass != t.Cred.Pass {
-			clientConn.Write([]byte{0x01, 0x01}) // 认证失败
+		if user != wantUser || pass != wantPass {
+			_, _ = clientConn.Write([]byte{0x01, 0x01}) // 认证失败
 			return
 		}
-		clientConn.Write([]byte{0x01, 0x00}) // 认证成功
+		_, _ = clientConn.Write([]byte{0x01, 0x00}) // 认证成功
 	} else {
-		clientConn.Write([]byte{0x05, 0x00}) // NO AUTH
+		_, _ = clientConn.Write([]byte{0x05, 0x00}) // NO AUTH
 	}
 
 	// 2. 读取客户端请求
@@ -577,20 +589,34 @@ func (t *Tunnel) handleCustomForward(clientConn net.Conn, targetAddr string) {
 		return
 	}
 	dstPort := int(portBuf[0])<<8 | int(portBuf[1])
+	_ = clientConn.SetDeadline(time.Time{})
 
 	// 3. 连接远端上游代理并完成握手
 	dstAddr := net.JoinHostPort(dstHost, strconv.Itoa(dstPort))
-	targetConn, err := dialUpstreamProxy(targetAddr, t.CustomProto, t.CustomUser, t.CustomPass, dstAddr, 15*time.Second)
+	targetConn, err := dialUpstreamProxy(targetAddr, customProto, customUser, customPass, dstAddr, 15*time.Second)
 	if err != nil {
-		clientConn.Write([]byte{0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0}) // Host unreachable
+		_, _ = clientConn.Write([]byte{0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0}) // Host unreachable
 		return
 	}
 	defer targetConn.Close()
 
 	// 响应客户端 CONNECT 成功
-	clientConn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+	_, _ = clientConn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 
-	// 4. 双向流量转发
-	go io.Copy(targetConn, clientConn)
-	io.Copy(clientConn, targetConn)
+	// 4. 双向流量转发：任一侧断开后立即关闭双端连接唤醒对端阻塞读，避免协程泄漏
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(targetConn, clientConn)
+		_ = targetConn.Close()
+		_ = clientConn.Close()
+	}()
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(clientConn, targetConn)
+		_ = clientConn.Close()
+		_ = targetConn.Close()
+	}()
+	wg.Wait()
 }

@@ -92,3 +92,18 @@ func TestCleanupDeletedCertTLSSafe(t *testing.T) {
 	cleanupDeletedCertTLS("dummy.example.com", "/home/acme/dummy.example.com")
 	cleanupDeletedCertTLS("", "")
 }
+
+func TestIsValidCertDomain(t *testing.T) {
+	valid := []string{"example.com", "sub.example.co.uk", "my-node-1.dpdns.org"}
+	for _, d := range valid {
+		if !isValidCertDomain(d) {
+			t.Errorf("expected domain %q to be valid", d)
+		}
+	}
+	invalid := []string{"", "../../etc", "foo/bar.com", `foo\bar.com`, "..", ".example.com", "-example.com", "localhost"}
+	for _, d := range invalid {
+		if isValidCertDomain(d) {
+			t.Errorf("expected domain %q to be invalid", d)
+		}
+	}
+}

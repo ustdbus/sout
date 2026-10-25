@@ -87,10 +87,14 @@ func scanLocalACMECerts() []map[string]string {
 
 // createSelfSignedCert 生成 10 年期自签 ECC 证书
 func createSelfSignedCert(domain string) (string, string, error) {
+	domain = strings.TrimSpace(domain)
 	if domain == "" {
 		domain = "apple.com"
 	}
-	outDir := filepath.Join("/home/ssc", domain)
+	if !isValidCertDomain(domain) {
+		return "", "", fmt.Errorf("无效的证书域名: %q", domain)
+	}
+	outDir := filepath.Join("/home/ssc", filepath.Base(domain))
 	if err := os.MkdirAll(outDir, 0755); err != nil {
 		return "", "", fmt.Errorf("创建证书目录失败: %w", err)
 	}

@@ -349,8 +349,51 @@ func saveCFDomainMeta(metaPath, domain, token, certDir string, notAfter int64) {
 	}
 	if out, err := json.MarshalIndent(d, "", "  "); err == nil {
 		_ = os.MkdirAll(filepath.Dir(metaPath), 0700)
-		_ = os.WriteFile(metaPath, out, 0600)
+		_ = atomicWriteFile(metaPath, out, 0600)
 	}
+}
+
+// atomicWriteFile 先写入同目录临时文件再原子重命名，防止断电或 OOM 截断配置文件。
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		_ = os.MkdirAll(dir, 0755)
+	}
+	tmp := fmt.Sprintf("%s.tmp.%d", path, time.Now().UnixNano())
+	if err := os.WriteFile(tmp, data, perm); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// isValidCertDomain 校验域名合法性，防止路径穿越（如 ../../etc）导致任意目录被写入或删除。
+func isValidCertDomain(domain string) bool {
+	domain = strings.TrimSpace(domain)
+	if domain == "" || len(domain) > 253 {
+		return false
+	}
+	if strings.Contains(domain, "..") || strings.ContainsAny(domain, `/\`) {
+		return false
+	}
+	if domain[0] == '.' || domain[0] == '-' || domain[len(domain)-1] == '.' || domain[len(domain)-1] == '-' {
+		return false
+	}
+	hasDot := false
+	for i := 0; i < len(domain); i++ {
+		c := domain[i]
+		if c == '.' {
+			hasDot = true
+			continue
+		}
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' {
+			continue
+		}
+		return false
+	}
+	return hasDot && filepath.Base(domain) == domain
 }
 
 // isCertValidAndNotExpiring 检查证书是否有效且剩余天数大于指定天数
@@ -639,6 +682,10 @@ func apiCertApplyHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "域名不能为空"})
 		return
 	}
+	if !isValidCertDomain(domain) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "域名格式不合法"})
+		return
+	}
 
 	workDir := currentBasePathDir()
 
@@ -698,12 +745,16 @@ func apiCertDeleteHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "域名不能为空"})
 		return
 	}
+	if !isValidCertDomain(domain) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "域名格式不合法"})
+		return
+	}
 
 	targetDir := ""
 	if req.Type == "self_signed" {
-		targetDir = filepath.Join("/home/ssc", domain)
+		targetDir = filepath.Join("/home/ssc", filepath.Base(domain))
 	} else {
-		targetDir = filepath.Join("/home/acme", domain)
+		targetDir = filepath.Join("/home/acme", filepath.Base(domain))
 	}
 
 	if targetDir != "" {
@@ -721,7 +772,7 @@ func apiCertDeleteHandler(w http.ResponseWriter, r *http.Request) {
 		if json.Unmarshal(data, &domains) == nil {
 			delete(domains, domain)
 			out, _ := json.MarshalIndent(domains, "", "  ")
-			_ = os.WriteFile(metaFile, out, 0644)
+			_ = atomicWriteFile(metaFile, out, 0600)
 		}
 	}
 

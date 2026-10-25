@@ -655,7 +655,7 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 			"ssl_key":      cfg.SSLKey,
 			"scheme":       cfg.schemeString(),
 			"has_password": true,
-			"password": auth.currentPassword(),
+			"sub_token":    auth.subToken(),
 			"version":      version,
 			"tunnel":       GetGatewayStatus(currentBasePathDir()),
 		})
@@ -682,7 +682,7 @@ func syncGatewayBasePath(dir, oldBP, newBP string) {
 			if cleanOld == "" || curClean == cleanOld || curClean == "" || curClean != cleanNew {
 				meta["sout_path"] = cleanNew
 				if out, err := json.MarshalIndent(meta, "", "  "); err == nil {
-					_ = os.WriteFile(metaPath, out, 0600)
+					_ = atomicWriteFile(metaPath, out, 0600)
 				}
 			}
 		}

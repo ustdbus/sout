@@ -75,7 +75,7 @@ func (sb *SingBox) loadRawInboundAddrs() map[string][]map[string]any {
 func (sb *SingBox) saveRawInboundAddrs(m map[string][]map[string]any) {
 	_ = os.MkdirAll(sb.workDir, 0755)
 	b, _ := json.MarshalIndent(m, "", "  ")
-	_ = os.WriteFile(sb.addrsFilePath(), b, 0644)
+	_ = atomicWriteFile(sb.addrsFilePath(), b, 0644)
 }
 
 func (sb *SingBox) branchBindingsPath() string {
@@ -122,14 +122,14 @@ func (sb *SingBox) saveBranchBinding(binding branchBinding) {
 	}
 	data, err := json.MarshalIndent(updated, "", "  ")
 	if err == nil {
-		_ = os.WriteFile(sb.branchBindingsPath(), data, 0600)
+		_ = atomicWriteFile(sb.branchBindingsPath(), data, 0600)
 	}
 }
 
 func (sb *SingBox) saveAllBranchBindings(list []branchBinding) {
 	data, err := json.MarshalIndent(list, "", "  ")
 	if err == nil {
-		_ = os.WriteFile(sb.branchBindingsPath(), data, 0600)
+		_ = atomicWriteFile(sb.branchBindingsPath(), data, 0600)
 	}
 }
 
@@ -630,7 +630,7 @@ func (sb *SingBox) saveConfig(cfg map[string]any) error {
 	}
 
 	_ = os.MkdirAll(filepath.Dir(sb.configPath), 0755)
-	if err := os.WriteFile(sb.configPath, data, 0644); err != nil {
+	if err := atomicWriteFile(sb.configPath, data, 0644); err != nil {
 		return fmt.Errorf("保存 sing-box 配置文件失败: %w", err)
 	}
 

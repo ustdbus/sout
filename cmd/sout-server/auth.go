@@ -101,6 +101,32 @@ func (a *Auth) check(pw string) bool {
 	return subtle.ConstantTimeCompare(want[:], got[:]) == 1
 }
 
+// subToken 生成与当前密码及 secret 绑定的独立订阅令牌，避免在 API 或订阅链接中直接暴露后台明文主密码。
+func (a *Auth) subToken() string {
+	sig := a.signPayload("sout-sub-token")
+	if len(sig) >= 18 {
+		return sig[:18]
+	}
+	return sig
+}
+
+// checkSub 同时兼容独立订阅令牌与历史明文口令。
+func (a *Auth) checkSub(token string) bool {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return false
+	}
+	subTok := a.subToken()
+	if subTok != "" {
+		want := sha256.Sum256([]byte(subTok))
+		got := sha256.Sum256([]byte(token))
+		if subtle.ConstantTimeCompare(want[:], got[:]) == 1 {
+			return true
+		}
+	}
+	return a.check(token)
+}
+
 func (a *Auth) SetPassword(pw string) error {
 	pw = strings.TrimSpace(pw)
 	if pw == "" {
@@ -212,21 +238,33 @@ func (a *Auth) Wrap(next http.Handler) http.Handler {
 		}
 
 		if strings.HasPrefix(r.URL.Path, "/sub=") {
+			ip := clientIP(r)
+			if a.blocked(ip) {
+				writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "请求失败次数过多，请稍后再试"})
+				return
+			}
 			pw := strings.TrimPrefix(r.URL.Path, "/sub=")
 			subPath := ""
 			if idx := strings.Index(pw, "/"); idx != -1 {
 				subPath = pw[idx:]
 				pw = pw[:idx]
 			}
-			if a.check(pw) {
+			if a.checkSub(pw) {
+				a.clearFails(ip)
 				r.URL.Path = "/sub" + subPath
 				next.ServeHTTP(w, r)
 				return
 			}
+			a.recordFail(ip)
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "访问口令不正确"})
 			return
 		}
 		if (r.URL.Path == "/sub" || r.URL.Path == "/sub/") && (r.URL.Query().Get("token") != "" || r.URL.Query().Get("pw") != "" || r.URL.Query().Get("password") != "") {
+			ip := clientIP(r)
+			if a.blocked(ip) {
+				writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "请求失败次数过多，请稍后再试"})
+				return
+			}
 			token := r.URL.Query().Get("token")
 			if token == "" {
 				token = r.URL.Query().Get("pw")
@@ -234,11 +272,13 @@ func (a *Auth) Wrap(next http.Handler) http.Handler {
 			if token == "" {
 				token = r.URL.Query().Get("password")
 			}
-			if a.check(token) {
+			if a.checkSub(token) {
+				a.clearFails(ip)
 				r.URL.Path = "/sub"
 				next.ServeHTTP(w, r)
 				return
 			}
+			a.recordFail(ip)
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "访问口令不正确"})
 			return
 		}
@@ -246,9 +286,18 @@ func (a *Auth) Wrap(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if pw := r.Header.Get("X-Sout-Password"); pw != "" && a.check(pw) {
-			next.ServeHTTP(w, r)
-			return
+		if pw := r.Header.Get("X-Sout-Password"); pw != "" {
+			ip := clientIP(r)
+			if a.blocked(ip) {
+				writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "请求失败次数过多，请稍后再试"})
+				return
+			}
+			if a.check(pw) {
+				a.clearFails(ip)
+				next.ServeHTTP(w, r)
+				return
+			}
+			a.recordFail(ip)
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "未登录"})

@@ -170,15 +170,44 @@ func logFileWriter(stream *os.File) io.Writer {
 	return w
 }
 
+type filteredLogWriter struct {
+	dst io.Writer
+}
+
+func (w filteredLogWriter) Write(p []byte) (int, error) {
+	if isIgnoredLogLine(string(p)) {
+		return len(p), nil
+	}
+	return w.dst.Write(p)
+}
+
 // initLogCapture 同时接管 stdout / stderr 与内存环形缓冲。
 // 无 systemd 时 OpenRC 会把这两个流重定向到文件，这里为其加上大小上限。
 func initLogCapture() {
-	writers := []io.Writer{os.Stdout, os.Stderr, globalLogBuffer}
+	var outWriter io.Writer = os.Stderr
 	if fw := logFileWriter(os.Stderr); fw != nil {
 		// 已被重定向到文件：仅由轮转写入器与内存缓冲接管，避免同一份日志向同一文件写入两次
-		writers = []io.Writer{fw, globalLogBuffer}
+		outWriter = fw
 	}
-	log.SetOutput(io.MultiWriter(writers...))
+	combined := io.MultiWriter(filteredLogWriter{dst: outWriter}, globalLogBuffer)
+	log.SetOutput(combined)
+
+	// 拦截内嵌 sing-box 直接写往 os.Stderr 的高频 EOF 断连噪音，避免刷爆 systemd-journald 内存
+	if pr, pw, err := os.Pipe(); err == nil {
+		os.Stderr = pw
+		go func() {
+			buf := make([]byte, 4096)
+			for {
+				n, rerr := pr.Read(buf)
+				if n > 0 {
+					_, _ = combined.Write(buf[:n])
+				}
+				if rerr != nil {
+					return
+				}
+			}
+		}()
+	}
 }
 
 func readLastLinesFromFile(filePath string, lines int) string {

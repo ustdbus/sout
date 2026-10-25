@@ -384,7 +384,7 @@ func (e *embeddedEngine) rebuildInboundBoxLocked() error {
 		e.inboundBox = nil
 	}
 
-	if err := newBox.Start(); err != nil {
+	if err := startBoxWithRetry(newBox); err != nil {
 		return fmt.Errorf("启动 inboundBox 失败: %w", err)
 	}
 
@@ -560,7 +560,7 @@ func (e *embeddedEngine) rebuildOutboundBoxLocked() error {
 		e.outboundBox = nil
 	}
 
-	if err := newBox.Start(); err != nil {
+	if err := startBoxWithRetry(newBox); err != nil {
 		return fmt.Errorf("启动 outboundBox 失败: %w", err)
 	}
 
@@ -1053,6 +1053,21 @@ func (e *embeddedEngine) close() error {
 	return nil
 }
 
+func startBoxWithRetry(box *sbox.Box) error {
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		lastErr = box.Start()
+		if lastErr == nil {
+			return nil
+		}
+		if !strings.Contains(lastErr.Error(), "address already in use") {
+			return lastErr
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return lastErr
+}
+
 func safeCloseBox(box *sbox.Box) error {
 	if box == nil {
 		return nil
@@ -1064,7 +1079,7 @@ func safeCloseBox(box *sbox.Box) error {
 	}()
 	select {
 	case <-closeDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 	}
 	return nil
 }
