@@ -28,8 +28,9 @@ const (
 )
 
 var (
-	cachedSUIToken   string
-	cachedSUITokenMu sync.Mutex
+	cachedSUIToken     string
+	cachedSUITokenMu   sync.Mutex
+	suiBranchBindingMu sync.Mutex
 )
 
 // SUI 结构体，对接本机 s-ui 面板
@@ -1547,6 +1548,12 @@ func branchBindingsPath(workDir string) string {
 }
 
 func loadBranchBindings(workDir string) []branchBinding {
+	suiBranchBindingMu.Lock()
+	defer suiBranchBindingMu.Unlock()
+	return loadBranchBindingsUnlocked(workDir)
+}
+
+func loadBranchBindingsUnlocked(workDir string) []branchBinding {
 	p := branchBindingsPath(workDir)
 	blob, err := os.ReadFile(p)
 	if err != nil {
@@ -1558,7 +1565,7 @@ func loadBranchBindings(workDir string) []branchBinding {
 		if legacyBlob, err2 := os.ReadFile(legacyPath); err2 == nil {
 			var legacyList []branchBinding
 			if err3 := json.Unmarshal(legacyBlob, &legacyList); err3 == nil {
-				_ = os.WriteFile(p, legacyBlob, 0600)
+				_ = atomicWriteFile(p, legacyBlob, 0600)
 				_ = os.Rename(legacyPath, legacyPath+".migrated")
 				return legacyList
 			}
@@ -1571,7 +1578,9 @@ func loadBranchBindings(workDir string) []branchBinding {
 }
 
 func saveBranchBinding(workDir string, binding branchBinding) {
-	list := loadBranchBindings(workDir)
+	suiBranchBindingMu.Lock()
+	defer suiBranchBindingMu.Unlock()
+	list := loadBranchBindingsUnlocked(workDir)
 	var updated []branchBinding
 	exists := false
 	for _, b := range list {
@@ -1592,6 +1601,8 @@ func saveBranchBinding(workDir string, binding branchBinding) {
 }
 
 func saveAllBranchBindings(workDir string, list []branchBinding) {
+	suiBranchBindingMu.Lock()
+	defer suiBranchBindingMu.Unlock()
 	data, err := json.MarshalIndent(list, "", "  ")
 	if err == nil {
 		_ = atomicWriteFile(branchBindingsPath(workDir), data, 0600)
@@ -1599,7 +1610,9 @@ func saveAllBranchBindings(workDir string, list []branchBinding) {
 }
 
 func removeBranchBinding(workDir string, templateID int, host string, slot int) {
-	list := loadBranchBindings(workDir)
+	suiBranchBindingMu.Lock()
+	defer suiBranchBindingMu.Unlock()
+	list := loadBranchBindingsUnlocked(workDir)
 	var updated []branchBinding
 	for _, b := range list {
 		match := false
@@ -3527,56 +3540,6 @@ func (s *SUI) ResetClient(id int, email string, tunnels []*Tunnel) error {
 
 func (s *SUI) OnTunnelsChanged(tunnels []*Tunnel) error {
 	return s.syncOutbounds(tunnels)
-}
-
-// reconcileBranchBindings 自动将持久化保存的分流绑定恢复到活跃隧道
-func (s *SUI) reconcileBranchBindings(tunnels []*Tunnel) {
-	bindings := loadBranchBindings(s.workDir)
-	if len(bindings) == 0 {
-		return
-	}
-	for _, b := range bindings {
-		if b.TemplateID <= 0 {
-			continue
-		}
-		var targetTunnel *Tunnel
-		for _, t := range tunnels {
-			if t.Status != "up" {
-				continue
-			}
-			if b.Slot > 0 {
-				if t.Slot == b.Slot {
-					targetTunnel = t
-					if b.Host != t.Node.HostName {
-						b.Host = t.Node.HostName
-						saveBranchBinding(s.workDir, b)
-					}
-					break
-				}
-			} else if b.Host != "" {
-				if t.Node.HostName == b.Host || sanitizeTag(t.Node.HostName) == sanitizeTag(b.Host) {
-					targetTunnel = t
-					b.Host = t.Node.HostName
-					b.Slot = t.Slot
-					saveBranchBinding(s.workDir, b)
-					break
-				}
-			}
-		}
-		if targetTunnel == nil || targetTunnel.Status != "up" {
-			continue
-		}
-
-		clientName := fmt.Sprintf("soutu%d_s%d", b.TemplateID, targetTunnel.Slot)
-		if targetTunnel.Slot <= 0 {
-			clientName = fmt.Sprintf("soutu%d%s", b.TemplateID, sanitizeTag(targetTunnel.Node.HostName))
-		}
-
-		if _, ok, err := s.apiClientByName(clientName); err == nil && !ok {
-			log.Printf("自动自愈并恢复家宽分流绑定: 模板入站 %d -> 节点 %s (%s)", b.TemplateID, targetTunnel.Node.HostName, targetTunnel.Node.Country)
-			_, _ = s.CloneToTunnels(b.TemplateID, []string{targetTunnel.Node.HostName}, tunnels)
-		}
-	}
 }
 
 func isSplitUser(u string) bool {

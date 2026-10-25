@@ -195,43 +195,6 @@ func AdoptLegacySlotCredentials(slot int, uuid, password, remark string) bool {
 	return true
 }
 
-// ReleaseSlotCredentials 支持标记或释放指定 slot 的凭据
-func ReleaseSlotCredentials(slot int) {
-	if slot <= 0 {
-		return
-	}
-	credMu.Lock()
-	defer credMu.Unlock()
-	if globalCreds == nil {
-		loadCredentialsLocked()
-	}
-	if globalCreds.SlotCredentials == nil {
-		return
-	}
-	key := strconv.Itoa(slot)
-	if _, ok := globalCreds.SlotCredentials[key]; ok {
-		delete(globalCreds.SlotCredentials, key)
-		_ = saveCredentialsLocked()
-	}
-}
-
-// GetSlotCredential 查询指定 slot 的持久化凭据
-func GetSlotCredential(slot int) (SlotCredential, bool) {
-	if slot <= 0 {
-		return SlotCredential{}, false
-	}
-	credMu.Lock()
-	defer credMu.Unlock()
-	if globalCreds == nil {
-		loadCredentialsLocked()
-	}
-	if globalCreds.SlotCredentials == nil {
-		return SlotCredential{}, false
-	}
-	sc, ok := globalCreds.SlotCredentials[strconv.Itoa(slot)]
-	return sc, ok
-}
-
 // parseSlotFromClientName 从 soutu%d_s%d 命名规则中解析 Slot 编号
 func parseSlotFromClientName(name string) int {
 	if idx := strings.LastIndex(name, "_s"); idx != -1 {

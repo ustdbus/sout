@@ -378,58 +378,60 @@ func GetGatewayStatus(workDir string) map[string]any {
 	if hasNativeTunnel {
 		st["tunnel_engine"] = "sing-box"
 		if !cfRunning {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			if isSUI {
-				if exec.Command("pgrep", "-f", "sui").Run() == nil {
+				if exec.CommandContext(ctx, "pgrep", "-f", "sui").Run() == nil {
 					cfRunning = true
 				}
 			} else {
-				if exec.Command("pgrep", "-f", "sout-server").Run() == nil {
+				if exec.CommandContext(ctx, "pgrep", "-f", "sout-server").Run() == nil {
 					cfRunning = true
 				}
 			}
+			cancel()
 		}
 		st["cloudflared_running"] = cfRunning
 
-		// 若为 s-ui 且配置了原生隧道但对应服务未运行，后台自愈拉起
+		// 若为 s-ui 且配置了原生隧道但对应服务未运行，后台自愈拉起（带 30s 冷却防风暴）
 		if isSUI {
-			if enabled, _ := st["enabled"].(bool); enabled && !cfRunning {
+			if enabled, _ := st["enabled"].(bool); enabled && !cfRunning && shouldAttemptGatewayHeal() {
 				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
 					if _, err := exec.LookPath("systemctl"); err == nil {
-						_ = exec.Command("systemctl", "start", "s-ui").Run()
+						_ = exec.CommandContext(ctx, "systemctl", "start", "s-ui").Run()
 					} else if _, err := exec.LookPath("rc-service"); err == nil {
-						_ = exec.Command("rc-service", "s-ui", "start").Run()
+						_ = exec.CommandContext(ctx, "rc-service", "s-ui", "start").Run()
 					}
 				}()
 			}
 		}
 	} else {
 		// 独立 cloudflared 进程运行状态检查
-		if exec.Command("pgrep", "-f", "cloudflared").Run() == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		if exec.CommandContext(ctx, "pgrep", "-f", "cloudflared").Run() == nil {
 			cfRunning = true
 		} else if data, err := os.ReadFile("/run/cloudflared.pid"); err == nil {
 			pidStr := strings.TrimSpace(string(data))
-			if pidStr != "" && exec.Command("kill", "-0", pidStr).Run() == nil {
+			if pidStr != "" && exec.CommandContext(ctx, "kill", "-0", pidStr).Run() == nil {
 				cfRunning = true
 			}
 		}
+		cancel()
 		st["cloudflared_running"] = cfRunning
 
-		// 只有在非 sing-box 模式且启用了隧道时，才尝试拉起 cloudflared
-		if enabled, _ := st["enabled"].(bool); enabled && !cfRunning {
+		// 只有在非 sing-box 模式且启用了隧道时，才尝试拉起 cloudflared（带 30s 冷却防风暴）
+		if enabled, _ := st["enabled"].(bool); enabled && !cfRunning && shouldAttemptGatewayHeal() {
 			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
 				if _, err := exec.LookPath("systemctl"); err == nil {
-					_ = exec.Command("systemctl", "start", "cloudflared").Run()
+					_ = exec.CommandContext(ctx, "systemctl", "start", "cloudflared").Run()
 				} else if _, err := exec.LookPath("rc-service"); err == nil {
-					_ = exec.Command("rc-service", "cloudflared", "start").Run()
+					_ = exec.CommandContext(ctx, "rc-service", "cloudflared", "start").Run()
 				}
 			}()
 		}
-	}
-
-	// 读取当前面板口令
-	pwPath := filepath.Join(workDir, "password")
-	if pw, err := os.ReadFile(pwPath); err == nil {
-		st["password"] = strings.TrimSpace(string(pw))
 	}
 
 	// 读取当前面板运行模式
@@ -439,5 +441,20 @@ func GetGatewayStatus(workDir string) map[string]any {
 	}
 
 	return st
+}
+
+var (
+	gatewayHealMu   sync.Mutex
+	lastGatewayHeal time.Time
+)
+
+func shouldAttemptGatewayHeal() bool {
+	gatewayHealMu.Lock()
+	defer gatewayHealMu.Unlock()
+	if time.Since(lastGatewayHeal) < 30*time.Second {
+		return false
+	}
+	lastGatewayHeal = time.Now()
+	return true
 }
 

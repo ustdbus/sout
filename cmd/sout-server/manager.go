@@ -718,6 +718,9 @@ func (m *Manager) Stop(slot int) error {
 	if !ok {
 		return fmt.Errorf("槽位 %d 没有在运行", slot)
 	}
+	m.syncMu.Lock()
+	delete(m.syncedExitIP, slot)
+	m.syncMu.Unlock()
 	t.stop()
 	if t.IsChainUpstream || m.chainUpstreamSlot == slot {
 		m.chainUpstreamSlot = 0

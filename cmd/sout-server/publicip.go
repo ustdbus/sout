@@ -172,13 +172,6 @@ var (
 	publicIPv6NegativeAt time.Time
 )
 
-// setPublicIPv6Override 记录用户显式指定的母机公网 IPv6，空值表示不覆盖。
-func setPublicIPv6Override(ip string) {
-	publicIPv6Mu.Lock()
-	publicIPv6Override = strings.TrimSpace(ip)
-	publicIPv6Mu.Unlock()
-}
-
 // hostPublicIPv6 返回本机公网 IPv6；没有 IPv6 出口时返回空串（调用方据此决定是否回显）。
 func hostPublicIPv6() string {
 	publicIPv6Mu.Lock()

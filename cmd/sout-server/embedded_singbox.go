@@ -58,12 +58,6 @@ func getEmbeddedEngine() *embeddedEngine {
 	return globalEngine
 }
 
-func setGlobalEmbeddedEngine(e *embeddedEngine) {
-	globalEngineMu.Lock()
-	defer globalEngineMu.Unlock()
-	globalEngine = e
-}
-
 func getOrInitEmbeddedEngine(listenIP string) (*embeddedEngine, error) {
 	globalEngineMu.Lock()
 	defer globalEngineMu.Unlock()
@@ -617,54 +611,6 @@ func (e *embeddedEngine) SyncInbounds(inbounds []map[string]any) error {
 
 	e.inboundConfigs = tagMap
 	e.inboundHash = hash
-	return e.rebuildInboundBoxLocked()
-}
-
-func (e *embeddedEngine) AddInbound(rawConfig map[string]any) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	tag, _ := rawConfig["tag"].(string)
-	typ, _ := rawConfig["type"].(string)
-	if tag == "" || typ == "" {
-		return fmt.Errorf("入站缺少 tag 或 type")
-	}
-
-	e.inboundConfigs[tag] = rawConfig
-
-	var list []map[string]any
-	for _, cfg := range e.inboundConfigs {
-		list = append(list, cfg)
-	}
-	hash, _, err := computeInboundsHash(list)
-	if err != nil {
-		return fmt.Errorf("计算入站配置全局哈希失败: %w", err)
-	}
-	e.inboundHash = hash
-
-	return e.rebuildInboundBoxLocked()
-}
-
-func (e *embeddedEngine) RemoveInbound(tag string) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if _, exists := e.inboundConfigs[tag]; !exists {
-		return nil
-	}
-	delete(e.inboundConfigs, tag)
-	delete(e.routes, tag)
-
-	var list []map[string]any
-	for _, cfg := range e.inboundConfigs {
-		list = append(list, cfg)
-	}
-	hash, _, err := computeInboundsHash(list)
-	if err != nil {
-		return fmt.Errorf("计算入站配置全局哈希失败: %w", err)
-	}
-	e.inboundHash = hash
-
 	return e.rebuildInboundBoxLocked()
 }
 

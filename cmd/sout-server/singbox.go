@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
@@ -16,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -289,7 +291,9 @@ func (sb *SingBox) healCloudflareQuickTunnel(cfg map[string]any) bool {
 		return false
 	}
 
-	out, err := exec.Command("sh", "-c", "journalctl -u cloudflared -b -n 50 --no-pager 2>/dev/null | grep -oE 'https://[a-zA-Z0-9-]+\\.trycloudflare\\.com' | tail -1 | sed 's|https://||' | tr -d ' \\r\\n'").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "sh", "-c", "journalctl -u cloudflared -b -n 50 --no-pager 2>/dev/null | grep -oE 'https://[a-zA-Z0-9-]+\\.trycloudflare\\.com' | tail -1 | sed 's|https://||' | tr -d ' \\r\\n'").Output()
 	if err != nil || len(out) == 0 {
 		return false
 	}
@@ -756,15 +760,6 @@ func (sb *SingBox) syncToEmbedded(cfg map[string]any) error {
 
 	eng.SyncRoutes(routes, userRoutes)
 	return nil
-}
-
-func (sb *SingBox) restartService() {
-	sb.restartMu.Lock()
-	defer sb.restartMu.Unlock()
-	// 单内嵌内核模式下热同步，不再调用外部 systemctl
-	if cfg, err := sb.loadConfig(); err == nil {
-		_ = sb.syncToEmbedded(cfg)
-	}
 }
 
 // Inbounds 列出当前 sing-box 中的所有入站节点及其派生的分流分支

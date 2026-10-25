@@ -4,6 +4,7 @@
 *.exe
 *.sub
 *.tar.gz
+*.db
 scratch/
 __pycache__/
 test_api.sh

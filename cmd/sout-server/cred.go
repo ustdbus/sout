@@ -50,12 +50,3 @@ func validateCred(c SocksCred) error {
 	}
 	return nil
 }
-
-
-// socksURL 拼出客户端能直接粘贴的 socks5:// 地址。
-func socksURL(host string, port int, cred SocksCred) string {
-	if cred.User == "" {
-		return fmt.Sprintf("socks5://%s:%d", host, port)
-	}
-	return fmt.Sprintf("socks5://%s:%s@%s:%d", cred.User, cred.Pass, host, port)
-}
