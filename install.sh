@@ -437,7 +437,22 @@ install_singbox() {
     }
   ],
   "route": {
-    "rules": []
+    "rules": [
+      {
+        "ip_cidr": ["255.255.255.255/32", "224.0.0.0/4", "ff00::/8"],
+        "action": "reject",
+        "method": "drop"
+      },
+      {
+        "domain": ["localhost"],
+        "outbound": "direct"
+      },
+      {
+        "ip_is_private": true,
+        "outbound": "direct"
+      }
+    ],
+    "final": "direct"
   }
 }
 SBCONF

@@ -249,16 +249,7 @@ func initDefaultSingBoxConfig(path string) error {
 			},
 		},
 		"route": map[string]any{
-			"rules": []any{
-				map[string]any{
-					"domain":   []any{"localhost"},
-					"outbound": "direct",
-				},
-				map[string]any{
-					"ip_is_private": true,
-					"outbound":      "direct",
-				},
-			},
+			"rules":                 ensureSingBoxRouteRules(nil, nil, nil),
 			"final":                 "direct",
 			"auto_detect_interface": true,
 		},
@@ -591,10 +582,75 @@ func (sb *SingBox) cleanupAndMigrateLegacyClients(cfg map[string]any) bool {
 			}
 		}
 
-		routeRaw["rules"] = ensureDirectPrivateRules(newRules)
+		ensuredRules := ensureSingBoxRouteRules(newRules, extractConfigEndpointTags(cfg), extractConfigInboundTags(cfg))
+		if !jsonRulesEqual(rulesRaw, ensuredRules) {
+			changed = true
+		}
+		routeRaw["rules"] = ensuredRules
+	} else {
+		cfg["route"] = map[string]any{
+			"rules": ensureSingBoxRouteRules(nil, extractConfigEndpointTags(cfg), extractConfigInboundTags(cfg)),
+			"final": "direct",
+		}
+		changed = true
 	}
 
 	return changed
+}
+
+// ensureSingBoxRouteRules 维护 sout 单机模式下的原生 sing-box 路由守卫规则：
+// 1. 置顶丢弃双向隧道 Endpoint 反向入站流量与受限广播/多播地址段（action: reject, method: drop）；
+// 2. 次顶层保留 localhost 与 ip_is_private 直连规则，确保高于业务分流但低于反向隧道/广播拦截。
+func ensureSingBoxRouteRules(rules []any, endpointTags []string, activeInboundTags []string) []any {
+	knownSet := make(map[string]bool, len(endpointTags))
+	for _, t := range endpointTags {
+		knownSet[t] = true
+	}
+	inboundSet := make(map[string]bool, len(activeInboundTags))
+	for _, t := range activeInboundTags {
+		inboundSet[t] = true
+	}
+
+	var rest []any
+	for _, r := range rules {
+		m, ok := r.(map[string]any)
+		if !ok {
+			rest = append(rest, r)
+			continue
+		}
+		if isManagedBroadcastDropRule(m) || isManagedEndpointDropRule(m, knownSet, inboundSet) || isManagedLocalhostDirectRule(m) || isManagedPrivateIPDirectRule(m) {
+			continue
+		}
+		rest = append(rest, r)
+	}
+
+	hasCustomLocal, hasCustomPriv := hasCustomLocalhostOrPrivateDirect(rest)
+	header := make([]any, 0, 4+len(rest))
+	if len(endpointTags) > 0 {
+		header = append(header, map[string]any{
+			"inbound": toAnyStringSlice(endpointTags),
+			"action":  "reject",
+			"method":  "drop",
+		})
+	}
+	header = append(header, map[string]any{
+		"ip_cidr": toAnyStringSlice(broadcastMulticastCIDRs),
+		"action":  "reject",
+		"method":  "drop",
+	})
+	if !hasCustomLocal {
+		header = append(header, map[string]any{
+			"domain":   []any{"localhost"},
+			"outbound": "direct",
+		})
+	}
+	if !hasCustomPriv {
+		header = append(header, map[string]any{
+			"ip_is_private": true,
+			"outbound":      "direct",
+		})
+	}
+	return append(header, rest...)
 }
 
 func (sb *SingBox) loadConfig() (map[string]any, error) {
@@ -2099,7 +2155,7 @@ func (sb *SingBox) syncOutboundsInternal(cfg map[string]any, tunnels []*Tunnel) 
 		}
 		keptRules = append(keptRules, r)
 	}
-	routeRaw["rules"] = ensureDirectPrivateRules(keptRules)
+	routeRaw["rules"] = ensureSingBoxRouteRules(keptRules, extractConfigEndpointTags(cfg), extractConfigInboundTags(cfg))
 
 	// 建立有效用户路由映射
 	validRoutedUsers := make(map[string]bool)

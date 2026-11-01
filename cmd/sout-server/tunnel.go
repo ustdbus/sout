@@ -387,6 +387,13 @@ func (t *Tunnel) startSingBoxCustom() error {
 		"inbounds":  []any{inboundMap},
 		"outbounds": []any{obMap},
 		"route": map[string]any{
+			"rules": []any{
+				map[string]any{
+					"ip_cidr": []any{"255.255.255.255/32", "224.0.0.0/4", "ff00::/8"},
+					"action":  "reject",
+					"method":  "drop",
+				},
+			},
 			"final": tag,
 		},
 	}

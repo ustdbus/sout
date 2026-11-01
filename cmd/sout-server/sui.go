@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -792,7 +794,7 @@ func (s *SUI) BindUserRoute(userName string, hostname string, tunnels []*Tunnel)
 		})
 	}
 
-	newRules = ensureDirectPrivateRules(newRules)
+	newRules = ensureSUIRouteRules(newRules, s.collectEndpointTags(rawConfig), s.collectInboundTags(rawConfig))
 	route["rules"] = newRules
 	rawConfig["route"] = route
 
@@ -817,11 +819,231 @@ func (s *SUI) restartSingBox() {
 	_, _ = s.callAPI(http.MethodPost, "restartSb", nil)
 }
 
-// ensureDirectPrivateRules 确保 sing-box 路由规则中具备指向 direct 的 localhost 域名及 ip_is_private 私网直连规则，
-// 杜绝本地回环回源（如 cloudflared 回源 127.0.0.1:8081）误入上游代理/SOCKS5 前置链出站导致 502 Bad Gateway。
-func ensureDirectPrivateRules(rules []any) []any {
-	hasLocalhost := false
-	hasPrivateIP := false
+var broadcastMulticastCIDRs = []string{"255.255.255.255/32", "224.0.0.0/4", "ff00::/8"}
+
+func toAnyStringSlice(items []string) []any {
+	res := make([]any, len(items))
+	for i, s := range items {
+		res[i] = s
+	}
+	return res
+}
+
+func jsonRulesEqual(a, b []any) bool {
+	if a == nil {
+		a = []any{}
+	}
+	if b == nil {
+		b = []any{}
+	}
+	ab, err1 := json.Marshal(a)
+	bb, err2 := json.Marshal(b)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	return bytes.Equal(ab, bb)
+}
+
+func extractConfigTagList(cfg map[string]any, field string) []string {
+	if cfg == nil {
+		return nil
+	}
+	rawItems, ok := cfg[field].([]any)
+	if !ok || len(rawItems) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(rawItems))
+	var tags []string
+	for _, item := range rawItems {
+		itemMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		tag, _ := itemMap["tag"].(string)
+		tag = strings.TrimSpace(tag)
+		if tag != "" && !seen[tag] {
+			seen[tag] = true
+			tags = append(tags, tag)
+		}
+	}
+	sort.Strings(tags)
+	return tags
+}
+
+func extractConfigEndpointTags(cfg map[string]any) []string {
+	return extractConfigTagList(cfg, "endpoints")
+}
+
+func extractConfigInboundTags(cfg map[string]any) []string {
+	return extractConfigTagList(cfg, "inbounds")
+}
+
+func (s *SUI) collectInboundTags(rawConfig map[string]any) []string {
+	seen := make(map[string]bool)
+	var tags []string
+	addTag := func(tag string) {
+		tag = strings.TrimSpace(tag)
+		if tag != "" && !seen[tag] {
+			seen[tag] = true
+			tags = append(tags, tag)
+		}
+	}
+	for _, t := range extractConfigInboundTags(rawConfig) {
+		addTag(t)
+	}
+	if s != nil && s.client != nil && s.Port > 0 {
+		if ibObj, err := s.callAPI(http.MethodGet, "inbounds", nil); err == nil && len(ibObj) > 0 {
+			type inboundItem struct {
+				Tag string `json:"tag"`
+			}
+			var wrap struct {
+				Inbounds []inboundItem `json:"inbounds"`
+			}
+			if json.Unmarshal(ibObj, &wrap) == nil && len(wrap.Inbounds) > 0 {
+				for _, ib := range wrap.Inbounds {
+					addTag(ib.Tag)
+				}
+			} else {
+				var list []inboundItem
+				if json.Unmarshal(ibObj, &list) == nil {
+					for _, ib := range list {
+						addTag(ib.Tag)
+					}
+				}
+			}
+		}
+	}
+	sort.Strings(tags)
+	return tags
+}
+
+func (s *SUI) collectEndpointTags(rawConfig map[string]any) []string {
+	seen := make(map[string]bool)
+	var tags []string
+	addTag := func(tag string) {
+		tag = strings.TrimSpace(tag)
+		if tag != "" && !seen[tag] {
+			seen[tag] = true
+			tags = append(tags, tag)
+		}
+	}
+	for _, t := range extractConfigEndpointTags(rawConfig) {
+		addTag(t)
+	}
+	if s != nil && s.client != nil && s.Port > 0 {
+		if epObj, err := s.callAPI(http.MethodGet, "endpoints", nil); err == nil && len(epObj) > 0 {
+			type endpointItem struct {
+				Tag string `json:"tag"`
+			}
+			var wrap struct {
+				Endpoints []endpointItem `json:"endpoints"`
+			}
+			if json.Unmarshal(epObj, &wrap) == nil && len(wrap.Endpoints) > 0 {
+				for _, ep := range wrap.Endpoints {
+					addTag(ep.Tag)
+				}
+			} else {
+				var list []endpointItem
+				if json.Unmarshal(epObj, &list) == nil {
+					for _, ep := range list {
+						addTag(ep.Tag)
+					}
+				}
+			}
+		}
+	}
+	sort.Strings(tags)
+	return tags
+}
+
+func isManagedBroadcastDropRule(m map[string]any) bool {
+	if len(m) != 3 {
+		return false
+	}
+	action, _ := m["action"].(string)
+	method, _ := m["method"].(string)
+	if action != "reject" || method != "drop" {
+		return false
+	}
+	cidrs := toSUITagSlice(m["ip_cidr"])
+	if len(cidrs) != len(broadcastMulticastCIDRs) {
+		return false
+	}
+	expected := map[string]bool{
+		"255.255.255.255/32": true,
+		"224.0.0.0/4":        true,
+		"ff00::/8":           true,
+	}
+	for _, c := range cidrs {
+		if !expected[c] {
+			return false
+		}
+	}
+	return true
+}
+
+func isManagedEndpointDropRule(m map[string]any, knownEndpointSet, activeInboundSet map[string]bool) bool {
+	if len(m) != 3 {
+		return false
+	}
+	action, _ := m["action"].(string)
+	method, _ := m["method"].(string)
+	if action != "reject" || method != "drop" {
+		return false
+	}
+	inbounds := toSUITagSlice(m["inbound"])
+	if len(inbounds) == 0 {
+		return false
+	}
+	for _, inb := range inbounds {
+		if activeInboundSet[inb] && !knownEndpointSet[inb] && !isEmbeddedEndpointInbound(inb) {
+			return false
+		}
+	}
+	return true
+}
+
+func isManagedLocalhostDirectRule(m map[string]any) bool {
+	ob, _ := m["outbound"].(string)
+	if ob != "direct" {
+		return false
+	}
+	action, hasAction := m["action"].(string)
+	if hasAction && action != "" && action != "route" {
+		return false
+	}
+	expectedKeys := 2
+	if _, exists := m["action"]; exists {
+		expectedKeys = 3
+	}
+	if len(m) != expectedKeys {
+		return false
+	}
+	doms := toSUITagSlice(m["domain"])
+	return len(doms) == 1 && doms[0] == "localhost"
+}
+
+func isManagedPrivateIPDirectRule(m map[string]any) bool {
+	ob, _ := m["outbound"].(string)
+	if ob != "direct" {
+		return false
+	}
+	action, hasAction := m["action"].(string)
+	if hasAction && action != "" && action != "route" {
+		return false
+	}
+	expectedKeys := 2
+	if _, exists := m["action"]; exists {
+		expectedKeys = 3
+	}
+	if len(m) != expectedKeys {
+		return false
+	}
+	priv, ok := m["ip_is_private"].(bool)
+	return ok && priv
+}
+
+func hasCustomLocalhostOrPrivateDirect(rules []any) (hasLocalhost, hasPrivate bool) {
 	for _, r := range rules {
 		m, ok := r.(map[string]any)
 		if !ok {
@@ -831,46 +1053,83 @@ func ensureDirectPrivateRules(rules []any) []any {
 		if ob != "direct" {
 			continue
 		}
-		if priv, ok := m["ip_is_private"].(bool); ok && priv {
-			hasPrivateIP = true
+		if len(toSUITagSlice(m["inbound"])) > 0 || len(toSUITagSlice(m["auth_user"])) > 0 {
+			continue
 		}
-		if doms, ok := m["domain"].([]any); ok {
-			for _, d := range doms {
-				if s, ok := d.(string); ok && s == "localhost" {
-					hasLocalhost = true
-					break
-				}
+		if priv, ok := m["ip_is_private"].(bool); ok && priv {
+			hasPrivate = true
+		}
+		for _, s := range toSUITagSlice(m["domain"]) {
+			if s == "localhost" {
+				hasLocalhost = true
+				break
 			}
-		} else if domsStr, ok := m["domain"].([]string); ok {
-			for _, s := range domsStr {
-				if s == "localhost" {
-					hasLocalhost = true
-					break
-				}
-			}
-		} else if dom, ok := m["domain"].(string); ok && dom == "localhost" {
-			hasLocalhost = true
 		}
 	}
+	return hasLocalhost, hasPrivate
+}
 
-	var toPrepend []any
-	if !hasLocalhost {
-		toPrepend = append(toPrepend, map[string]any{
-			"domain":   []any{"localhost"},
+// ensureSUIRouteRules 维护 s-ui 联动模式下的 sing-box 路由守卫规则（显式带 action 字段）：
+// 1. 置顶拦截所有双向隧道 Endpoint 反向入站流量与受限广播/多播包（action: reject, method: drop）；
+// 2. 次顶层确保 localhost 与 ip_is_private 直连规则，保护 cloudflared 本地回源不被全局前置链截胡。
+func ensureSUIRouteRules(rules []any, endpointTags []string, activeInboundTags []string) []any {
+	knownSet := make(map[string]bool, len(endpointTags))
+	for _, t := range endpointTags {
+		knownSet[t] = true
+	}
+	inboundSet := make(map[string]bool, len(activeInboundTags))
+	for _, t := range activeInboundTags {
+		inboundSet[t] = true
+	}
+
+	var rest []any
+	for _, r := range rules {
+		m, ok := r.(map[string]any)
+		if !ok {
+			rest = append(rest, r)
+			continue
+		}
+		if isManagedBroadcastDropRule(m) || isManagedEndpointDropRule(m, knownSet, inboundSet) || isManagedLocalhostDirectRule(m) || isManagedPrivateIPDirectRule(m) {
+			continue
+		}
+		rest = append(rest, r)
+	}
+
+	hasCustomLocal, hasCustomPriv := hasCustomLocalhostOrPrivateDirect(rest)
+	header := make([]any, 0, 4+len(rest))
+	if len(endpointTags) > 0 {
+		tagsCopy := append([]string(nil), endpointTags...)
+		header = append(header, map[string]any{
+			"action":  "reject",
+			"method":  "drop",
+			"inbound": tagsCopy,
+		})
+	}
+	header = append(header, map[string]any{
+		"action":  "reject",
+		"method":  "drop",
+		"ip_cidr": append([]string(nil), broadcastMulticastCIDRs...),
+	})
+	if !hasCustomLocal {
+		header = append(header, map[string]any{
+			"action":   "route",
+			"domain":   []string{"localhost"},
 			"outbound": "direct",
 		})
 	}
-	if !hasPrivateIP {
-		toPrepend = append(toPrepend, map[string]any{
+	if !hasCustomPriv {
+		header = append(header, map[string]any{
+			"action":        "route",
 			"ip_is_private": true,
 			"outbound":      "direct",
 		})
 	}
+	return append(header, rest...)
+}
 
-	if len(toPrepend) > 0 {
-		return append(toPrepend, rules...)
-	}
-	return rules
+// ensureDirectPrivateRules 兼容包装：默认按原生 sing-box 路由规则格式补齐路由守卫与本地私网直连规则。
+func ensureDirectPrivateRules(rules []any) []any {
+	return ensureSingBoxRouteRules(rules, nil, nil)
 }
 
 func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {
@@ -988,8 +1247,8 @@ func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {
 					route = make(map[string]any)
 				}
 				rules, _ := route["rules"].([]any)
-				ensuredRules := ensureDirectPrivateRules(rules)
-				rulesChanged := len(ensuredRules) != len(rules)
+				ensuredRules := ensureSUIRouteRules(rules, s.collectEndpointTags(rawConfig), s.collectInboundTags(rawConfig))
+				rulesChanged := !jsonRulesEqual(ensuredRules, rules)
 				curFinal, _ := route["final"].(string)
 				finalChanged := curFinal != targetFinal
 
@@ -3668,8 +3927,9 @@ func (s *SUI) cleanStaleRoutesAndClients(tunnels []*Tunnel) error {
 					}
 					cleanRules = append(cleanRules, ruleMap)
 				}
-				if changed {
-					route["rules"] = cleanRules
+				ensuredRules := ensureSUIRouteRules(cleanRules, s.collectEndpointTags(rawConfig), s.collectInboundTags(rawConfig))
+				if changed || !jsonRulesEqual(ensuredRules, rules) {
+					route["rules"] = ensuredRules
 					rawConfig["route"] = route
 					configBytes, _ := json.Marshal(rawConfig)
 					form := url.Values{
@@ -3677,7 +3937,9 @@ func (s *SUI) cleanStaleRoutesAndClients(tunnels []*Tunnel) error {
 						"action": {"edit"},
 						"data":   {string(configBytes)},
 					}
-					_, _ = s.callAPI(http.MethodPost, "save", form)
+					if _, err := s.callAPI(http.MethodPost, "save", form); err == nil {
+						s.restartSingBox()
+					}
 				}
 			}
 		}
@@ -3690,6 +3952,15 @@ func (s *SUI) Close() {}
 func toSUITagSlice(v any) []string {
 	if s, ok := v.(string); ok {
 		return []string{s}
+	}
+	if arrStr, ok := v.([]string); ok {
+		res := make([]string, 0, len(arrStr))
+		for _, s := range arrStr {
+			if s != "" {
+				res = append(res, s)
+			}
+		}
+		return res
 	}
 	if arr, ok := v.([]any); ok {
 		var res []string

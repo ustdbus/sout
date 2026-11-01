@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
 	"net/netip"
 	"testing"
 
+	sbox "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
 )
 
 func TestIsLocalOrPrivateDestination(t *testing.T) {
@@ -112,6 +117,11 @@ func TestInboundBoxConfigRouteRules(t *testing.T) {
 		"route": map[string]any{
 			"rules": []any{
 				map[string]any{
+					"ip_cidr": []any{"255.255.255.255/32", "224.0.0.0/4", "ff00::/8"},
+					"action":  "reject",
+					"method":  "drop",
+				},
+				map[string]any{
 					"domain":   []any{"localhost"},
 					"outbound": "direct",
 				},
@@ -141,8 +151,174 @@ func TestInboundBoxConfigRouteRules(t *testing.T) {
 	if opt.Route == nil {
 		t.Fatalf("expected Route config to be parsed")
 	}
+	if len(opt.Route.Rules) != 4 {
+		t.Fatalf("expected 4 route rules, got %d", len(opt.Route.Rules))
+	}
+	if opt.Route.Rules[0].DefaultOptions.Action != constant.RuleActionTypeReject || opt.Route.Rules[0].DefaultOptions.RejectOptions.Method != constant.RuleActionRejectMethodDrop {
+		t.Fatalf("expected first inboundBox rule to reject with drop, got action=%q method=%q", opt.Route.Rules[0].DefaultOptions.Action, opt.Route.Rules[0].DefaultOptions.RejectOptions.Method)
+	}
+}
+
+func TestOutboundBoxRouteRulesDropEndpointIngressAndBroadcast(t *testing.T) {
+	engine, err := newEmbeddedEngine("127.0.0.1")
+	if err != nil {
+		t.Fatalf("newEmbeddedEngine failed: %v", err)
+	}
+
+	rulesRaw := buildOutboundBoxRouteRules(
+		[]any{"soutopenvpn1", "soutwireguard2"},
+		[]any{
+			map[string]any{"inbound": []any{"soutsocks1"}, "outbound": "direct"},
+		},
+	)
+	boxConfig := map[string]any{
+		"log": map[string]any{"level": "warn", "timestamp": true},
+		"outbounds": []any{
+			map[string]any{"type": "direct", "tag": "direct"},
+		},
+		"route": map[string]any{
+			"rules": rulesRaw,
+			"final": "direct",
+		},
+	}
+
+	opt, err := decodeSingBoxOptions[option.Options](engine.outboundCtx, boxConfig)
+	if err != nil {
+		t.Fatalf("outboundBox options decode failed: %v", err)
+	}
 	if len(opt.Route.Rules) != 3 {
-		t.Fatalf("expected 3 route rules, got %d", len(opt.Route.Rules))
+		t.Fatalf("expected 3 outboundBox route rules, got %d", len(opt.Route.Rules))
+	}
+	r0 := opt.Route.Rules[0].DefaultOptions
+	if r0.Action != constant.RuleActionTypeReject || r0.RejectOptions.Method != constant.RuleActionRejectMethodDrop {
+		t.Fatalf("expected rule[0] to drop endpoint ingress, got action=%q method=%q", r0.Action, r0.RejectOptions.Method)
+	}
+	if len(r0.Inbound) != 2 || r0.Inbound[0] != "soutopenvpn1" || r0.Inbound[1] != "soutwireguard2" {
+		t.Fatalf("unexpected rule[0] inbound tags: %v", r0.Inbound)
+	}
+	r1 := opt.Route.Rules[1].DefaultOptions
+	if r1.Action != constant.RuleActionTypeReject || r1.RejectOptions.Method != constant.RuleActionRejectMethodDrop || len(r1.IPCIDR) != 3 {
+		t.Fatalf("expected rule[1] to drop broadcast/multicast CIDRs, got %+v", r1)
+	}
+
+	instance, err := sbox.New(sbox.Options{
+		Context: engine.outboundCtx,
+		Options: opt,
+	})
+	if err != nil {
+		t.Fatalf("sbox.New for outboundBox failed: %v", err)
+	}
+	_ = instance.Close()
+}
+
+func TestDynamicOutboundBlocksEndpointIngressAndBroadcast(t *testing.T) {
+	engine, err := newEmbeddedEngine("127.0.0.1")
+	if err != nil {
+		t.Fatalf("newEmbeddedEngine failed: %v", err)
+	}
+	dyn := &soutDynamicOutbound{engine: engine}
+
+	withInbound := func(tag string) context.Context {
+		return adapter.WithContext(context.Background(), &adapter.InboundContext{Inbound: tag})
+	}
+
+	// 1. 隧道 Endpoint 反向入站（哪怕目标是 127.0.0.1 或公网）必须一律拦截，绝不能返回 SystemDialer
+	for _, epTag := range []string{"soutopenvpn1", "soutwireguard2"} {
+		for _, dstStr := range []string{"255.255.255.255:68", "127.0.0.1:8081", "1.1.1.1:53"} {
+			if d, _, err := dyn.endpointFor(withInbound(epTag), M.ParseSocksaddr(dstStr)); err == nil || d != nil {
+				t.Fatalf("expected endpointFor(%s -> %s) to reject, got dialer=%v err=%v", epTag, dstStr, d, err)
+			}
+		}
+	}
+
+	// 2. 任何入站发往受限广播或多播地址均必须拦截
+	for _, dstStr := range []string{"255.255.255.255:68", "224.0.0.251:5353", "[ff02::fb]:5353"} {
+		if d, _, err := dyn.endpointFor(withInbound("vless-in"), M.ParseSocksaddr(dstStr)); err == nil || d != nil {
+			t.Fatalf("expected broadcast/multicast destination %s to be rejected, got dialer=%v err=%v", dstStr, d, err)
+		}
+	}
+
+	// 3. Cloudflare 反向隧道回源本地与正常直连入站不受影响
+	if d, _, err := dyn.endpointFor(withInbound("cf-tunnel-in"), M.ParseSocksaddr("127.0.0.1:8081")); err != nil || d != N.SystemDialer {
+		t.Fatalf("expected cf-tunnel-in -> 127.0.0.1:8081 to use SystemDialer, got dialer=%v err=%v", d, err)
+	}
+	if d, _, err := dyn.endpointFor(withInbound("vless-in"), M.ParseSocksaddr("1.1.1.1:443")); err != nil || d != N.SystemDialer {
+		t.Fatalf("expected unrouted vless-in -> 1.1.1.1:443 to use SystemDialer, got dialer=%v err=%v", d, err)
+	}
+}
+
+func TestSingBoxAndSUIRouteGuardsIdempotencyAndOrder(t *testing.T) {
+	engine, err := newEmbeddedEngine("127.0.0.1")
+	if err != nil {
+		t.Fatalf("newEmbeddedEngine failed: %v", err)
+	}
+
+	// 模拟升级前旧配置：localhost 和 ip_is_private 排在最前面，缺少广播与 Endpoint 丢弃规则
+	legacyRules := []any{
+		map[string]any{"domain": []any{"localhost"}, "outbound": "direct"},
+		map[string]any{"ip_is_private": true, "outbound": "direct"},
+		map[string]any{"inbound": []any{"vless-in"}, "action": "reject", "method": "drop"},
+		map[string]any{"inbound": []any{"vless-in"}, "domain": []any{"ads.example.com"}, "action": "reject", "method": "drop"},
+		map[string]any{"auth_user": []any{"soutu1000_s1"}, "outbound": "soutvpn1"},
+	}
+
+	// 1. 验证纯 sout 单机模式路由写入逻辑 (ensureSingBoxRouteRules)
+	sbRules := ensureSingBoxRouteRules(legacyRules, []string{"soutopenvpn1"}, []string{"vless-in"})
+	if jsonRulesEqual(legacyRules, sbRules) {
+		t.Fatalf("expected legacy rules to be detected as changed after ensureSingBoxRouteRules")
+	}
+	// 再次执行必须严格幂等
+	sbRules2 := ensureSingBoxRouteRules(sbRules, []string{"soutopenvpn1"}, []string{"vless-in"})
+	if !jsonRulesEqual(sbRules, sbRules2) {
+		t.Fatalf("ensureSingBoxRouteRules must be strictly idempotent")
+	}
+	// 顺序校验：[0]=endpoint drop, [1]=broadcast drop, [2]=localhost, [3]=ip_is_private, [4]=用户入站封禁, [5]=用户广告封禁, [6]=用户分流
+	if len(sbRules) != 7 {
+		t.Fatalf("expected 7 sing-box rules, got %d", len(sbRules))
+	}
+	if sbRules[0].(map[string]any)["action"] != "reject" || toSUITagSlice(sbRules[0].(map[string]any)["inbound"])[0] != "soutopenvpn1" {
+		t.Fatalf("expected rule[0] to be endpoint drop BEFORE ip_is_private, got %+v", sbRules[0])
+	}
+	if sbRules[1].(map[string]any)["action"] != "reject" {
+		t.Fatalf("expected rule[1] to be broadcast/multicast drop, got %+v", sbRules[1])
+	}
+	if _, priv := sbRules[3].(map[string]any)["ip_is_private"]; !priv {
+		t.Fatalf("expected rule[3] to be ip_is_private AFTER drop guards, got %+v", sbRules[3])
+	}
+
+	// 2. 验证 sout + s-ui 联动模式路由写入逻辑 (ensureSUIRouteRules)
+	suiRules := ensureSUIRouteRules(legacyRules, []string{"wg-ep-1", "warp-ep"}, []string{"vless-in"})
+	if len(suiRules) != 7 {
+		t.Fatalf("expected 7 s-ui rules, got %d", len(suiRules))
+	}
+	// s-ui 规则必须显式带 action: "route" / "reject"
+	if suiRules[2].(map[string]any)["action"] != "route" || suiRules[3].(map[string]any)["action"] != "route" {
+		t.Fatalf("expected s-ui direct rules to carry explicit action=route, got %+v / %+v", suiRules[2], suiRules[3])
+	}
+	// 当 s-ui 中删除所有 endpoints 时，受管 endpoint drop 规则应自动移除且保留用户自定义 vless-in reject 规则
+	suiNoEp := ensureSUIRouteRules(suiRules, nil, []string{"vless-in"})
+	if len(suiNoEp) != 6 {
+		t.Fatalf("expected 6 s-ui rules after removing endpoints, got %d", len(suiNoEp))
+	}
+	if !jsonRulesEqual(suiNoEp, ensureSUIRouteRules(suiNoEp, nil, []string{"vless-in"})) {
+		t.Fatalf("ensureSUIRouteRules without endpoints must be strictly idempotent")
+	}
+
+	// 3. 将两套规则分别喂给真实 sing-box 解析器验证 100% 合法兼容
+	for name, candidate := range map[string][]any{"singbox": sbRules, "sui": suiRules} {
+		cfg := map[string]any{
+			"outbounds": []any{
+				map[string]any{"type": "direct", "tag": "direct"},
+				map[string]any{"type": "direct", "tag": "soutvpn1"},
+			},
+			"route": map[string]any{
+				"rules": candidate,
+				"final": "direct",
+			},
+		}
+		if _, err := decodeSingBoxOptions[option.Options](engine.outboundCtx, cfg); err != nil {
+			t.Fatalf("%s generated route rules failed sing-box schema decode: %v", name, err)
+		}
 	}
 }
 

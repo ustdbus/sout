@@ -312,6 +312,11 @@ func (e *embeddedEngine) rebuildInboundBoxLocked() error {
 		"route": map[string]any{
 			"rules": []any{
 				map[string]any{
+					"ip_cidr": []any{"255.255.255.255/32", "224.0.0.0/4", "ff00::/8"},
+					"action":  "reject",
+					"method":  "drop",
+				},
+				map[string]any{
 					"domain":   []any{"localhost"},
 					"outbound": "direct",
 				},
@@ -388,8 +393,9 @@ func (e *embeddedEngine) rebuildInboundBoxLocked() error {
 
 func (e *embeddedEngine) rebuildOutboundBoxLocked() error {
 	endpointsRaw := make([]any, 0, len(e.activeTunnels))
+	endpointInboundTags := make([]any, 0, len(e.activeTunnels))
 	inboundsRaw := make([]any, 0, len(e.activeTunnels))
-	rulesRaw := make([]any, 0, len(e.activeTunnels))
+	socksRules := make([]any, 0, len(e.activeTunnels))
 
 	nextRoutes := cloneEmbeddedRoutes(e.routes)
 
@@ -438,6 +444,7 @@ func (e *embeddedEngine) rebuildOutboundBoxLocked() error {
 		}
 
 		endpointsRaw = append(endpointsRaw, endpointConfig)
+		endpointInboundTags = append(endpointInboundTags, endpointTag)
 
 		if tunnel.Port > 0 {
 			socksConfig := map[string]any{
@@ -457,7 +464,7 @@ func (e *embeddedEngine) rebuildOutboundBoxLocked() error {
 			}
 			inboundsRaw = append(inboundsRaw, socksConfig)
 
-			rulesRaw = append(rulesRaw, map[string]any{
+			socksRules = append(socksRules, map[string]any{
 				"inbound":  []any{socksTag},
 				"outbound": endpointTag,
 			})
@@ -466,6 +473,8 @@ func (e *embeddedEngine) rebuildOutboundBoxLocked() error {
 			delete(nextRoutes, socksTag)
 		}
 	}
+
+	rulesRaw := buildOutboundBoxRouteRules(endpointInboundTags, socksRules)
 
 	// 统一维护 routes 与 userRoutes 中的 block / unblock 状态
 	for tag, r := range nextRoutes {
@@ -688,13 +697,34 @@ func (o *soutDynamicOutbound) ListenPacket(ctx context.Context, destination M.So
 	return dialer.ListenPacket(ctx, destination)
 }
 
+func buildOutboundBoxRouteRules(endpointInboundTags []any, socksRules []any) []any {
+	rules := make([]any, 0, len(socksRules)+2)
+	if len(endpointInboundTags) > 0 {
+		rules = append(rules, map[string]any{
+			"inbound": endpointInboundTags,
+			"action":  "reject",
+			"method":  "drop",
+		})
+	}
+	rules = append(rules, map[string]any{
+		"ip_cidr": []any{"255.255.255.255/32", "224.0.0.0/4", "ff00::/8"},
+		"action":  "reject",
+		"method":  "drop",
+	})
+	rules = append(rules, socksRules...)
+	return rules
+}
+
 func (o *soutDynamicOutbound) endpointFor(ctx context.Context, destination M.Socksaddr) (N.Dialer, M.Socksaddr, error) {
 	metadata := adapter.ContextFrom(ctx)
 	if metadata == nil || metadata.Inbound == "" {
 		return nil, destination, fmt.Errorf("sout 路由缺少入站标识")
 	}
 	if isEmbeddedEndpointInbound(metadata.Inbound) {
-		return N.SystemDialer, destination, nil
+		return nil, destination, fmt.Errorf("已拦截隧道出口 %s 的反向入站流量", metadata.Inbound)
+	}
+	if isBroadcastOrMulticastDestination(destination) {
+		return nil, destination, fmt.Errorf("已拦截受限广播或多播目标流量: %s", destination.String())
 	}
 
 	// 特殊入站豁免：Cloudflare 隧道入站是纯反向代理回源流量，必须直连本机/局域网服务，严禁走代理出口
@@ -892,6 +922,29 @@ func (d *socksFallbackDialer) ListenPacket(ctx context.Context, destination M.So
 
 func isEmbeddedEndpointInbound(tag string) bool {
 	return strings.HasPrefix(tag, "soutopenvpn") || strings.HasPrefix(tag, "sout-openvpn-") || strings.HasPrefix(tag, "fanoutopenvpn") || strings.HasPrefix(tag, "fanout-openvpn-") || strings.HasPrefix(tag, "soutwireguard") || strings.HasPrefix(tag, "sout-wireguard-")
+}
+
+func isBroadcastOrMulticastAddr(addr netip.Addr) bool {
+	if !addr.IsValid() {
+		return false
+	}
+	if addr.Is4() && addr == netip.AddrFrom4([4]byte{255, 255, 255, 255}) {
+		return true
+	}
+	return addr.IsMulticast()
+}
+
+func isBroadcastOrMulticastDestination(dst M.Socksaddr) bool {
+	if dst.IsIP() {
+		return isBroadcastOrMulticastAddr(dst.Addr)
+	}
+	if dst.IsDomain() {
+		host := strings.ToLower(strings.TrimSuffix(dst.Fqdn, "."))
+		if ip, err := netip.ParseAddr(host); err == nil {
+			return isBroadcastOrMulticastAddr(ip)
+		}
+	}
+	return false
 }
 
 func isLocalOrPrivateDestination(dst M.Socksaddr) bool {
