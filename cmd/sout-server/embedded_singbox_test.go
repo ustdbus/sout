@@ -320,6 +320,43 @@ func TestSingBoxAndSUIRouteGuardsIdempotencyAndOrder(t *testing.T) {
 			t.Fatalf("%s generated route rules failed sing-box schema decode: %v", name, err)
 		}
 	}
+
+	// 4. 验证 s-ui 持久化分流客户端路由自愈 (reconcileSUIBranchRoutes)
+	bindings := []branchBinding{
+		{TemplateID: 1, Slot: 1, Host: "warp-node"},
+		{TemplateID: 1, Slot: 2, Host: "vpn-new-host"},
+	}
+	tunnels := []*Tunnel{
+		{Slot: 1, Status: "up", Node: Node{HostName: "warp-node"}},
+		{Slot: 2, Status: "up", Node: Node{HostName: "vpn-new-host"}},
+	}
+	existingUsers := map[string]bool{
+		"soutu1_s1": true,
+		"soutu1_s2": true,
+	}
+	baseRules := []any{
+		map[string]any{"action": "sniff"},
+		map[string]any{"action": "route", "auth_user": []string{"soutu1_s2"}, "outbound": "soutvpnoldhost"},
+	}
+	reconciled := reconcileSUIBranchRoutes(baseRules, bindings, tunnels, existingUsers)
+	finalSUI := ensureSUIRouteRules(reconciled, nil, []string{"vless-in"})
+	if !jsonRulesEqual(finalSUI, ensureSUIRouteRules(reconcileSUIBranchRoutes(finalSUI, bindings, tunnels, existingUsers), nil, []string{"vless-in"})) {
+		t.Fatalf("reconcileSUIBranchRoutes + ensureSUIRouteRules must be strictly idempotent")
+	}
+	foundS1, foundS2 := false, false
+	for _, item := range finalSUI {
+		m := item.(map[string]any)
+		users := toSUITagSlice(m["auth_user"])
+		if len(users) == 1 && users[0] == "soutu1_s1" && m["outbound"] == "soutwarpnode" {
+			foundS1 = true
+		}
+		if len(users) == 1 && users[0] == "soutu1_s2" && m["outbound"] == "soutvpnnewhost" {
+			foundS2 = true
+		}
+	}
+	if !foundS1 || !foundS2 {
+		t.Fatalf("expected reconciled s-ui rules to heal soutu1_s1 and soutu1_s2 routes, got %+v", finalSUI)
+	}
 }
 
 func TestValidateInboundTLSFiles(t *testing.T) {

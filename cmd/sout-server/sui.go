@@ -1127,6 +1127,131 @@ func ensureSUIRouteRules(rules []any, endpointTags []string, activeInboundTags [
 	return append(header, rest...)
 }
 
+func reconcileSUIBranchRoutes(rules []any, bindings []branchBinding, tunnels []*Tunnel, existingSplitUsers map[string]bool) []any {
+	if len(bindings) == 0 || len(tunnels) == 0 {
+		return rules
+	}
+	activeSlotOutbound := make(map[int]string, len(tunnels))
+	for _, t := range tunnels {
+		if t != nil && t.Slot > 0 && t.Status == "up" && t.Node.HostName != "" {
+			activeSlotOutbound[t.Slot] = suiTagPrefix + sanitizeTag(t.Node.HostName)
+		}
+	}
+	if len(activeSlotOutbound) == 0 {
+		return rules
+	}
+
+	desired := make(map[string]string)
+	for _, b := range bindings {
+		if b.TemplateID <= 0 || b.Slot <= 0 {
+			continue
+		}
+		obTag, ok := activeSlotOutbound[b.Slot]
+		if !ok {
+			continue
+		}
+		clientName := fmt.Sprintf("soutu%d_s%d", b.TemplateID, b.Slot)
+		if existingSplitUsers != nil && !existingSplitUsers[clientName] {
+			continue
+		}
+		desired[clientName] = obTag
+	}
+	if len(desired) == 0 {
+		return rules
+	}
+
+	satisfied := make(map[string]bool, len(desired))
+	reconciled := make([]any, 0, len(rules)+len(desired))
+	for _, r := range rules {
+		ruleMap, ok := r.(map[string]any)
+		if !ok {
+			reconciled = append(reconciled, r)
+			continue
+		}
+		action, _ := ruleMap["action"].(string)
+		outbound, _ := ruleMap["outbound"].(string)
+		if (action != "" && action != "route") || !isSUIOutboundTag(outbound) {
+			reconciled = append(reconciled, r)
+			continue
+		}
+		users := toSUITagSlice(ruleMap["auth_user"])
+		if len(users) == 0 {
+			users = toSUITagSlice(ruleMap["user"])
+		}
+		if len(users) == 0 {
+			reconciled = append(reconciled, r)
+			continue
+		}
+		var keptUsers []string
+		modified := false
+		for _, u := range users {
+			if wantOb, managed := desired[u]; managed {
+				if outbound == wantOb && !satisfied[u] {
+					satisfied[u] = true
+					keptUsers = append(keptUsers, u)
+				} else {
+					modified = true
+				}
+			} else {
+				keptUsers = append(keptUsers, u)
+			}
+		}
+		if modified {
+			if len(keptUsers) == 0 {
+				continue
+			}
+			cloned := make(map[string]any, len(ruleMap))
+			for k, v := range ruleMap {
+				cloned[k] = v
+			}
+			delete(cloned, "user")
+			cloned["action"] = "route"
+			cloned["auth_user"] = keptUsers
+			reconciled = append(reconciled, cloned)
+		} else {
+			reconciled = append(reconciled, r)
+		}
+	}
+
+	var missingUsers []string
+	for u := range desired {
+		if !satisfied[u] {
+			missingUsers = append(missingUsers, u)
+		}
+	}
+	sort.Strings(missingUsers)
+	for _, u := range missingUsers {
+		reconciled = append(reconciled, map[string]any{
+			"action":    "route",
+			"auth_user": []string{u},
+			"outbound":  desired[u],
+		})
+	}
+	return reconciled
+}
+
+func (s *SUI) collectExistingSplitUsers() map[string]bool {
+	if s == nil || s.client == nil || s.Port <= 0 {
+		return nil
+	}
+	clients, err := s.apiClients(0)
+	if err != nil {
+		return make(map[string]bool)
+	}
+	res := make(map[string]bool)
+	for _, c := range clients {
+		name, _ := c["name"].(string)
+		if !isSplitUser(name) {
+			continue
+		}
+		if en, hasEnable := c["enable"].(bool); hasEnable && !en {
+			continue
+		}
+		res[name] = true
+	}
+	return res
+}
+
 // ensureDirectPrivateRules 兼容包装：默认按原生 sing-box 路由规则格式补齐路由守卫与本地私网直连规则。
 func ensureDirectPrivateRules(rules []any) []any {
 	return ensureSingBoxRouteRules(rules, nil, nil)
@@ -1247,7 +1372,8 @@ func (s *SUI) syncOutbounds(tunnels []*Tunnel) error {
 					route = make(map[string]any)
 				}
 				rules, _ := route["rules"].([]any)
-				ensuredRules := ensureSUIRouteRules(rules, s.collectEndpointTags(rawConfig), s.collectInboundTags(rawConfig))
+				reconciledRules := reconcileSUIBranchRoutes(rules, loadBranchBindings(s.workDir), tunnels, s.collectExistingSplitUsers())
+				ensuredRules := ensureSUIRouteRules(reconciledRules, s.collectEndpointTags(rawConfig), s.collectInboundTags(rawConfig))
 				rulesChanged := !jsonRulesEqual(ensuredRules, rules)
 				curFinal, _ := route["final"].(string)
 				finalChanged := curFinal != targetFinal
@@ -2300,6 +2426,7 @@ func (s *SUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
 
 	newRemark := formatTunnelExitRemark(target)
 
+	reboundUsers := make(map[string]bool)
 	for userName, host := range boundMap {
 		matched := (host == oldHost || host == oldHostTag)
 		if !matched && target.Slot > 0 && parseSlotFromClientName(userName) == target.Slot {
@@ -2309,6 +2436,7 @@ func (s *SUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
 			if err := s.BindUserRoute(userName, target.Node.HostName, tunnels); err != nil {
 				return err
 			}
+			reboundUsers[userName] = true
 			// 通过 s-ui 原生 API 更新客户端 remark
 			if client, ok, _ := s.apiClientByName(userName); ok {
 				client["remark"] = newRemark
@@ -2317,7 +2445,7 @@ func (s *SUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
 		}
 	}
 
-	// 同步更新持久化分流绑定
+	// 同步更新持久化分流绑定，并对缺失路由规则的分流客户端自动补齐路由
 	bindings := loadBranchBindings(s.workDir)
 	for i := range bindings {
 		matched := false
@@ -2331,6 +2459,18 @@ func (s *SUI) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
 			bindings[i].Host = target.Node.HostName
 			bindings[i].Slot = target.Slot
 			bindings[i].Remark = newRemark
+			if bindings[i].TemplateID > 0 && target.Slot > 0 {
+				clientName := fmt.Sprintf("soutu%d_s%d", bindings[i].TemplateID, target.Slot)
+				if !reboundUsers[clientName] {
+					if client, ok, _ := s.apiClientByName(clientName); ok {
+						if err := s.BindUserRoute(clientName, target.Node.HostName, tunnels); err == nil {
+							reboundUsers[clientName] = true
+						}
+						client["remark"] = newRemark
+						_ = s.apiSaveClient("edit", client)
+					}
+				}
+			}
 		}
 	}
 	saveAllBranchBindings(s.workDir, bindings)
@@ -3904,10 +4044,28 @@ func (s *SUI) cleanStaleRoutesAndClients(tunnels []*Tunnel) error {
 						for _, u := range users {
 							if isSplitUser(u) {
 								userMatched := false
-								for hostTag := range configuredHosts {
-									if strings.HasSuffix(u, hostTag) {
-										userMatched = true
-										break
+								if slot := parseSlotFromClientName(u); slot > 0 {
+									for _, t := range tunnels {
+										if t.Slot == slot {
+											userMatched = true
+											break
+										}
+									}
+									if !userMatched {
+										for _, b := range bindings {
+											if b.Slot == slot {
+												userMatched = true
+												break
+											}
+										}
+									}
+								}
+								if !userMatched {
+									for hostTag := range configuredHosts {
+										if strings.HasSuffix(u, hostTag) {
+											userMatched = true
+											break
+										}
 									}
 								}
 								if userMatched {
@@ -3927,7 +4085,8 @@ func (s *SUI) cleanStaleRoutesAndClients(tunnels []*Tunnel) error {
 					}
 					cleanRules = append(cleanRules, ruleMap)
 				}
-				ensuredRules := ensureSUIRouteRules(cleanRules, s.collectEndpointTags(rawConfig), s.collectInboundTags(rawConfig))
+				reconciledRules := reconcileSUIBranchRoutes(cleanRules, bindings, tunnels, s.collectExistingSplitUsers())
+				ensuredRules := ensureSUIRouteRules(reconciledRules, s.collectEndpointTags(rawConfig), s.collectInboundTags(rawConfig))
 				if changed || !jsonRulesEqual(ensuredRules, rules) {
 					route["rules"] = ensuredRules
 					rawConfig["route"] = route
