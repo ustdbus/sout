@@ -343,6 +343,16 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
 .tn-pri-pick{padding:2px 8px;font-size:10.5px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);color:var(--dim)}
 .tn-pri-pick.active{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
 .tn-slot-save-btn{padding:2px 10px;font-size:11px;border-radius:5px}
+.tn-slots-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.tn-sui-edit-trigger{padding:2px 9px;font-size:11px;font-weight:600;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);color:var(--text);display:inline-flex;align-items:center;gap:4px}
+.tn-sui-edit-trigger[hidden]{display:none}
+.tn-sui-edit-trigger:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.tn-sui-edit-trigger[aria-expanded="true"]{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+.tn-sui-edit-trigger svg{width:11px;height:11px}
+.tn-sui-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:9px 12px;border-bottom:1px solid var(--line);background:color-mix(in oklab,var(--accent) 4%,var(--surface-2))}
+.tn-sui-bar[hidden]{display:none}
+.tn-sui-controls{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.tn-sui-note{font-size:11px;color:var(--dim)}
 
 .tn-route-card{background:var(--input-bg);border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .tn-route-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px;background:color-mix(in oklab,var(--card) 70%,var(--input-bg));border-bottom:1px solid var(--line);flex-wrap:wrap}
@@ -963,8 +973,15 @@ button.tn-danger-btn:hover:not(:disabled){background:color-mix(in oklab,var(--ba
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 12l10 5 10-5"/><path d="M2 17l10 5 10-5"/></svg>
               边缘隧道池 (4 路并发)
             </div>
-            <span id="tnPrimarySummary" class="tn-route-origin">主用: 隧道 #1</span>
+            <div class="tn-slots-actions">
+              <span id="tnPrimarySummary" class="tn-route-origin">主用: 隧道 #1</span>
+              <button type="button" id="tnSuiEditBtn" class="tn-sui-edit-trigger" aria-expanded="false" hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                <span>全局配置</span>
+              </button>
+            </div>
           </div>
+          <div id="tnSuiGlobalEditor" class="tn-sui-bar" hidden></div>
           <div id="tnSlotsGrid" class="tn-slots-grid"></div>
         </div>
 
@@ -2956,6 +2973,42 @@ function setTunnelBadge(id, active, okText, badText) {
 
 let editingTunnelSlot = -1;
 let slotEditDraft = null;
+let suiEditOpen = false;
+let suiEditDraft = null;
+
+function renderSUIGlobalEditor(t) {
+  const bar = $('#tnSuiGlobalEditor');
+  const btn = $('#tnSuiEditBtn');
+  if (!bar || !btn) return;
+  const isSuiShared = (t && (t.slot_mode === 'sui_shared' || t.panel_mode === 's-ui'));
+  btn.hidden = !isSuiShared;
+  btn.setAttribute('aria-expanded', (isSuiShared && suiEditOpen) ? 'true' : 'false');
+
+  if (!isSuiShared || !suiEditOpen || !suiEditDraft) {
+    bar.hidden = true;
+    bar.innerHTML = '';
+    return;
+  }
+
+  const d = suiEditDraft;
+  bar.hidden = false;
+  bar.innerHTML = '<div class="tn-sui-controls">'
+    +   '<span class="tn-sui-note">s-ui 统一配置:</span>'
+    +   '<div class="tn-seg" role="group" aria-label="全局协议">'
+    +     '<button type="button" class="' + (d.protocol === 'quic' ? 'active' : '') + '" data-tn-sui-proto="quic">QUIC</button>'
+    +     '<button type="button" class="' + (d.protocol === 'http2' ? 'active' : '') + '" data-tn-sui-proto="http2">HTTP/2</button>'
+    +   '</div>'
+    +   '<div class="tn-seg" role="group" aria-label="全局IP版本">'
+    +     '<button type="button" class="' + (d.ip_version === 4 ? 'active' : '') + '" data-tn-sui-ip="4">IPv4</button>'
+    +     '<button type="button" class="' + (d.ip_version === 6 ? 'active' : '') + '" data-tn-sui-ip="6">IPv6</button>'
+    +     '<button type="button" class="' + (d.ip_version === 0 ? 'active' : '') + '" data-tn-sui-ip="0">自动</button>'
+    +   '</div>'
+    + '</div>'
+    + '<div class="tn-sui-controls">'
+    +   '<button type="button" class="tn-slot-edit-btn" data-tn-sui-cancel="1" title="取消">取消</button>'
+    +   '<button type="button" class="primary tn-slot-save-btn" data-tn-sui-save="1">保存</button>'
+    + '</div>';
+}
 
 function renderTunnelSlots(t) {
   const grid = $('#tnSlotsGrid');
@@ -2963,18 +3016,33 @@ function renderTunnelSlots(t) {
   const slots = (t && Array.isArray(t.tunnel_slots) && t.tunnel_slots.length) ? t.tunnel_slots : [];
   if (!slots.length) {
     grid.innerHTML = '';
+    renderSUIGlobalEditor(t);
     return;
   }
 
-  let primaryNum = 1;
-  slots.forEach(s => { if (s.is_primary) primaryNum = (s.index || 0) + 1; });
+  const slotMode = (t && t.slot_mode) ? t.slot_mode : ((t && t.panel_mode === 's-ui') ? 'sui_shared' : 'per_slot');
+  const isSuiShared = slotMode === 'sui_shared';
+  const canEditPerSlot = slotMode === 'per_slot';
+
   const priEl = $('#tnPrimarySummary');
-  if (priEl) priEl.textContent = '主用: 隧道 #' + primaryNum;
+  if (priEl) {
+    if (isSuiShared) {
+      priEl.textContent = 's-ui 托管 · 统一配置';
+    } else if (slotMode === 'external') {
+      priEl.textContent = '独立进程 · 4 路并发';
+    } else {
+      let primaryNum = 1;
+      slots.forEach(s => { if (s.is_primary) primaryNum = (s.index || 0) + 1; });
+      priEl.textContent = '主用: 隧道 #' + primaryNum;
+    }
+  }
+
+  renderSUIGlobalEditor(t);
 
   grid.innerHTML = slots.map(s => {
     const idx = Number(s.index || 0);
     const num = idx + 1;
-    const isPri = !!s.is_primary;
+    const isPri = canEditPerSlot && !!s.is_primary;
     const isUp = !!s.connected;
     const proto = (s.protocol || t.protocol || 'quic').toLowerCase() === 'http2' ? 'http2' : 'quic';
     const protoLabel = proto === 'http2' ? 'HTTP/2' : 'QUIC';
@@ -2983,7 +3051,7 @@ function renderTunnelSlots(t) {
     const ipLabel = runIP === 6 ? 'IPv6' : (runIP === 4 ? 'IPv4' : '双栈');
     const ipCls = runIP === 6 ? 'ip6' : (runIP === 4 ? 'ip4' : '');
 
-    if (editingTunnelSlot === idx && slotEditDraft) {
+    if (canEditPerSlot && editingTunnelSlot === idx && slotEditDraft) {
       const d = slotEditDraft;
       return '<div class="tn-slot editing' + (isPri ? ' primary' : '') + '">'
         + '<div class="tn-slot-editor">'
@@ -3014,10 +3082,10 @@ function renderTunnelSlots(t) {
 
     const addrText = s.edge_addr
       ? esc(s.edge_addr)
-      : (isUp ? '边缘节点已连通' : ('待命 · ' + (cfgIP === 0 ? '双栈自动' : ipLabel)));
+      : (isUp ? (isSuiShared ? 's-ui 边缘通道在线' : '边缘节点已连通') : ('待命 · ' + (cfgIP === 0 ? '双栈自动' : ipLabel)));
     const rightMetric = s.streams > 0
       ? (s.streams + ' 流')
-      : (isUp ? '在线' : (s.retries > 0 ? ('重试 ' + s.retries) : '就绪'));
+      : (s.retries > 0 ? ('重连 ' + s.retries) : (isUp ? '在线' : '就绪'));
 
     return '<div class="tn-slot' + (isPri ? ' primary' : '') + '">'
       + '<div class="tn-slot-top">'
@@ -3029,9 +3097,9 @@ function renderTunnelSlots(t) {
       +   '<span class="tn-slot-tags">'
       +     '<span class="tn-tag ' + proto + '">' + protoLabel + '</span>'
       +     '<span class="tn-tag ' + ipCls + '">' + ipLabel + '</span>'
-      +     '<button type="button" class="tn-slot-edit-btn" data-tn-slot-edit="' + idx + '" title="修改隧道 #' + num + ' 配置" aria-label="修改隧道 #' + num + ' 配置">'
-      +       ICON.edit
-      +     '</button>'
+      +     (canEditPerSlot
+              ? '<button type="button" class="tn-slot-edit-btn" data-tn-slot-edit="' + idx + '" title="修改隧道 #' + num + ' 配置" aria-label="修改隧道 #' + num + ' 配置">' + ICON.edit + '</button>'
+              : '')
       +   '</span>'
       + '</div>'
       + '<div class="tn-slot-sub">'
@@ -3110,6 +3178,8 @@ function renderTunnelStatusView(t) {
 async function refreshTunnelView() {
   editingTunnelSlot = -1;
   slotEditDraft = null;
+  suiEditOpen = false;
+  suiEditDraft = null;
   showTunnelView('loading');
   $('#tnLoading').innerHTML = '<span class="tn-spinner" aria-hidden="true"></span><span>正在获取隧道与分流网关状态...</span>';
 
@@ -3193,8 +3263,82 @@ $('#tnSlotsGrid').addEventListener('click', async e => {
       } else {
         await refreshTunnelView();
       }
-    } catch(err) {
+  } catch(err) {
       toast('保存隧道配置失败: ' + err.message, true);
+      saveBtn.disabled = false;
+      saveBtn.textContent = '保存';
+    }
+  }
+});
+
+$('#tnSuiEditBtn').addEventListener('click', () => {
+  if (!curTunnelData) return;
+  if (suiEditOpen) {
+    suiEditOpen = false;
+    suiEditDraft = null;
+  } else {
+    suiEditOpen = true;
+    const proto = (curTunnelData.protocol || 'quic').toLowerCase() === 'http2' ? 'http2' : 'quic';
+    const ipVer = Number(curTunnelData.edge_ip_version || 0);
+    suiEditDraft = {
+      protocol: proto,
+      ip_version: (ipVer === 4 || ipVer === 6) ? ipVer : 0
+    };
+  }
+  renderTunnelSlots(curTunnelData);
+});
+
+$('#tnSuiGlobalEditor').addEventListener('click', async e => {
+  if (e.target.closest('[data-tn-sui-cancel]')) {
+    suiEditOpen = false;
+    suiEditDraft = null;
+    renderTunnelSlots(curTunnelData);
+    return;
+  }
+  const pBtn = e.target.closest('[data-tn-sui-proto]');
+  if (pBtn && suiEditDraft) {
+    suiEditDraft.protocol = pBtn.dataset.tnSuiProto;
+    renderSUIGlobalEditor(curTunnelData);
+    return;
+  }
+  const ipBtn = e.target.closest('[data-tn-sui-ip]');
+  if (ipBtn && suiEditDraft) {
+    suiEditDraft.ip_version = Number(ipBtn.dataset.tnSuiIp);
+    renderSUIGlobalEditor(curTunnelData);
+    return;
+  }
+  const saveBtn = e.target.closest('[data-tn-sui-save]');
+  if (saveBtn && suiEditDraft) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = '保存中…';
+    try {
+      const res = await api('/api/tunnel', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          action: 'update_sui_tunnel',
+          protocol: suiEditDraft.protocol,
+          ip_version: suiEditDraft.ip_version
+        })
+      });
+      suiEditOpen = false;
+      suiEditDraft = null;
+      toast(res.message || '已通过 s-ui API 更新隧道全局配置');
+      if (res.status) {
+        renderTunnelStatusView(res.status);
+      } else {
+        await refreshTunnelView();
+      }
+      // s-ui 重载隧道后约 1.5s 再静默刷新一次快照以显示新连上的 PoP 节点
+      setTimeout(() => {
+        if ($('#tunnelModal').classList.contains('open')) {
+          api('/api/tunnel').then(latest => {
+            if ($('#tunnelModal').classList.contains('open')) renderTunnelStatusView(latest);
+          }).catch(() => {});
+        }
+      }, 1500);
+    } catch (err) {
+      toast('更新 s-ui 隧道配置失败: ' + err.message, true);
       saveBtn.disabled = false;
       saveBtn.textContent = '保存';
     }

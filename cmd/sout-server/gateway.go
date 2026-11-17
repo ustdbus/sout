@@ -308,18 +308,20 @@ func buildGatewayHandler(meta *CaddyMeta, workDir string) http.Handler {
 // GetGatewayStatus 获取当前轻量网关与隧道的完整配置及运行状态
 func GetGatewayStatus(workDir string) map[string]any {
 	globalGateway.mu.Lock()
-	defer globalGateway.mu.Unlock()
-
+	gwRunning := len(globalGateway.servers) > 0
+	gwPort := globalGateway.port
 	if workDir == "" {
 		workDir = globalGateway.workDir
 	}
+	globalGateway.mu.Unlock()
+
 	if workDir == "" {
 		workDir = "/var/lib/sout"
 	}
 
 	st := map[string]any{
-		"gateway_running":     len(globalGateway.servers) > 0,
-		"gateway_port":        globalGateway.port,
+		"gateway_running":     gwRunning,
+		"gateway_port":        gwPort,
 		"enabled":             false,
 		"domain":              "",
 		"tunnel_port":         8081,
@@ -333,9 +335,19 @@ func GetGatewayStatus(workDir string) map[string]any {
 		"mode":                "",
 		"token_masked":        "",
 		"protocol":            "quic",
+		"edge_ip_version":     0,
+		"slot_mode":           "per_slot",
 		"cloudflared_running": false,
 		"password":            "",
 		"panel_mode":          "sing-box",
+	}
+
+	// 优先读取当前面板运行模式，确保后续 s-ui / sing-box 分支判断准确
+	pmPath := filepath.Join(workDir, "panel_mode")
+	if pm, err := os.ReadFile(pmPath); err == nil {
+		if trimmed := strings.TrimSpace(string(pm)); trimmed != "" {
+			st["panel_mode"] = trimmed
+		}
 	}
 
 	var loadedMeta *GatewayMeta
@@ -461,13 +473,41 @@ func GetGatewayStatus(workDir string) map[string]any {
 		}
 	}
 
-	// 读取当前面板运行模式
-	pmPath := filepath.Join(workDir, "panel_mode")
-	if pm, err := os.ReadFile(pmPath); err == nil {
-		st["panel_mode"] = strings.TrimSpace(string(pm))
+	// 已在函数开头读取 panel_mode；如为 s-ui 则通过 s-ui API 读取真实隧道参数与日志状态
+	globalProto, _ := st["protocol"].(string)
+	if isSUI {
+		st["slot_mode"] = "sui_shared"
+		if ov := fetchSUITunnelOverview(workDir, cfRunning); ov != nil && ov.HasInbound {
+			st["protocol"] = ov.Protocol
+			st["edge_ip_version"] = ov.EdgeIPVersion
+			st["tunnel_slots"] = ov.Slots
+			st["primary_slot"] = -1
+			return st
+		}
+		// 若 s-ui API 暂未返回日志快照，仍按宿主机 network_mode 校准默认 IP 栈并隐藏虚假主用标记
+		ipv6Only := isHostIPv6Only(workDir)
+		var savedSlots []TunnelSlotMeta
+		if loadedMeta != nil {
+			savedSlots = loadedMeta.TunnelSlots
+		}
+		slots := buildTunnelSlotsStatus(savedSlots, -1, globalProto, cfRunning)
+		for i := range slots {
+			slots[i].IsPrimary = false
+			if ipv6Only && slots[i].CfgIPVersion == 0 {
+				slots[i].IPVersion = 6
+			}
+		}
+		st["tunnel_slots"] = slots
+		st["primary_slot"] = -1
+		return st
 	}
 
-	globalProto, _ := st["protocol"].(string)
+	if hasNativeTunnel {
+		st["slot_mode"] = "per_slot"
+	} else {
+		st["slot_mode"] = "external"
+	}
+
 	var savedSlots []TunnelSlotMeta
 	primaryIdx := 0
 	if loadedMeta != nil {
@@ -487,6 +527,31 @@ func GetGatewayStatus(workDir string) map[string]any {
 	st["primary_slot"] = primaryIdx
 
 	return st
+}
+
+var fetchSUITunnelOverview = defaultFetchSUITunnelOverview
+
+func defaultFetchSUITunnelOverview(workDir string, cfRunning bool) *SUITunnelOverview {
+	s, err := NewLightSUI(workDir)
+	if err != nil || s == nil {
+		return nil
+	}
+	ov, err := s.GetTunnelOverview(cfRunning)
+	if err != nil {
+		return nil
+	}
+	return ov
+}
+
+func isHostIPv6Only(workDir string) bool {
+	if workDir == "" {
+		return false
+	}
+	b, err := os.ReadFile(filepath.Join(workDir, "network_mode"))
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(b)) == "ipv6_only"
 }
 
 func normalizeTunnelProto(p, fallback string) string {

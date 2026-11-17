@@ -23,7 +23,7 @@ import (
 )
 
 // version 由构建时通过 -ldflags 注入。
-var version = "v5.2.1"
+var version = "v5.2.2"
 
 var (
 	cgroupV2Path    = "/sys/fs/cgroup/memory.max"
@@ -737,7 +737,7 @@ func apiTunnelHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Action     string `json:"action"` // "save", "restart", "delete", "update_slot"
+		Action     string `json:"action"` // "save", "restart", "delete", "update_slot", "update_sui_tunnel"
 		Domain     string `json:"domain"`
 		Token      string `json:"token"`
 		Port       int    `json:"port"`
@@ -748,6 +748,50 @@ func apiTunnelHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求参数解析错误: " + err.Error()})
+		return
+	}
+
+	if req.Action == "update_sui_tunnel" {
+		proto := strings.ToLower(strings.TrimSpace(req.Protocol))
+		if proto != "quic" && proto != "http2" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "协议仅支持 quic 或 http2"})
+			return
+		}
+		if req.IPVersion != 0 && req.IPVersion != 4 && req.IPVersion != 6 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "IP 版本仅支持 0(自动)、4 或 6"})
+			return
+		}
+
+		workDir := currentBasePathDir()
+		sClient, err := NewLightSUI(workDir)
+		if err != nil {
+			sClient, err = DetectSUI(workDir)
+		}
+		if err != nil || sClient == nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("连接 s-ui API 失败: %v", err)})
+			return
+		}
+		if err := sClient.UpdateCloudflaredInbound(proto, req.IPVersion); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+
+		metaPath := filepath.Join(workDir, "gateway_meta.json")
+		if data, rerr := os.ReadFile(metaPath); rerr == nil {
+			var meta GatewayMeta
+			if json.Unmarshal(data, &meta) == nil {
+				meta.Protocol = proto
+				if blob, merr := json.MarshalIndent(meta, "", "  "); merr == nil {
+					_ = atomicWriteFile(metaPath, blob, 0600)
+				}
+			}
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":      true,
+			"message": "已通过 s-ui API 更新隧道全局配置并触发重载",
+			"status":  GetGatewayStatus(workDir),
+		})
 		return
 	}
 

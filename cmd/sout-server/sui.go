@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -4131,4 +4132,347 @@ func toSUITagSlice(v any) []string {
 		return res
 	}
 	return nil
+}
+
+// SUITunnelOverview 描述通过 s-ui API 聚合得到的 Cloudflare 隧道配置与 4 路运行实况
+type SUITunnelOverview struct {
+	HasInbound    bool             `json:"has_inbound"`
+	InboundID     int              `json:"inbound_id"`
+	Protocol      string           `json:"protocol"`
+	EdgeIPVersion int              `json:"edge_ip_version"`
+	HasIPv4       bool             `json:"has_ipv4"`
+	HasIPv6       bool             `json:"has_ipv6"`
+	HostKnown     bool             `json:"host_known"`
+	Slots         []TunnelSlotInfo `json:"slots"`
+}
+
+var (
+	reSUICFConnecting = regexp.MustCompile(`(?i)inbound/cloudflared\[[^\]]+\]\s*connecting to edge via (QUIC|HTTP/2|HTTP2)\s*\(connection\s+(\d+)\)`)
+	reSUICFConnected  = regexp.MustCompile(`(?i)inbound/cloudflared\[[^\]]+\]\s*connected to ([A-Za-z0-9_-]+)\s*\(connection\s+([0-9a-fA-F-]+)\)`)
+	reSUICFFailed     = regexp.MustCompile(`(?i)inbound/cloudflared\[[^\]]+\].*(?:connection\s+(\d+)).*(?:error|failed|closed|retrying|timeout|eof)`)
+)
+
+// NewLightSUI 以只读方式构造本机 s-ui API 客户端，不执行清理、同步或服务重启，适合高频状态查询。
+func NewLightSUI(workDir string) (*SUI, error) {
+	dbPath := suiDBPathDefault
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		altPath := "/etc/s-ui/s-ui.db"
+		if _, err := os.Stat(altPath); err == nil {
+			dbPath = altPath
+		} else {
+			return nil, fmt.Errorf("未检测到 s-ui 数据库文件")
+		}
+	}
+
+	port := 2095
+	basePath := "/app/"
+	scheme := "http"
+
+	rowsJSON, qErr := runSQLiteJSON(dbPath, "SELECT key, value FROM settings WHERE key IN ('webPort','webPath','webCertFile','webKeyFile');")
+	if qErr == nil && len(rowsJSON) > 0 {
+		var rows []struct {
+			Key   string `json:"key"`
+			Value string `json:"value"`
+		}
+		if json.Unmarshal(rowsJSON, &rows) == nil {
+			var certFile, keyFile string
+			for _, r := range rows {
+				switch r.Key {
+				case "webPort":
+					if p, err := strconv.Atoi(strings.TrimSpace(r.Value)); err == nil && p > 0 {
+						port = p
+					}
+				case "webPath":
+					if bp := strings.TrimSpace(r.Value); bp != "" {
+						basePath = bp
+					}
+				case "webCertFile":
+					certFile = strings.TrimSpace(r.Value)
+				case "webKeyFile":
+					keyFile = strings.TrimSpace(r.Value)
+				}
+			}
+			if certFile != "" && keyFile != "" {
+				scheme = "https"
+			}
+		}
+	}
+	if !strings.HasPrefix(basePath, "/") {
+		basePath = "/" + basePath
+	}
+	if !strings.HasSuffix(basePath, "/") {
+		basePath += "/"
+	}
+
+	var token string
+	cachedSUITokenMu.Lock()
+	token = cachedSUIToken
+	cachedSUITokenMu.Unlock()
+	if token == "" && workDir != "" {
+		token = readSavedTokenFile(workDir, suiTokenFile)
+	}
+	if token == "" {
+		tokenRowsJSON, err := runSQLiteJSON(dbPath, "SELECT token FROM tokens WHERE (desc='sout' OR desc='fanout') AND (expiry=0 OR expiry > "+strconv.FormatInt(time.Now().Unix(), 10)+") ORDER BY id DESC LIMIT 1;")
+		if err == nil && len(tokenRowsJSON) > 0 {
+			var list []struct {
+				Token string `json:"token"`
+			}
+			if json.Unmarshal(tokenRowsJSON, &list) == nil && len(list) > 0 {
+				token = strings.TrimSpace(list[0].Token)
+			}
+		}
+	}
+	if token == "" {
+		return nil, fmt.Errorf("未找到有效的 s-ui API Token")
+	}
+
+	return &SUI{
+		Host:     "127.0.0.1",
+		Port:     port,
+		BasePath: basePath,
+		Scheme:   scheme,
+		token:    token,
+		dbPath:   dbPath,
+		client:   localSUIClient(),
+		workDir:  workDir,
+	}, nil
+}
+
+func (s *SUI) findCloudflaredInboundID() (int, error) {
+	list, err := s.apiInbounds(0)
+	if err != nil {
+		return 0, err
+	}
+	for _, item := range list {
+		tag, _ := item["tag"].(string)
+		typ, _ := item["type"].(string)
+		if typ == "cloudflared" || tag == "cf-tunnel-in" || strings.HasPrefix(tag, "cf-tunnel") {
+			if idFloat, ok := item["id"].(float64); ok && idFloat > 0 {
+				return int(idFloat), nil
+			}
+		}
+	}
+	return 0, nil
+}
+
+// GetTunnelOverview 通过 s-ui API 聚合读取 cf-tunnel-in 入站配置、宿主机 IP 栈与运行日志中的 4 路连接状态
+func (s *SUI) GetTunnelOverview(cfRunning bool) (*SUITunnelOverview, error) {
+	id, err := s.findCloudflaredInboundID()
+	if err != nil {
+		return nil, err
+	}
+	if id <= 0 {
+		return &SUITunnelOverview{HasInbound: false}, nil
+	}
+
+	items, err := s.apiInbounds(id)
+	if err != nil || len(items) == 0 {
+		if err == nil {
+			err = fmt.Errorf("s-ui 未返回入站 #%d 详情", id)
+		}
+		return nil, err
+	}
+	inb := items[0]
+
+	proto := normalizeTunnelProto(stringField(inb, "protocol"), "quic")
+	edgeIPVer := 0
+	if v, ok := inb["edge_ip_version"].(float64); ok {
+		iv := int(v)
+		if iv == 4 || iv == 6 {
+			edgeIPVer = iv
+		}
+	}
+
+	overview := &SUITunnelOverview{
+		HasInbound:    true,
+		InboundID:     id,
+		Protocol:      proto,
+		EdgeIPVersion: edgeIPVer,
+	}
+
+	if sysObj, sysErr := s.callAPI(http.MethodGet, "status?r=sys", nil); sysErr == nil {
+		var sysWrap struct {
+			Sys struct {
+				IPv4 []string `json:"ipv4"`
+				IPv6 []string `json:"ipv6"`
+			} `json:"sys"`
+		}
+		if json.Unmarshal(sysObj, &sysWrap) == nil {
+			overview.HostKnown = true
+			overview.HasIPv4 = len(sysWrap.Sys.IPv4) > 0
+			overview.HasIPv6 = len(sysWrap.Sys.IPv6) > 0
+		}
+	}
+
+	var logLines []string
+	if logObj, logErr := s.callAPI(http.MethodGet, "logs?c=250&l=info", nil); logErr == nil && len(logObj) > 0 {
+		_ = json.Unmarshal(logObj, &logLines)
+	}
+
+	overview.Slots = buildSUISlotsFromOverview(overview, logLines, cfRunning)
+	return overview, nil
+}
+
+func stringField(m map[string]any, key string) string {
+	v, _ := m[key].(string)
+	return v
+}
+
+func effectiveSUISlotIPVersion(edgeIPVer int, hostKnown, hasIPv4, hasIPv6 bool) int {
+	if edgeIPVer == 4 || edgeIPVer == 6 {
+		return edgeIPVer
+	}
+	if hostKnown {
+		if hasIPv6 && !hasIPv4 {
+			return 6
+		}
+		if hasIPv4 && !hasIPv6 {
+			return 4
+		}
+	}
+	return 0
+}
+
+func buildSUISlotsFromOverview(ov *SUITunnelOverview, logLines []string, cfRunning bool) []TunnelSlotInfo {
+	runIP := effectiveSUISlotIPVersion(ov.EdgeIPVersion, ov.HostKnown, ov.HasIPv4, ov.HasIPv6)
+	slots := make([]TunnelSlotInfo, 4)
+	for i := 0; i < 4; i++ {
+		slots[i] = TunnelSlotInfo{
+			Index:        i,
+			Connected:    false,
+			Protocol:     ov.Protocol,
+			CfgProtocol:  ov.Protocol,
+			IPVersion:    runIP,
+			CfgIPVersion: ov.EdgeIPVersion,
+			IsPrimary:    false,
+		}
+	}
+
+	parsedAny := parseSUICloudflaredLogs(logLines, slots)
+	if !parsedAny && cfRunning {
+		for i := range slots {
+			slots[i].Connected = true
+		}
+	}
+	return slots
+}
+
+// parseSUICloudflaredLogs 按时间正序重放 s-ui 日志，解析 4 条 cloudflared 连接的机房 PoP、协议与重连次数。
+func parseSUICloudflaredLogs(logLines []string, slots []TunnelSlotInfo) bool {
+	if len(logLines) == 0 || len(slots) != 4 {
+		return false
+	}
+	// s-ui /apiv2/logs 返回倒序（最新在前），先反转为从早到晚重放，并在最后一次启动点重新归零
+	ordered := make([]string, len(logLines))
+	for i := range logLines {
+		ordered[i] = logLines[len(logLines)-1-i]
+	}
+
+	startIdx := 0
+	for i := len(ordered) - 1; i >= 0; i-- {
+		if strings.Contains(ordered[i], "starting Cloudflare Tunnel") {
+			startIdx = i
+			break
+		}
+	}
+
+	var pending []int
+	seenConnectedBefore := make([]bool, 4)
+	parsedAny := false
+
+	for _, line := range ordered[startIdx:] {
+		if !strings.Contains(line, "cloudflared") {
+			continue
+		}
+		if m := reSUICFConnecting.FindStringSubmatch(line); len(m) == 3 {
+			idx, err := strconv.Atoi(m[2])
+			if err == nil && idx >= 0 && idx < 4 {
+				parsedAny = true
+				slots[idx].Protocol = normalizeTunnelProto(m[1], slots[idx].Protocol)
+				if seenConnectedBefore[idx] {
+					slots[idx].Retries++
+				}
+				pending = append(pending, idx)
+			}
+			continue
+		}
+		if m := reSUICFConnected.FindStringSubmatch(line); len(m) == 3 {
+			pop := m[1]
+			connID := m[2]
+			shortID := connID
+			if len(shortID) > 8 {
+				shortID = shortID[:8]
+			}
+			targetIdx := -1
+			if len(pending) > 0 {
+				targetIdx = pending[0]
+				pending = pending[1:]
+			} else {
+				for i := 0; i < 4; i++ {
+					if !slots[i].Connected {
+						targetIdx = i
+						break
+					}
+				}
+			}
+			if targetIdx >= 0 && targetIdx < 4 {
+				parsedAny = true
+				slots[targetIdx].Connected = true
+				slots[targetIdx].EdgeAddr = pop + " · " + shortID
+				seenConnectedBefore[targetIdx] = true
+			}
+			continue
+		}
+		if m := reSUICFFailed.FindStringSubmatch(line); len(m) == 2 {
+			idx, err := strconv.Atoi(m[1])
+			if err == nil && idx >= 0 && idx < 4 {
+				parsedAny = true
+				slots[idx].Connected = false
+				slots[idx].Retries++
+			}
+		}
+	}
+	return parsedAny
+}
+
+// UpdateCloudflaredInbound 通过 s-ui 原生 API 更新 cf-tunnel-in 的全局协议与 IP 版本，并触发热重载。
+func (s *SUI) UpdateCloudflaredInbound(protocol string, edgeIPVersion int) error {
+	proto := strings.ToLower(strings.TrimSpace(protocol))
+	if proto != "quic" && proto != "http2" {
+		return fmt.Errorf("协议仅支持 quic 或 http2")
+	}
+	if edgeIPVersion != 0 && edgeIPVersion != 4 && edgeIPVersion != 6 {
+		return fmt.Errorf("IP 版本仅支持 0(自动)、4 或 6")
+	}
+
+	id, err := s.findCloudflaredInboundID()
+	if err != nil {
+		return err
+	}
+	if id <= 0 {
+		return fmt.Errorf("s-ui 中未找到 Cloudflare 隧道入站 (cf-tunnel-in)")
+	}
+
+	items, err := s.apiInbounds(id)
+	if err != nil || len(items) == 0 {
+		if err == nil {
+			err = fmt.Errorf("s-ui 未返回入站 #%d 详情", id)
+		}
+		return err
+	}
+	inbound := items[0]
+	inbound["protocol"] = proto
+	inbound["edge_ip_version"] = edgeIPVerValue(edgeIPVersion)
+
+	if err := s.apiSaveInbound("edit", inbound); err != nil {
+		return fmt.Errorf("通过 s-ui API 更新隧道入站失败: %w", err)
+	}
+	return nil
+}
+
+func edgeIPVerValue(v int) int {
+	if v == 4 || v == 6 {
+		return v
+	}
+	return 0
 }
