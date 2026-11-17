@@ -3310,7 +3310,7 @@ $('#tnSuiGlobalEditor').addEventListener('click', async e => {
   const saveBtn = e.target.closest('[data-tn-sui-save]');
   if (saveBtn && suiEditDraft) {
     saveBtn.disabled = true;
-    saveBtn.textContent = '保存中…';
+    saveBtn.textContent = '重载中…';
     try {
       const res = await api('/api/tunnel', {
         method: 'POST',

@@ -68,7 +68,16 @@ func (s *SUI) APIToken() string {
 
 func localSUIClient() *http.Client {
 	return &http.Client{
-		Timeout: 20 * time.Second,
+		Timeout: 60 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+}
+
+func lightSUIClient() *http.Client {
+	return &http.Client{
+		Timeout: 5 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
@@ -4233,7 +4242,7 @@ func NewLightSUI(workDir string) (*SUI, error) {
 		Scheme:   scheme,
 		token:    token,
 		dbPath:   dbPath,
-		client:   localSUIClient(),
+		client:   lightSUIClient(),
 		workDir:  workDir,
 	}, nil
 }
@@ -4463,6 +4472,13 @@ func (s *SUI) UpdateCloudflaredInbound(protocol string, edgeIPVersion int) error
 	inbound := items[0]
 	inbound["protocol"] = proto
 	inbound["edge_ip_version"] = edgeIPVerValue(edgeIPVersion)
+
+	// s-ui 卸载旧 QUIC 入站最多可能需要等待 ~30s grace period，临时切换至 60s 长超时客户端
+	origClient := s.client
+	if s.client == nil || s.client.Timeout < 60*time.Second {
+		s.client = localSUIClient()
+		defer func() { s.client = origClient }()
+	}
 
 	if err := s.apiSaveInbound("edit", inbound); err != nil {
 		return fmt.Errorf("通过 s-ui API 更新隧道入站失败: %w", err)
