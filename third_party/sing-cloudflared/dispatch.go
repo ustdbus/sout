@@ -41,6 +41,7 @@ func (w *quicResponseWriter) WriteResponse(responseError error, metadata []proto
 }
 
 func (s *Service) handleDataStream(ctx context.Context, stream io.ReadWriteCloser, request *protocol.ConnectRequest, connIndex uint8) {
+	s.recordConnectionActivity(connIndex)
 	if s.connContext != nil {
 		ctx = s.connContext(ctx)
 	}

@@ -17,24 +17,49 @@ import (
 	"time"
 )
 
+// TunnelSlotMeta 代表单条 Cloudflare 隧道通道的持久化配置
+type TunnelSlotMeta struct {
+	Index     int    `json:"index"`
+	Protocol  string `json:"protocol"`   // "quic" | "http2"
+	IPVersion int    `json:"ip_version"` // 0(自动) | 4 | 6
+	EdgeAddr  string `json:"edge_addr,omitempty"`
+}
+
+// TunnelSlotInfo 代表返回给前端的单条 Cloudflare 隧道完整状态与配置
+type TunnelSlotInfo struct {
+	Index        int    `json:"index"`
+	Connected    bool   `json:"connected"`
+	Protocol     string `json:"protocol"`
+	CfgProtocol  string `json:"cfg_protocol"`
+	IPVersion    int    `json:"ip_version"`
+	CfgIPVersion int    `json:"cfg_ip_version"`
+	EdgeAddr     string `json:"edge_addr"`
+	Retries      int    `json:"retries"`
+	Streams      uint64 `json:"streams"`
+	LastActive   int64  `json:"last_active"`
+	IsPrimary    bool   `json:"is_primary"`
+}
+
 // GatewayMeta 代表轻量网关分流元数据结构
 type GatewayMeta struct {
-	Enabled     bool   `json:"enabled"`
-	Mode        string `json:"mode"`
-	Domain      string `json:"domain"`
-	TunnelToken string `json:"tunnel_token"`
-	TunnelPort  int    `json:"tunnel_port"`
-	TunnelEngine string `json:"tunnel_engine,omitempty"`
-	SoutPort    int    `json:"sout_port"`
-	SoutPath    string `json:"sout_path"`
-	SuiPort     int    `json:"sui_port"`
-	SuiPath     string `json:"sui_path"`
-	SuiUser     string `json:"sui_user"`
-	SubPort     int    `json:"sub_port"`
-	SubPath     string `json:"sub_path"`
-	NodePort    int    `json:"node_port"`
-	WsPath      string `json:"ws_path"`
-	Protocol    string `json:"protocol"`
+	Enabled      bool             `json:"enabled"`
+	Mode         string           `json:"mode"`
+	Domain       string           `json:"domain"`
+	TunnelToken  string           `json:"tunnel_token"`
+	TunnelPort   int              `json:"tunnel_port"`
+	TunnelEngine string           `json:"tunnel_engine,omitempty"`
+	SoutPort     int              `json:"sout_port"`
+	SoutPath     string           `json:"sout_path"`
+	SuiPort      int              `json:"sui_port"`
+	SuiPath      string           `json:"sui_path"`
+	SuiUser      string           `json:"sui_user"`
+	SubPort      int              `json:"sub_port"`
+	SubPath      string           `json:"sub_path"`
+	NodePort     int              `json:"node_port"`
+	WsPath       string           `json:"ws_path"`
+	Protocol     string           `json:"protocol"`
+	TunnelSlots  []TunnelSlotMeta `json:"tunnel_slots,omitempty"`
+	PrimarySlot  int              `json:"primary_slot"`
 }
 
 // CaddyMeta 保持向下兼容
@@ -105,6 +130,8 @@ func ReloadGateway(workDir string) {
 	meta.SuiPath = strings.Trim(meta.SuiPath, "/")
 	meta.SubPath = strings.Trim(meta.SubPath, "/")
 	meta.WsPath = strings.Trim(meta.WsPath, "/")
+	meta.TunnelSlots = ensureDefaultTunnelSlots(meta.TunnelSlots, meta.Protocol)
+	syncCloudflaredSlotDefaults(meta.TunnelSlots, meta.PrimarySlot)
 
 	globalGateway.meta = &meta
 
@@ -311,11 +338,13 @@ func GetGatewayStatus(workDir string) map[string]any {
 		"panel_mode":          "sing-box",
 	}
 
+	var loadedMeta *GatewayMeta
 	metaPath := filepath.Join(workDir, "gateway_meta.json")
 	data, err := os.ReadFile(metaPath)
 	if err == nil {
 		var meta GatewayMeta
 		if json.Unmarshal(data, &meta) == nil {
+			loadedMeta = &meta
 			st["enabled"] = meta.Enabled
 			st["domain"] = meta.Domain
 			st["mode"] = meta.Mode
@@ -438,7 +467,126 @@ func GetGatewayStatus(workDir string) map[string]any {
 		st["panel_mode"] = strings.TrimSpace(string(pm))
 	}
 
+	globalProto, _ := st["protocol"].(string)
+	var savedSlots []TunnelSlotMeta
+	primaryIdx := 0
+	if loadedMeta != nil {
+		savedSlots = loadedMeta.TunnelSlots
+		if loadedMeta.PrimarySlot >= 0 && loadedMeta.PrimarySlot < 4 {
+			primaryIdx = loadedMeta.PrimarySlot
+		}
+	}
+	slots := buildTunnelSlotsStatus(savedSlots, primaryIdx, globalProto, cfRunning)
+	for i, sl := range slots {
+		if sl.IsPrimary {
+			primaryIdx = i
+			break
+		}
+	}
+	st["tunnel_slots"] = slots
+	st["primary_slot"] = primaryIdx
+
 	return st
+}
+
+func normalizeTunnelProto(p, fallback string) string {
+	switch strings.ToLower(strings.TrimSpace(p)) {
+	case "http2":
+		return "http2"
+	case "quic":
+		return "quic"
+	default:
+		if strings.ToLower(strings.TrimSpace(fallback)) == "http2" {
+			return "http2"
+		}
+		return "quic"
+	}
+}
+
+func ensureDefaultTunnelSlots(existing []TunnelSlotMeta, globalProto string) []TunnelSlotMeta {
+	baseProto := normalizeTunnelProto(globalProto, "quic")
+	out := make([]TunnelSlotMeta, 4)
+	for i := 0; i < 4; i++ {
+		defaultIP := 4
+		if i%2 == 1 {
+			defaultIP = 6
+		}
+		out[i] = TunnelSlotMeta{
+			Index:     i,
+			Protocol:  baseProto,
+			IPVersion: defaultIP,
+		}
+		for _, item := range existing {
+			if item.Index == i {
+				out[i].Protocol = normalizeTunnelProto(item.Protocol, baseProto)
+				if item.IPVersion == 4 || item.IPVersion == 6 || item.IPVersion == 0 {
+					out[i].IPVersion = item.IPVersion
+				}
+				out[i].EdgeAddr = item.EdgeAddr
+				break
+			}
+		}
+	}
+	return out
+}
+
+func buildTunnelSlotsStatus(saved []TunnelSlotMeta, primaryIdx int, globalProto string, cfRunning bool) []TunnelSlotInfo {
+	cfgSlots := ensureDefaultTunnelSlots(saved, globalProto)
+	if live, ok := getCloudflaredSlotsSnapshot(); ok && len(live) > 0 {
+		out := make([]TunnelSlotInfo, 4)
+		for i := 0; i < 4; i++ {
+			cfg := cfgSlots[i]
+			if i < len(live) {
+				l := live[i]
+				if l.CfgProtocol == "" {
+					l.CfgProtocol = cfg.Protocol
+				}
+				if l.CfgIPVersion == 0 {
+					l.CfgIPVersion = cfg.IPVersion
+				}
+				if l.IPVersion == 0 {
+					l.IPVersion = cfg.IPVersion
+				}
+				out[i] = l
+			} else {
+				out[i] = TunnelSlotInfo{
+					Index:        i,
+					Connected:    cfRunning,
+					Protocol:     cfg.Protocol,
+					CfgProtocol:  cfg.Protocol,
+					IPVersion:    cfg.IPVersion,
+					CfgIPVersion: cfg.IPVersion,
+					EdgeAddr:     cfg.EdgeAddr,
+					IsPrimary:    i == primaryIdx,
+				}
+			}
+		}
+		return out
+	}
+
+	out := make([]TunnelSlotInfo, 4)
+	for i := 0; i < 4; i++ {
+		cfg := cfgSlots[i]
+		ipVer := cfg.IPVersion
+		if ipVer == 0 {
+			if i%2 == 0 {
+				ipVer = 4
+			} else {
+				ipVer = 6
+			}
+		}
+		out[i] = TunnelSlotInfo{
+			Index:        i,
+			Connected:    cfRunning,
+			Protocol:     cfg.Protocol,
+			CfgProtocol:  cfg.Protocol,
+			IPVersion:    ipVer,
+			CfgIPVersion: cfg.IPVersion,
+			EdgeAddr:     cfg.EdgeAddr,
+			IsPrimary:    i == primaryIdx,
+		}
+	}
+	return out
 }
 
 var (

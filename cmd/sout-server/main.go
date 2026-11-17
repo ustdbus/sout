@@ -737,14 +737,76 @@ func apiTunnelHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Action   string `json:"action"` // "save", "restart", "delete"
-		Domain   string `json:"domain"`
-		Token    string `json:"token"`
-		Port     int    `json:"port"`
-		Protocol string `json:"protocol"` // "quic" 或 "http2"
+		Action     string `json:"action"` // "save", "restart", "delete", "update_slot"
+		Domain     string `json:"domain"`
+		Token      string `json:"token"`
+		Port       int    `json:"port"`
+		Protocol   string `json:"protocol"` // "quic" 或 "http2"
+		SlotIndex  int    `json:"slot_index"`
+		IPVersion  int    `json:"ip_version"` // 0(自动), 4(IPv4), 6(IPv6)
+		SetPrimary bool   `json:"set_primary"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求参数解析错误: " + err.Error()})
+		return
+	}
+
+	if req.Action == "update_slot" {
+		if req.SlotIndex < 0 || req.SlotIndex >= 4 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "隧道槽位索引必须在 0-3 之间"})
+			return
+		}
+		if req.IPVersion != 0 && req.IPVersion != 4 && req.IPVersion != 6 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "IP 版本仅支持 0(自动)、4 或 6"})
+			return
+		}
+
+		workDir := currentBasePathDir()
+		metaPath := filepath.Join(workDir, "gateway_meta.json")
+		var meta GatewayMeta
+		data, err := os.ReadFile(metaPath)
+		if err != nil || json.Unmarshal(data, &meta) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "未检测到已配置的隧道元数据"})
+			return
+		}
+
+		meta.TunnelSlots = ensureDefaultTunnelSlots(meta.TunnelSlots, meta.Protocol)
+		proto := strings.ToLower(strings.TrimSpace(req.Protocol))
+		if proto != "" && proto != "quic" && proto != "http2" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "协议仅支持 quic 或 http2"})
+			return
+		}
+		if proto != "" {
+			meta.TunnelSlots[req.SlotIndex].Protocol = proto
+		} else {
+			proto = meta.TunnelSlots[req.SlotIndex].Protocol
+		}
+		meta.TunnelSlots[req.SlotIndex].IPVersion = req.IPVersion
+		if req.SetPrimary {
+			meta.PrimarySlot = req.SlotIndex
+		}
+
+		blob, err := json.MarshalIndent(meta, "", "  ")
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "序列化配置失败: " + err.Error()})
+			return
+		}
+		tmp := metaPath + ".tmp"
+		if err := os.WriteFile(tmp, blob, 0600); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "保存配置失败: " + err.Error()})
+			return
+		}
+		if err := os.Rename(tmp, metaPath); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "提交配置失败: " + err.Error()})
+			return
+		}
+
+		updateCloudflaredSlotConfig(req.SlotIndex, proto, req.IPVersion, req.SetPrimary)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":      true,
+			"message": fmt.Sprintf("已更新隧道 #%d 配置", req.SlotIndex+1),
+			"status":  GetGatewayStatus(workDir),
+		})
 		return
 	}
 

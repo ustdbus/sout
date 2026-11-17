@@ -41,7 +41,113 @@ var (
 	edupconnFirstRetryDelay   = 5 * time.Second
 	edupconnRetryDelay        = 15 * time.Second
 	errSwitchBackToQUIC       = errors.New("switch back to QUIC")
+	errSlotReconfigured       = errors.New("slot reconfigured")
 )
+
+type TunnelSlotConfig struct {
+	Protocol  string `json:"protocol"`   // "" | "quic" | "http2"
+	IPVersion int    `json:"ip_version"` // 0 | 4 | 6
+}
+
+type TunnelSlotSnapshot struct {
+	Index       int    `json:"index"`
+	Connected   bool   `json:"connected"`
+	Protocol    string `json:"protocol"`
+	CfgProtocol string `json:"cfg_protocol"`
+	IPVersion   int    `json:"ip_version"`
+	CfgIPVer    int    `json:"cfg_ip_version"`
+	EdgeAddr    string `json:"edge_addr"`
+	Retries     int    `json:"retries"`
+	Streams     uint64 `json:"streams"`
+	LastActive  int64  `json:"last_active"`
+	IsPrimary   bool   `json:"is_primary"`
+}
+
+var (
+	slotRegistryMu       sync.Mutex
+	activeService        *Service
+	slotOverrides        [4]TunnelSlotConfig
+	preferredPrimarySlot = -1
+)
+
+func registerActiveService(s *Service) {
+	slotRegistryMu.Lock()
+	activeService = s
+	slotRegistryMu.Unlock()
+}
+
+func unregisterActiveService(s *Service) {
+	slotRegistryMu.Lock()
+	if activeService == s {
+		activeService = nil
+	}
+	slotRegistryMu.Unlock()
+}
+
+func getSlotOverride(connIndex uint8) TunnelSlotConfig {
+	slotRegistryMu.Lock()
+	defer slotRegistryMu.Unlock()
+	if int(connIndex) < len(slotOverrides) {
+		return slotOverrides[connIndex]
+	}
+	return TunnelSlotConfig{}
+}
+
+func SetDefaultTunnelSlots(configs []TunnelSlotConfig, primaryIndex int) {
+	slotRegistryMu.Lock()
+	for i := 0; i < len(slotOverrides); i++ {
+		if i < len(configs) {
+			slotOverrides[i] = configs[i]
+		} else {
+			slotOverrides[i] = TunnelSlotConfig{}
+		}
+	}
+	if primaryIndex >= 0 && primaryIndex < len(slotOverrides) {
+		preferredPrimarySlot = primaryIndex
+	} else {
+		preferredPrimarySlot = -1
+	}
+	slotRegistryMu.Unlock()
+}
+
+func UpdateTunnelSlotConfig(index int, protocol string, ipVersion int, setPrimary bool) {
+	if index < 0 || index >= len(slotOverrides) {
+		return
+	}
+	if protocol != "" && protocol != transport.ProtocolQUIC && protocol != transport.ProtocolHTTP2 {
+		protocol = ""
+	}
+	if ipVersion != 0 && ipVersion != 4 && ipVersion != 6 {
+		ipVersion = 0
+	}
+	slotRegistryMu.Lock()
+	slotOverrides[index] = TunnelSlotConfig{
+		Protocol:  protocol,
+		IPVersion: ipVersion,
+	}
+	if setPrimary {
+		preferredPrimarySlot = index
+	}
+	svc := activeService
+	slotRegistryMu.Unlock()
+
+	if svc != nil {
+		svc.reconfigureSlot(uint8(index), protocol)
+	}
+}
+
+func GetTunnelSlotsSnapshot() ([]TunnelSlotSnapshot, bool) {
+	slotRegistryMu.Lock()
+	svc := activeService
+	overrides := slotOverrides
+	prefPrimary := preferredPrimarySlot
+	slotRegistryMu.Unlock()
+
+	if svc == nil {
+		return nil, false
+	}
+	return svc.snapshotSlots(overrides, prefPrimary), true
+}
 
 type Service struct {
 	ctx              context.Context
@@ -91,10 +197,16 @@ type Service struct {
 }
 
 type connectionState struct {
-	protocol        string
-	retries         uint8
-	replaceExisting bool
-	hasConnected    bool
+	protocol           string
+	retries            uint8
+	replaceExisting    bool
+	hasConnected       bool
+	currentlyConnected bool
+	edgeAddr           string
+	ipVersion          int
+	streams            uint64
+	lastActive         int64
+	cancelConn         context.CancelCauseFunc
 }
 
 func connectionRetryDecision(err error) (retry bool, cancelAll bool) {
@@ -224,6 +336,7 @@ func NewService(options ServiceOptions) (*Service, error) {
 }
 
 func (s *Service) Start() error {
+	registerActiveService(s)
 	s.logger.Info("starting Cloudflare Tunnel with ", s.haConnections, " HA connections")
 	s.featureSelector.Start(s.ctx)
 
@@ -261,13 +374,18 @@ func (s *Service) Start() error {
 	return nil
 }
 
-func (s *Service) notifyConnected(connIndex uint8, _ string) {
+func (s *Service) notifyConnected(connIndex uint8, connProtocol string) {
 	s.stateAccess.Lock()
 	s.ensureConnectionStateLocked(connIndex)
 	state := s.connectionStates[connIndex]
 	state.retries = 0
-	state.protocol = s.currentProtocol()
+	if connProtocol != "" {
+		state.protocol = connProtocol
+	} else if state.protocol == "" {
+		state.protocol = s.currentProtocol()
+	}
 	state.hasConnected = true
+	state.currentlyConnected = true
 	state.replaceExisting = false
 	s.connectionStates[connIndex] = state
 	s.stateAccess.Unlock()
@@ -301,6 +419,7 @@ func (s *Service) maxActiveFlows() uint64 {
 }
 
 func (s *Service) Close() error {
+	unregisterActiveService(s)
 	s.cancel()
 	s.done.Wait()
 	s.connectionAccess.Lock()
@@ -319,6 +438,166 @@ const (
 	firstConnectionReadyTimeout = 15 * time.Second
 )
 
+func pickEdgeAddrIndex(edgeAddrs []*discovery.EdgeAddr, current int, preferredIPVer int) int {
+	if len(edgeAddrs) == 0 {
+		return 0
+	}
+	if current < 0 || current >= len(edgeAddrs) {
+		current = 0
+	}
+	if preferredIPVer == 4 || preferredIPVer == 6 {
+		for offset := 0; offset < len(edgeAddrs); offset++ {
+			idx := (current + offset) % len(edgeAddrs)
+			if edgeAddrs[idx].IPVersion == preferredIPVer {
+				return idx
+			}
+		}
+	}
+	return current
+}
+
+func formatEdgeAddr(edgeAddr *discovery.EdgeAddr, connProtocol string) string {
+	if edgeAddr == nil {
+		return ""
+	}
+	if connProtocol == transport.ProtocolQUIC && edgeAddr.UDP != nil {
+		return edgeAddr.UDP.String()
+	}
+	if edgeAddr.TCP != nil {
+		return edgeAddr.TCP.String()
+	}
+	if edgeAddr.UDP != nil {
+		return edgeAddr.UDP.String()
+	}
+	return ""
+}
+
+func (s *Service) setConnectionRunning(connIndex uint8, edgeAddrStr string, ipVer int, cancelConn context.CancelCauseFunc) {
+	s.stateAccess.Lock()
+	s.ensureConnectionStateLocked(connIndex)
+	st := s.connectionStates[connIndex]
+	st.edgeAddr = edgeAddrStr
+	st.ipVersion = ipVer
+	st.cancelConn = cancelConn
+	s.connectionStates[connIndex] = st
+	s.stateAccess.Unlock()
+}
+
+func (s *Service) clearConnectionRunning(connIndex uint8) {
+	s.stateAccess.Lock()
+	s.ensureConnectionStateLocked(connIndex)
+	st := s.connectionStates[connIndex]
+	st.currentlyConnected = false
+	st.cancelConn = nil
+	s.connectionStates[connIndex] = st
+	s.stateAccess.Unlock()
+}
+
+func (s *Service) recordConnectionActivity(connIndex uint8) {
+	now := time.Now().UnixMilli()
+	s.stateAccess.Lock()
+	s.ensureConnectionStateLocked(connIndex)
+	st := s.connectionStates[connIndex]
+	st.streams++
+	st.lastActive = now
+	s.connectionStates[connIndex] = st
+	s.stateAccess.Unlock()
+}
+
+func (s *Service) reconfigureSlot(connIndex uint8, protocol string) {
+	effectiveProto := protocol
+	if effectiveProto == "" {
+		effectiveProto = s.currentProtocol()
+	}
+	s.stateAccess.Lock()
+	s.ensureConnectionStateLocked(connIndex)
+	st := s.connectionStates[connIndex]
+	st.protocol = effectiveProto
+	st.retries = 0
+	cancel := st.cancelConn
+	s.connectionStates[connIndex] = st
+	s.stateAccess.Unlock()
+
+	if cancel != nil {
+		cancel(errSlotReconfigured)
+	}
+}
+
+func (s *Service) snapshotSlots(overrides [4]TunnelSlotConfig, prefPrimary int) []TunnelSlotSnapshot {
+	s.stateAccess.Lock()
+	count := max(s.haConnections, len(s.connectionStates))
+	if count <= 0 {
+		count = 4
+	}
+	states := make([]connectionState, count)
+	for i := 0; i < count; i++ {
+		if i < len(s.connectionStates) {
+			states[i] = s.connectionStates[i]
+		}
+	}
+	s.stateAccess.Unlock()
+
+	globalProto := s.currentProtocol()
+	res := make([]TunnelSlotSnapshot, count)
+	anyConnected := false
+	for i := 0; i < count; i++ {
+		st := states[i]
+		proto := st.protocol
+		if proto == "" {
+			proto = globalProto
+		}
+		var cfg TunnelSlotConfig
+		if i < len(overrides) {
+			cfg = overrides[i]
+		}
+		cfgProto := cfg.Protocol
+		if cfgProto == "" {
+			cfgProto = globalProto
+		}
+		if st.currentlyConnected {
+			anyConnected = true
+		}
+		res[i] = TunnelSlotSnapshot{
+			Index:       i,
+			Connected:   st.currentlyConnected,
+			Protocol:    proto,
+			CfgProtocol: cfgProto,
+			IPVersion:   st.ipVersion,
+			CfgIPVer:    cfg.IPVersion,
+			EdgeAddr:    st.edgeAddr,
+			Retries:     int(st.retries),
+			Streams:     st.streams,
+			LastActive:  st.lastActive,
+		}
+	}
+
+	primaryIdx := -1
+	if prefPrimary >= 0 && prefPrimary < len(res) && (res[prefPrimary].Connected || !anyConnected) {
+		primaryIdx = prefPrimary
+	} else if anyConnected {
+		bestActive := int64(-1)
+		for i, sl := range res {
+			if !sl.Connected {
+				continue
+			}
+			if primaryIdx == -1 || sl.LastActive > bestActive {
+				primaryIdx = i
+				bestActive = sl.LastActive
+			}
+		}
+	} else if len(res) > 0 {
+		if prefPrimary >= 0 && prefPrimary < len(res) {
+			primaryIdx = prefPrimary
+		} else {
+			primaryIdx = 0
+		}
+	}
+	if primaryIdx >= 0 && primaryIdx < len(res) {
+		res[primaryIdx].IsPrimary = true
+	}
+	return res
+}
+
 func (s *Service) superviseConnection(connIndex uint8, edgeAddrs []*discovery.EdgeAddr) {
 	defer s.done.Done()
 
@@ -330,20 +609,34 @@ func (s *Service) superviseConnection(connIndex uint8, edgeAddrs []*discovery.Ed
 		default:
 		}
 
+		slotCfg := getSlotOverride(connIndex)
+		edgeIndex = pickEdgeAddrIndex(edgeAddrs, edgeIndex, slotCfg.IPVersion)
 		edgeAddr := edgeAddrs[edgeIndex]
 		state := s.connectionState(connIndex)
 		servingProtocol := state.protocol
+		if slotCfg.Protocol == transport.ProtocolQUIC || slotCfg.Protocol == transport.ProtocolHTTP2 {
+			servingProtocol = slotCfg.Protocol
+			s.stateAccess.Lock()
+			s.ensureConnectionStateLocked(connIndex)
+			st := s.connectionStates[connIndex]
+			st.protocol = servingProtocol
+			s.connectionStates[connIndex] = st
+			s.stateAccess.Unlock()
+		}
 		wasReplacing := state.replaceExisting || state.hasConnected
 
 		connCtx, cancelConn := context.WithCancelCause(s.ctx)
+		s.setConnectionRunning(connIndex, formatEdgeAddr(edgeAddr, servingProtocol), edgeAddr.IPVersion, cancelConn)
+
 		var recoveredEdgeIndex atomic.Int32
 		recoveredEdgeIndex.Store(-1)
 		var waitProbe func()
-		if servingProtocol == transport.ProtocolHTTP2 && s.currentProtocol() == transport.ProtocolQUIC {
+		if servingProtocol == transport.ProtocolHTTP2 && s.currentProtocol() == transport.ProtocolQUIC && slotCfg.Protocol != transport.ProtocolHTTP2 {
 			waitProbe = s.startQUICRecoveryProbe(connCtx, cancelConn, connIndex, edgeAddrs, edgeIndex, &recoveredEdgeIndex)
 		}
 
 		err := s.safeServeConnectionContext(connCtx, connIndex, edgeAddr)
+		s.clearConnectionRunning(connIndex)
 		cancelConn(nil)
 		if waitProbe != nil {
 			waitProbe()
@@ -351,6 +644,9 @@ func (s *Service) superviseConnection(connIndex uint8, edgeAddrs []*discovery.Ed
 
 		if s.ctx.Err() != nil {
 			return
+		}
+		if errors.Is(context.Cause(connCtx), errSlotReconfigured) {
+			continue
 		}
 		if errors.Is(context.Cause(connCtx), errSwitchBackToQUIC) {
 			s.resetConnectionToQUIC(connIndex)
@@ -455,12 +751,11 @@ func (s *Service) resetConnectionToQUIC(connIndex uint8) {
 	s.stateAccess.Lock()
 	defer s.stateAccess.Unlock()
 	s.ensureConnectionStateLocked(connIndex)
-	s.connectionStates[connIndex] = connectionState{
-		protocol:        s.currentProtocol(),
-		retries:         0,
-		replaceExisting: true,
-		hasConnected:    s.connectionStates[connIndex].hasConnected,
-	}
+	st := s.connectionStates[connIndex]
+	st.protocol = s.currentProtocol()
+	st.retries = 0
+	st.replaceExisting = true
+	s.connectionStates[connIndex] = st
 }
 
 func (s *Service) serveConnection(connIndex uint8, edgeAddr *discovery.EdgeAddr) error {
@@ -536,7 +831,7 @@ func (s *Service) serveHTTP2Context(ctx context.Context, connIndex uint8, edgeAd
 		ctx, edgeAddr, connIndex,
 		s.credentials, s.connectorID,
 		features, numPreviousAttempts, s.gracePeriod, s.tunnelDialer,
-		&http2HandlerAdapter{s}, s.logger,
+		&http2HandlerAdapter{service: s, connIndex: connIndex}, s.logger,
 	)
 	if err != nil {
 		return E.Cause(err, "create HTTP/2 connection")
@@ -550,10 +845,13 @@ func (s *Service) serveHTTP2Context(ctx context.Context, connIndex uint8, edgeAd
 }
 
 func (s *Service) initializeConnectionState(connIndex uint8) {
+	slotCfg := getSlotOverride(connIndex)
 	s.stateAccess.Lock()
 	defer s.stateAccess.Unlock()
 	s.ensureConnectionStateLocked(connIndex)
-	if s.connectionStates[connIndex].protocol == "" {
+	if slotCfg.Protocol == transport.ProtocolQUIC || slotCfg.Protocol == transport.ProtocolHTTP2 {
+		s.connectionStates[connIndex].protocol = slotCfg.Protocol
+	} else if s.connectionStates[connIndex].protocol == "" {
 		s.connectionStates[connIndex].protocol = s.currentProtocol()
 	}
 }
@@ -760,10 +1058,12 @@ func (a *streamHandlerAdapter) HandleDatagram(ctx context.Context, data []byte, 
 }
 
 type http2HandlerAdapter struct {
-	service *Service
+	service   *Service
+	connIndex uint8
 }
 
 func (a *http2HandlerAdapter) DispatchRequest(ctx context.Context, stream io.ReadWriteCloser, writer protocol.ConnectResponseWriter, request *protocol.ConnectRequest) {
+	a.service.recordConnectionActivity(a.connIndex)
 	a.service.dispatchRequest(ctx, stream, writer, request)
 }
 

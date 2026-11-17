@@ -8,3 +8,13 @@ import (
 
 func registerCloudflaredInbound(registry *sbinbound.Registry) {
 }
+
+func syncCloudflaredSlotDefaults(slots []TunnelSlotMeta, primarySlot int) {
+}
+
+func getCloudflaredSlotsSnapshot() ([]TunnelSlotInfo, bool) {
+	return nil, false
+}
+
+func updateCloudflaredSlotConfig(index int, protocol string, ipVersion int, setPrimary bool) {
+}

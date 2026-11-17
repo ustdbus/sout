@@ -224,17 +224,28 @@ main{padding:20px;max-width:1120px;margin:0 auto}
 
 .empty{border:1px dashed var(--line);border-radius:8px;padding:32px 20px;text-align:center;color:var(--dim)}
 
-.modal{position:fixed;inset:0;background:var(--overlay);display:none;align-items:center;justify-content:center;z-index:50;padding:20px;backdrop-filter:blur(2px)}
-.modal.open{display:flex}
-.sheet{background:var(--panel);border:1px solid var(--line);border-radius:8px;width:min(640px,100%);max-height:86vh;display:flex;flex-direction:column;box-shadow:0 8px 24px rgba(0,0,0,.5)}
-.sheet .head{display:flex;align-items:center;gap:10px;padding:12px 18px;border-bottom:1px solid var(--line);background:var(--card);border-radius:8px 8px 0 0}
+.modal{position:fixed;inset:0;background:var(--overlay);display:none;align-items:center;justify-content:center;z-index:50;padding:20px;backdrop-filter:blur(6px);overscroll-behavior:contain;opacity:0;transition:opacity .18s ease-out}
+.modal.open{display:flex;opacity:1}
+@starting-style{.modal.open{opacity:0}}
+.sheet{background:var(--panel);border:1px solid var(--line);border-radius:12px;width:min(640px,100%);max-height:86vh;display:flex;flex-direction:column;overscroll-behavior:contain;box-shadow:0 20px 50px rgba(0,0,0,.55),0 0 0 1px color-mix(in oklab,var(--line) 78%,white 8%);transition:transform .22s cubic-bezier(.16,1,.3,1),opacity .18s ease-out}
+@media (prefers-reduced-motion:no-preference){
+  .modal.open .sheet{transform:translateY(0) scale(1);opacity:1}
+  @starting-style{.modal.open .sheet{transform:translateY(8px) scale(.98);opacity:0}}
+}
+@media (prefers-reduced-motion:reduce){
+  .modal,.sheet{transition-duration:.08s}
+}
+.sheet .head{display:flex;align-items:center;gap:10px;padding:13px 18px;border-bottom:1px solid var(--line);background:var(--card);border-radius:12px 12px 0 0}
 .sheet .head h2{font-size:14px;margin:0;font-weight:700}
-.sheet .body{overflow:auto;padding:18px}
-.sheet .foot{display:flex;align-items:center;gap:10px;padding:12px 18px;border-top:1px solid var(--line);background:var(--card);border-radius:0 0 8px 8px}
+.sheet .body{overflow:auto;padding:18px;overscroll-behavior:contain}
+.sheet .foot{display:flex;align-items:center;gap:10px;padding:12px 18px;border-top:1px solid var(--line);background:var(--card);border-radius:0 0 12px 12px}
 
 label.f{display:block;margin-bottom:16px}
 label.f>span{display:block;color:var(--dim);font-size:12px;margin-bottom:6px;font-weight:500}
-select,textarea,input[type=search],input[type=text],input[type=password]{font:inherit;background:var(--input-bg);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:7px 10px;width:100%;color-scheme:dark}
+:root{accent-color:var(--accent)}
+select,textarea,input[type=search],input[type=text],input[type=password],input[type=number]{font:inherit;background:var(--input-bg);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:8px 11px;width:100%;color-scheme:dark;transition:border-color .15s,box-shadow .15s}
+input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tn-input-wrap input:focus-visible{outline:none}
 option{background:var(--surface-2);color:var(--text);padding:8px}
 .card-input-box:focus-within{border-color:var(--accent)!important}
 .listen-opt-item:hover{background:var(--accent-soft)!important;color:var(--accent)!important}
@@ -260,6 +271,172 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
 .pool-tag{font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600;display:inline-flex;align-items:center;gap:3px}
 .pool-tag.residential{background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-line)}
 .pool-tag.datacenter{background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent-line)}
+
+/* ── Cloudflare 隧道面板专属样式 ── */
+.tn-sheet{width:min(620px,100%);max-height:92vh}
+.tn-head-icon{width:28px;height:28px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;background:color-mix(in oklab,#f6821f 16%,transparent);border:1px solid color-mix(in oklab,#f6821f 34%,transparent);color:#f6821f;flex:none}
+.tn-head-sub{font-size:11.5px;color:var(--dim);font-weight:400;margin-top:1px}
+.tn-loading{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:42px 16px;color:var(--dim);font-size:12.5px}
+.tn-spinner{width:22px;height:22px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--accent);animation:tn-spin .8s linear infinite}
+@keyframes tn-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.tn-spinner{animation:none;border-top-color:var(--accent);border-right-color:var(--accent)}}
+
+.tn-hero{position:relative;border-radius:10px;padding:15px 16px;margin-bottom:14px;border:1px solid color-mix(in oklab,var(--line) 72%,#f6821f 28%);background:linear-gradient(135deg,color-mix(in oklab,var(--card) 88%,#f6821f 12%) 0%,var(--surface-2) 65%)}
+.tn-hero-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.tn-hero-brand{display:flex;align-items:center;gap:10px;min-width:0}
+.tn-cloud-emblem{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:color-mix(in oklab,#f6821f 18%,var(--input-bg));border:1px solid color-mix(in oklab,#f6821f 40%,transparent);color:#f6821f;flex:none;box-shadow:0 4px 14px color-mix(in oklab,#f6821f 16%,transparent)}
+.tn-hero-title{font-size:14.5px;font-weight:700;color:var(--text);line-height:1.3}
+.tn-hero-sub{font-size:11.5px;color:var(--dim);margin-top:2px}
+.tn-badges{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.tn-pill{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid var(--line);background:var(--surface-2);color:var(--dim);line-height:1.4}
+.tn-pill.ok{background:var(--ok-soft);color:var(--ok);border-color:var(--ok-line)}
+.tn-pill.warn{background:var(--warn-soft);color:var(--warn);border-color:var(--warn-line)}
+.tn-pill.idle{background:var(--accent-soft);color:var(--accent);border-color:var(--accent-line)}
+.tn-pill-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+.tn-pill.ok .tn-pill-dot{box-shadow:0 0 6px currentColor}
+
+.tn-domain-bar{display:flex;align-items:center;gap:8px;padding:9px 11px;border-radius:8px;background:color-mix(in oklab,var(--input-bg) 88%,transparent);border:1px solid var(--line)}
+.tn-domain-label{font-size:11px;color:var(--dim);white-space:nowrap;flex:none}
+.tn-domain-link{flex:1;min-width:0;color:var(--accent);font-weight:600;font-size:12.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tn-domain-link:hover{color:var(--accent-hover);text-decoration:underline}
+.tn-mini-btn{padding:4px 9px;font-size:11.5px;border-radius:6px;background:var(--btn-bg);border:1px solid var(--line);color:var(--text);display:inline-flex;align-items:center;gap:4px;flex:none}
+.tn-mini-btn:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.tn-mini-btn svg{width:12px;height:12px}
+
+.tn-meta-strip{display:flex;align-items:center;flex-wrap:wrap;gap:6px 14px;margin-top:9px;padding-top:9px;border-top:1px solid color-mix(in oklab,var(--line) 75%,transparent);font-size:11.5px;color:var(--dim)}
+.tn-meta-item{display:inline-flex;align-items:center;gap:5px;min-width:0}
+.tn-meta-item svg{width:12px;height:12px;color:var(--accent);flex:none}
+.tn-meta-item code{color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;background:transparent;padding:0}
+
+.tn-slots-card{background:var(--surface-2);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:12px}
+.tn-slots-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 13px;background:color-mix(in oklab,var(--card) 70%,var(--surface-2));border-bottom:1px solid var(--line);flex-wrap:wrap}
+.tn-slots-title{font-size:12.5px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:6px}
+.tn-slots-title svg{width:14px;height:14px;color:var(--accent)}
+.tn-slots-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:10px 12px}
+.tn-slot{background:var(--input-bg);border:1px solid var(--line);border-radius:8px;padding:9px 11px;min-width:0;transition:border-color .15s,background .15s}
+.tn-slot.primary{border-color:color-mix(in oklab,var(--accent) 55%,var(--line));background:color-mix(in oklab,var(--accent) 6%,var(--input-bg))}
+.tn-slot-top{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:5px}
+.tn-slot-id{display:flex;align-items:center;gap:6px;min-width:0;font-size:12px;font-weight:700;color:var(--text)}
+.tn-slot-dot{width:7px;height:7px;border-radius:50%;background:var(--warn);flex:none}
+.tn-slot-dot.up{background:var(--ok);box-shadow:0 0 6px var(--ok-line)}
+.tn-slot-pri-badge{font-size:10px;font-weight:700;padding:1px 6px;border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent-line);white-space:nowrap}
+.tn-slot-tags{display:flex;align-items:center;gap:4px;flex:none}
+.tn-tag{font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;border:1px solid var(--line);background:var(--surface-2);color:var(--text);white-space:nowrap}
+.tn-tag.quic{background:var(--accent-softer);color:var(--accent);border-color:var(--accent-line)}
+.tn-tag.http2{background:color-mix(in oklab,#c4a7f5 14%,transparent);color:#c4a7f5;border-color:color-mix(in oklab,#c4a7f5 34%,transparent)}
+.tn-tag.ip4{background:var(--ok-soft);color:var(--ok);border-color:var(--ok-line)}
+.tn-tag.ip6{background:var(--warn-soft);color:var(--warn);border-color:var(--warn-line)}
+.tn-slot-edit-btn{padding:2px 5px;border-radius:5px;border:1px solid transparent;background:transparent;color:var(--dim);display:inline-flex;align-items:center;justify-content:center}
+.tn-slot-edit-btn:hover:not(:disabled){color:var(--accent);border-color:var(--line);background:var(--surface-2)}
+.tn-slot-edit-btn svg{width:12px;height:12px}
+.tn-slot-sub{font-size:11px;color:var(--dim);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;justify-content:space-between;gap:6px}
+.tn-slot-addr{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tn-slot-streams{color:var(--dim);font-size:10.5px;flex:none}
+
+.tn-slot-editor{display:flex;flex-direction:column;gap:7px}
+.tn-seg-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.tn-seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--surface-2)}
+.tn-seg button{border:0;border-radius:0;padding:2px 8px;font-size:10.5px;font-weight:600;background:transparent;color:var(--dim)}
+.tn-seg button:not(:last-child){border-right:1px solid var(--line)}
+.tn-seg button.active{background:var(--accent-soft);color:var(--accent)}
+.tn-slot-foot{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:1px}
+.tn-pri-pick{padding:2px 8px;font-size:10.5px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);color:var(--dim)}
+.tn-pri-pick.active{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+.tn-slot-save-btn{padding:2px 10px;font-size:11px;border-radius:5px}
+
+.tn-route-card{background:var(--input-bg);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.tn-route-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px;background:color-mix(in oklab,var(--card) 70%,var(--input-bg));border-bottom:1px solid var(--line);flex-wrap:wrap}
+.tn-route-title{font-size:12.5px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:6px}
+.tn-route-title svg{width:14px;height:14px;color:var(--accent)}
+.tn-route-origin{font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--dim);background:var(--surface-2);border:1px solid var(--line);padding:2px 8px;border-radius:999px}
+.tn-route-list{display:flex;flex-direction:column}
+.tn-route-row{display:grid;grid-template-columns:minmax(0,1.1fr) auto minmax(0,.95fr);align-items:center;gap:10px;padding:10px 14px;border-top:1px solid var(--line-soft);transition:background .15s}
+.tn-route-row:first-child{border-top:0}
+.tn-route-row:hover{background:var(--hover)}
+.tn-route-svc{display:flex;align-items:center;gap:9px;min-width:0}
+.tn-route-ico{width:26px;height:26px;border-radius:7px;display:grid;place-items:center;background:var(--accent-softer);border:1px solid var(--accent-line);color:var(--accent);flex:none}
+.tn-route-ico svg{width:13px;height:13px}
+.tn-route-ico.ws{background:color-mix(in oklab,#c4a7f5 14%,transparent);border-color:color-mix(in oklab,#c4a7f5 32%,transparent);color:#c4a7f5}
+.tn-route-ico.sub{background:var(--ok-soft);border-color:var(--ok-line);color:var(--ok)}
+.tn-route-ico.sui{background:var(--warn-soft);border-color:var(--warn-line);color:var(--warn)}
+.tn-route-name{font-size:12.5px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tn-route-note{font-size:11px;color:var(--dim)}
+.tn-route-path{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--accent);background:var(--accent-softer);border:1px solid var(--accent-line);padding:3px 9px;border-radius:6px;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:border-color .15s,background .15s}
+.tn-route-path:hover{border-color:var(--accent);background:var(--accent-soft)}
+.tn-route-path svg{width:11px;height:11px;opacity:.78}
+.tn-route-path.static{color:var(--dim);background:var(--surface-2);border-color:var(--line);cursor:default}
+.tn-route-path.static:hover{border-color:var(--line);background:var(--surface-2)}
+.tn-route-target{display:flex;align-items:center;justify-content:flex-end;gap:6px;min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--dim)}
+.tn-route-target-pill{padding:3px 8px;border-radius:6px;background:var(--surface-2);border:1px solid var(--line);color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* 配置模式选择卡片 */
+.tn-form-intro{display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border-radius:9px;background:var(--accent-softer);border:1px solid var(--accent-line);margin-bottom:12px;font-size:12px;color:var(--text);line-height:1.45}
+.tn-form-intro svg{width:16px;height:16px;color:var(--accent);flex:none;margin-top:2px}
+.tn-fieldset{border:0;padding:0;margin:0 0 12px}
+.tn-legend{font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;padding:0;display:block}
+.tn-choice-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.tn-choice-card{position:relative;display:flex;flex-direction:column;gap:3px;padding:9px 12px;border-radius:9px;border:1px solid var(--line);background:var(--surface-2);cursor:pointer;transition:border-color .15s,background .15s,box-shadow .15s;user-select:none}
+.tn-choice-card:hover{border-color:color-mix(in oklab,var(--accent) 60%,var(--line))}
+.tn-choice-card input[type=radio]{position:absolute;opacity:0;width:1px;height:1px;margin:0}
+.tn-choice-card:has(input:checked){border-color:var(--accent);background:var(--accent-softer);box-shadow:0 0 0 1px color-mix(in oklab,var(--accent) 45%,transparent)}
+.tn-choice-card:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
+.tn-choice-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.tn-choice-title{font-size:12.5px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:6px}
+.tn-choice-title svg{width:14px;height:14px;color:var(--accent)}
+.tn-choice-radio{width:15px;height:15px;border-radius:50%;border:1.5px solid var(--dim);display:grid;place-items:center;flex:none;transition:border-color .15s}
+.tn-choice-card:has(input:checked) .tn-choice-radio{border-color:var(--accent)}
+.tn-choice-card:has(input:checked) .tn-choice-radio::after{content:"";width:7px;height:7px;border-radius:50%;background:var(--accent)}
+.tn-choice-desc{font-size:11px;color:var(--dim);line-height:1.45}
+.tn-choice-tag{display:inline-block;font-size:10px;padding:1px 6px;border-radius:999px;background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-line);font-weight:600}
+
+.tn-quick-note{display:none;padding:11px 13px;border-radius:9px;background:var(--surface-2);border:1px dashed var(--accent-line);margin-bottom:12px;font-size:12px;color:var(--dim);line-height:1.5}
+.tn-quick-note b{color:var(--text)}
+.tn-field-group{display:flex;flex-direction:column;gap:11px;margin-bottom:12px}
+.tn-field{display:flex;flex-direction:column;gap:5px}
+.tn-label{font-size:12px;font-weight:600;color:var(--text);display:flex;align-items:center;justify-content:space-between;gap:8px}
+.tn-label-hint{font-size:11px;font-weight:400;color:var(--dim)}
+.tn-input-wrap{position:relative;display:flex;align-items:center;background:var(--input-bg);border:1px solid var(--line);border-radius:8px;transition:border-color .15s,box-shadow .15s}
+.tn-input-wrap:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-softer)}
+.tn-input-wrap input{border:0;background:transparent;box-shadow:none;padding:8px 11px;min-width:0;flex:1}
+.tn-input-wrap input:focus{outline:none}
+.tn-eye-btn{border:0;background:transparent;color:var(--dim);padding:6px 10px;border-radius:0 7px 7px 0;height:100%}
+.tn-eye-btn:hover:not(:disabled){color:var(--accent);background:var(--hover)}
+.tn-help{font-size:11px;color:var(--dim);line-height:1.45}
+
+.tn-msg{display:none;padding:9px 12px;margin-bottom:12px;border-radius:8px;font-size:12px;line-height:1.45;border:1px solid var(--line)}
+.tn-msg.err{display:block;background:var(--bad-soft);border-color:var(--bad-line);color:var(--bad)}
+.tn-msg.ok{display:block;background:var(--ok-soft);border-color:var(--ok-line);color:var(--ok)}
+
+.tn-foot{justify-content:space-between;flex-wrap:wrap}
+.tn-foot-group{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+button.tn-danger-btn{color:var(--bad);border-color:var(--bad-line);background:var(--bad-soft)}
+button.tn-danger-btn:hover:not(:disabled){background:color-mix(in oklab,var(--bad) 18%,transparent);border-color:var(--bad);color:var(--bad)}
+
+/* 平滑迁移模态框 */
+.tn-mig-banner{display:flex;align-items:flex-start;gap:12px;background:var(--accent-softer);border:1px solid var(--accent-line);border-radius:10px;padding:13px 14px;margin-bottom:14px}
+.tn-mig-banner-ico{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);flex:none}
+.tn-mig-banner-title{font-weight:700;font-size:13px;color:var(--text);margin-bottom:3px}
+.tn-mig-banner-desc{font-size:12px;color:var(--dim);line-height:1.5}
+.tn-mig-url-card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:13px 14px;margin-bottom:14px}
+.tn-mig-url-box{display:flex;align-items:center;gap:8px;background:var(--input-bg);border:1px solid var(--line);border-radius:8px;padding:6px 8px 6px 11px;margin:6px 0 8px}
+.tn-mig-url-box input{flex:1;background:transparent;border:none;color:var(--accent);font-weight:600;font-size:12.5px;outline:none;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;padding:2px 0}
+.tn-mig-probe-card{background:var(--input-bg);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.tn-mig-probe-row{display:flex;align-items:center;gap:8px;font-size:12px}
+.tn-mig-dot{width:9px;height:9px;border-radius:50%;background:var(--warn);flex:none}
+.tn-mig-dot.pulsing{animation:pulse 1.2s ease-in-out infinite}
+.tn-mig-progress{height:4px;border-radius:999px;background:var(--track);overflow:hidden;margin:10px 0 8px}
+.tn-mig-progress-bar{height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--ok));border-radius:999px;transition:width .35s ease}
+
+@media (max-width:600px){
+  .tn-slots-grid{grid-template-columns:1fr}
+  .tn-choice-grid{grid-template-columns:1fr}
+  .tn-route-row{grid-template-columns:1fr;gap:6px}
+  .tn-route-target{justify-content:flex-start}
+}
+@media (forced-colors:active){
+  .tn-hero,.tn-slots-card,.tn-slot,.tn-route-card,.tn-choice-card,.tn-domain-bar{border:1px solid CanvasText}
+  .tn-choice-card:has(input:checked),.tn-slot.primary{outline:2px solid Highlight}
+}
 
 </style>
 </head>
@@ -709,194 +886,381 @@ option{background:var(--surface-2);color:var(--text);padding:8px}
 </div>
 
 <!-- Modal: Cloudflare 隧道与轻量网关分流配置 -->
-<div class="modal" id="tunnelModal">
-  <div class="sheet" style="max-width:580px">
+<div class="modal" id="tunnelModal" role="dialog" aria-modal="true" aria-labelledby="tnModalTitle">
+  <div class="sheet tn-sheet">
     <div class="head">
-      <h2 style="display:flex;align-items:center;gap:8px">
-        <svg viewBox="0 0 24 24" style="color:#f6821f;fill:#f6821f" width="20" height="20">
+      <div class="tn-head-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="16" height="16" style="fill:currentColor;stroke:none">
           <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/>
         </svg>
-        Cloudflare 隧道与分流配置
-      </h2>
+      </div>
+      <div>
+        <h2 id="tnModalTitle">Cloudflare 隧道与分流网关</h2>
+        <div class="tn-head-sub">内嵌轻量反代分流 · 隐藏源站 IP 与管理端口</div>
+      </div>
       <span class="spacer"></span>
-      <button class="icon" data-close="tunnelModal"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+      <button type="button" class="icon" data-close="tunnelModal" aria-label="关闭隧道配置面板"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
-    <div class="body" style="padding-top:14px">
+
+    <div class="body">
       <!-- 1. 加载中 -->
-      <div id="tnLoading" style="text-align:center;padding:28px;color:var(--dim)">正在获取隧道与分流配置...</div>
+      <div id="tnLoading" class="tn-loading" role="status" aria-live="polite">
+        <span class="tn-spinner" aria-hidden="true"></span>
+        <span>正在获取隧道与分流网关状态...</span>
+      </div>
 
       <!-- 2. 当前已配置状态卡片 -->
       <div id="tnStatusCard" style="display:none">
-        <!-- 概览卡片 -->
-        <div style="background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-            <div style="display:flex;align-items:center;gap:8px">
-              <svg viewBox="0 0 24 24" style="color:#f6821f;fill:#f6821f" width="18" height="18">
-                <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/>
-              </svg>
-              <span id="tnModeTitle" style="font-weight:600;font-size:14px;color:var(--text)">Cloudflare 隧道</span>
+        <!-- 概览横幅 -->
+        <div class="tn-hero">
+          <div class="tn-hero-top">
+            <div class="tn-hero-brand">
+              <div class="tn-cloud-emblem" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="20" height="20" style="fill:currentColor;stroke:none">
+                  <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/>
+                </svg>
+              </div>
+              <div style="min-width:0">
+                <div id="tnModeTitle" class="tn-hero-title">Cloudflare 隧道</div>
+                <div class="tn-hero-sub" id="tnModeSub">边缘流量经本地轻量网关自动分发</div>
+              </div>
             </div>
-            <div style="display:flex;gap:6px">
-              <span id="tnStatusBadge" class="pool-tag residential" style="font-size:11px">● 隧道运行中</span>
-              <span id="tnGatewayBadge" class="pool-tag residential" style="font-size:11px">● 网关就绪</span>
+            <div class="tn-badges">
+              <span id="tnStatusBadge" class="tn-pill ok"><span class="tn-pill-dot" aria-hidden="true"></span><span class="tn-pill-text">隧道运行中</span></span>
+              <span id="tnGatewayBadge" class="tn-pill ok"><span class="tn-pill-dot" aria-hidden="true"></span><span class="tn-pill-text">网关就绪</span></span>
             </div>
           </div>
-          <div style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:6px">
-            <span>托管访问域名:</span>
-            <a id="tnDomainLink" href="#" target="_blank" style="color:var(--accent);font-weight:600;text-decoration:none;word-break:break-all">-</a>
+
+          <div class="tn-domain-bar">
+            <span class="tn-domain-label">托管域名</span>
+            <a id="tnDomainLink" class="tn-domain-link" href="#" target="_blank" rel="noopener noreferrer">-</a>
+            <button type="button" id="tnCopyDomainBtn" class="tn-mini-btn" title="复制完整面板访问 URL">
+              <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              复制面板地址
+            </button>
+          </div>
+
+          <div class="tn-meta-strip">
+            <span class="tn-meta-item">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              凭据 <code id="tnTokenMasked">已配置</code>
+            </span>
+            <span class="tn-meta-item">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+              回源 <code id="tnTunnelPort">127.0.0.1:8081</code>
+            </span>
+            <span class="tn-meta-item">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              默认 <code id="tnProtocolBadge">QUIC</code>
+            </span>
           </div>
         </div>
 
-        <!-- 路由映射 -->
-        <div style="background:var(--input-bg);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12px">
-          <div style="font-weight:600;margin-bottom:8px;color:var(--text);display:flex;align-items:center;justify-content:space-between">
-            <span>内置轻量反代网关路由映射</span>
-            <span id="tnBackPortHint" style="font-size:11px;color:var(--dim)">回源 127.0.0.1:8081</span>
+        <!-- 4 路边缘隧道池 -->
+        <div class="tn-slots-card">
+          <div class="tn-slots-head">
+            <div class="tn-slots-title">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 12l10 5 10-5"/><path d="M2 17l10 5 10-5"/></svg>
+              边缘隧道池 (4 路并发)
+            </div>
+            <span id="tnPrimarySummary" class="tn-route-origin">主用: 隧道 #1</span>
           </div>
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid var(--line)">
-            <div>
-              <div style="font-weight:600;color:var(--text)">sout 管理面板</div>
-              <div id="tnSoutPath" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--accent);font-size:11px">/sout/</div>
-            </div>
-            <div style="text-align:right">
-              <span id="tnSoutPort" class="pool-tag residential" style="font-size:11px">127.0.0.1:43322</span>
-            </div>
-          </div>
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid var(--line)">
-            <div>
-              <div style="font-weight:600;color:var(--text)">节点 WebSocket 流量透传</div>
-              <div id="tnWsPath" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--accent);font-size:11px">/wsargo*</div>
-            </div>
-            <div style="text-align:right">
-              <span id="tnNodePort" class="pool-tag residential" style="font-size:11px">127.0.0.1:26060</span>
-            </div>
-          </div>
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid var(--line)">
-            <div>
-              <div style="font-weight:600;color:var(--text)">免密独立订阅分流入口</div>
-              <div id="tnSubPath" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--accent);font-size:11px">/sub*</div>
-            </div>
-            <div style="text-align:right">
-              <span class="pool-tag residential" style="font-size:11px">自动重写直达</span>
-            </div>
-          </div>
-          <div id="tnSuiRow" style="display:none;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid var(--line)">
-            <div>
-              <div style="font-weight:600;color:var(--text)">s-ui 节点管理面板</div>
-              <div id="tnSuiPath" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--accent);font-size:11px">/sui/</div>
-            </div>
-            <div style="text-align:right">
-              <span id="tnSuiPort" class="pool-tag datacenter" style="font-size:11px">127.0.0.1:2096</span>
-            </div>
-          </div>
+          <div id="tnSlotsGrid" class="tn-slots-grid"></div>
         </div>
 
-        <!-- 参数详情 -->
-        <div style="background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:10px 12px;font-size:11px;color:var(--dim);line-height:1.6;margin-bottom:14px">
-          <div>• <b>隧道 Token:</b> <code id="tnTokenMasked" style="color:var(--text)">已配置</code></div>
-          <div>• <b>本地回源端口:</b> <code id="tnTunnelPort" style="color:var(--text)">127.0.0.1:8081</code></div>
-          <div>• <b>传输协议:</b> <code id="tnProtocolBadge" style="color:var(--text)">QUIC</code></div>
-        </div>
+        <!-- 路由映射拓扑 -->
+        <div class="tn-route-card">
+          <div class="tn-route-head">
+            <div class="tn-route-title">
+              <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4v16"/><path d="M9 6h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9"/></svg>
+              内置轻量反代网关路由映射
+            </div>
+            <span id="tnBackPortHint" class="tn-route-origin">回源 127.0.0.1:8081</span>
+          </div>
+          <div class="tn-route-list">
+            <div class="tn-route-row">
+              <div class="tn-route-svc">
+                <span class="tn-route-ico" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+                </span>
+                <div style="min-width:0">
+                  <div class="tn-route-name">sout 管理面板</div>
+                  <div class="tn-route-note">隔离路径反代</div>
+                </div>
+              </div>
+              <button type="button" class="tn-route-path" data-tn-copy-path="sout" title="点击复制完整管理面板 URL">
+                <span id="tnSoutPath">/sout/</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              </button>
+              <div class="tn-route-target">
+                <span aria-hidden="true">→</span>
+                <span id="tnSoutPort" class="tn-route-target-pill">127.0.0.1:43322</span>
+              </div>
+            </div>
 
-        <!-- 操作按钮工具栏 -->
-        <div style="display:flex;gap:8px;justify-content:flex-end">
-          <button id="tnRestartBtn" style="display:inline-flex;align-items:center;gap:4px">🔄 重启隧道</button>
-          <button id="tnSwitchToConfigBtn" class="primary" style="display:inline-flex;align-items:center;gap:4px">⚙ 更换/配置隧道</button>
-          <button id="tnDeleteBtn" style="color:var(--bad);display:inline-flex;align-items:center;gap:4px">🗑 关闭隧道</button>
+            <div class="tn-route-row">
+              <div class="tn-route-svc">
+                <span class="tn-route-ico ws" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                </span>
+                <div style="min-width:0">
+                  <div class="tn-route-name">节点 WebSocket 透传</div>
+                  <div class="tn-route-note">零缓冲流式转发</div>
+                </div>
+              </div>
+              <code class="tn-route-path static" id="tnWsPath">/wsargo*</code>
+              <div class="tn-route-target">
+                <span aria-hidden="true">→</span>
+                <span id="tnNodePort" class="tn-route-target-pill">127.0.0.1:26060</span>
+              </div>
+            </div>
+
+            <div class="tn-route-row">
+              <div class="tn-route-svc">
+                <span class="tn-route-ico sub" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                </span>
+                <div style="min-width:0">
+                  <div class="tn-route-name">免密独立订阅入口</div>
+                  <div class="tn-route-note">客户端导入链接</div>
+                </div>
+              </div>
+              <button type="button" class="tn-route-path" data-tn-copy-path="sub" title="点击复制完整免密订阅 URL">
+                <span id="tnSubPath">/sub*</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              </button>
+              <div class="tn-route-target">
+                <span aria-hidden="true">→</span>
+                <span class="tn-route-target-pill" style="color:var(--ok);border-color:var(--ok-line);background:var(--ok-soft)">自动重写直达</span>
+              </div>
+            </div>
+
+            <div id="tnSuiRow" class="tn-route-row" style="display:none">
+              <div class="tn-route-svc">
+                <span class="tn-route-ico sui" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                </span>
+                <div style="min-width:0">
+                  <div class="tn-route-name">s-ui 节点管理面板</div>
+                  <div class="tn-route-note">共存面板分流</div>
+                </div>
+              </div>
+              <button type="button" class="tn-route-path" data-tn-copy-path="sui" title="点击复制完整 s-ui 面板 URL">
+                <span id="tnSuiPath">/sui/</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              </button>
+              <div class="tn-route-target">
+                <span aria-hidden="true">→</span>
+                <span id="tnSuiPort" class="tn-route-target-pill">127.0.0.1:2096</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
       <!-- 3. 配置 / 更换隧道表单卡片 -->
       <div id="tnConfigCard" style="display:none">
-        <div style="background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:11.5px;color:var(--dim);line-height:1.5">
-          💡 <span style="color:var(--text)">填写域名与 Token 绑定命名隧道，留空直接保存将启用免费临时隧道；可随时修改端口或切换连接协议。</span>
-        </div>
+        <form id="tnConfigForm" novalidate>
+          <div class="tn-form-intro">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            <div>支持绑定自有域名的 <b>命名固定隧道</b>，或一键申请免域名的 <b>免费临时隧道</b>；保存后服务将自动切入本地网关保护。</div>
+          </div>
 
-        <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:16px">
-          <div>
-            <label style="display:block;font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text)">隧道域名 (Domain)</label>
-            <input id="tnInputDomain" type="text" placeholder="例如 node.example.com (留空则使用免费临时隧道)" style="width:100%;box-sizing:border-box">
-          </div>
-          <div>
-            <label style="display:block;font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text)">隧道 Token (Tunnel Token)</label>
-            <input id="tnInputToken" type="text" placeholder="留空使用免费临时隧道；已有隧道保持掩码即沿用" style="width:100%;box-sizing:border-box">
-          </div>
-          <div>
-            <label style="display:block;font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text)">本地回源端口 (Port)</label>
-            <input id="tnInputPort" type="number" value="8081" placeholder="默认 8081" style="width:100%;box-sizing:border-box">
-          </div>
-          <div>
-            <label style="display:block;font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text)">隧道连接协议 (Protocol)</label>
-            <select id="tnInputProtocol" style="width:100%;box-sizing:border-box;background:var(--input-bg);color:var(--text);border:1px solid var(--line);padding:8px 10px;border-radius:6px;font-size:12px">
-              <option value="quic">QUIC (默认推荐，基于 UDP 传输，延迟更低、速度更快)</option>
-              <option value="http2">HTTP/2 (兼容模式，基于 TCP 传输，适合阻断 UDP/QUIC 的网络)</option>
-            </select>
-          </div>
-        </div>
+          <!-- 接入模式单选卡片 -->
+          <fieldset class="tn-fieldset">
+            <legend class="tn-legend">接入模式</legend>
+            <div class="tn-choice-grid">
+              <label class="tn-choice-card" for="tnModeNamed">
+                <input type="radio" id="tnModeNamed" name="tnMode" value="named" checked>
+                <div class="tn-choice-head">
+                  <span class="tn-choice-title">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                    命名固定隧道
+                  </span>
+                  <span class="tn-choice-radio" aria-hidden="true"></span>
+                </div>
+                <span class="tn-choice-desc">绑定自有域名与 Zero Trust Token，域名永久不变</span>
+              </label>
 
-        <div id="tnActionMsg" style="display:none;padding:8px 12px;margin-bottom:12px;border-radius:6px;font-size:12px"></div>
+              <label class="tn-choice-card" for="tnModeQuick">
+                <input type="radio" id="tnModeQuick" name="tnMode" value="quick">
+                <div class="tn-choice-head">
+                  <span class="tn-choice-title">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                    免费临时隧道
+                  </span>
+                  <span class="tn-choice-radio" aria-hidden="true"></span>
+                </div>
+                <span class="tn-choice-desc">免域名免 Token，自动分配 trycloudflare.com 地址</span>
+              </label>
+            </div>
+          </fieldset>
 
-        <div style="display:flex;gap:8px;justify-content:flex-end">
-          <button id="tnCancelConfigBtn" style="display:none">返回状态</button>
-          <button id="tnSaveConfigBtn" class="primary" style="display:inline-flex;align-items:center;gap:4px">💾 保存并应用隧道</button>
-        </div>
+          <!-- 临时隧道提示 -->
+          <div id="tnQuickModeNote" class="tn-quick-note">
+            <b>已选择免费临时隧道模式</b>：无需提前准备域名与 Token，点击下方「保存并应用隧道」后，系统将自动向 Cloudflare 申请临时隧道并配置路由映射。
+          </div>
+
+          <!-- 命名隧道字段 -->
+          <div id="tnNamedFieldsBox" class="tn-field-group">
+            <div class="tn-field">
+              <label class="tn-label" for="tnInputDomain">
+                <span>隧道域名 (Domain)</span>
+                <span class="tn-label-hint">已在 Cloudflare 托管的域名</span>
+              </label>
+              <input id="tnInputDomain" name="domain" type="text" placeholder="例如 node.example.com" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" aria-describedby="tnDomainHelp">
+              <span id="tnDomainHelp" class="tn-help">请在 Cloudflare Zero Trust 中将此域名的 Public Hostname 指向本机回源端口。</span>
+            </div>
+
+            <div class="tn-field">
+              <label class="tn-label" for="tnInputToken">
+                <span>隧道 Token (Tunnel Token)</span>
+                <span class="tn-label-hint">已有隧道保持掩码即沿用原凭据</span>
+              </label>
+              <div class="tn-input-wrap">
+                <input id="tnInputToken" name="token" type="password" placeholder="粘贴 eyJhIjoi... 开头的隧道 Token" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
+                <button type="button" id="tnToggleTokenBtn" class="tn-eye-btn" aria-pressed="false" aria-label="显示或隐藏隧道 Token" title="显示/隐藏 Token">
+                  <svg id="tnEyeIconOpen" viewBox="0 0 24 24" width="15" height="15"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                  <svg id="tnEyeIconClosed" viewBox="0 0 24 24" width="15" height="15" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 端口与传输协议 -->
+          <div class="tn-field-group" style="margin-bottom:4px">
+            <div class="tn-field">
+              <label class="tn-label" for="tnInputPort">
+                <span>本地回源端口 (Port)</span>
+                <span class="tn-label-hint">默认 8081</span>
+              </label>
+              <input id="tnInputPort" name="port" type="text" value="8081" inputmode="numeric" pattern="\d+" placeholder="8081" autocomplete="off">
+            </div>
+
+            <fieldset class="tn-fieldset" style="margin-bottom:0">
+              <legend class="tn-legend">隧道传输协议 (Protocol)</legend>
+              <input type="hidden" id="tnInputProtocol" value="quic">
+              <div class="tn-choice-grid">
+                <label class="tn-choice-card" for="tnProtoQuic">
+                  <input type="radio" id="tnProtoQuic" name="tnProtocolRadio" value="quic" checked>
+                  <div class="tn-choice-head">
+                    <span class="tn-choice-title">QUIC <span class="tn-choice-tag">推荐</span></span>
+                    <span class="tn-choice-radio" aria-hidden="true"></span>
+                  </div>
+                  <span class="tn-choice-desc">基于 UDP 传输，握手更快、抗丢包与延迟表现更优</span>
+                </label>
+
+                <label class="tn-choice-card" for="tnProtoHttp2">
+                  <input type="radio" id="tnProtoHttp2" name="tnProtocolRadio" value="http2">
+                  <div class="tn-choice-head">
+                    <span class="tn-choice-title">HTTP/2</span>
+                    <span class="tn-choice-radio" aria-hidden="true"></span>
+                  </div>
+                  <span class="tn-choice-desc">基于 TCP 传输，适合屏蔽或限速 UDP 的网络环境</span>
+                </label>
+              </div>
+            </fieldset>
+          </div>
+
+          <div id="tnActionMsg" class="tn-msg" role="status" aria-live="polite"></div>
+        </form>
       </div>
     </div>
-    <div class="foot">
-      <span class="spacer"></span>
-      <button data-close="tunnelModal">关闭</button>
+
+    <div class="foot tn-foot">
+      <!-- 状态视图底部工具栏 -->
+      <div id="tnStatusFoot" class="tn-foot-group" style="display:none;width:100%;justify-content:space-between">
+        <button type="button" id="tnDeleteBtn" class="tn-danger-btn">
+          <svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          关闭隧道
+        </button>
+        <div class="tn-foot-group">
+          <button type="button" id="tnRestartBtn">
+            <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+            重启隧道
+          </button>
+          <button type="button" id="tnSwitchToConfigBtn" class="primary">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            更换/配置隧道
+          </button>
+          <button type="button" data-close="tunnelModal">关闭</button>
+        </div>
+      </div>
+
+      <!-- 配置视图底部工具栏 -->
+      <div id="tnConfigFoot" class="tn-foot-group" style="display:none;width:100%;justify-content:flex-end">
+        <button type="button" id="tnCancelConfigBtn" style="display:none">返回状态</button>
+        <button type="button" data-close="tunnelModal">取消</button>
+        <button type="submit" form="tnConfigForm" id="tnSaveConfigBtn" class="primary">
+          <svg viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          保存并应用隧道
+        </button>
+      </div>
+
+      <!-- 加载状态底部 -->
+      <div id="tnLoadingFoot" class="tn-foot-group" style="width:100%;justify-content:flex-end">
+        <button type="button" data-close="tunnelModal">关闭</button>
+      </div>
     </div>
   </div>
 </div>
 
 <!-- Modal: 隧道平滑切换迁移指引 (绝不强跳，杜绝503丢失页面) -->
-<div class="modal" id="tnMigrationModal" data-static="true">
-  <div class="sheet" style="max-width:580px;border:1px solid var(--accent);box-shadow:0 8px 32px rgba(0,0,0,0.6)">
+<div class="modal" id="tnMigrationModal" data-static="true" role="dialog" aria-modal="true" aria-labelledby="tnMigTitle">
+  <div class="sheet tn-sheet" style="border-color:var(--accent)">
     <div class="head">
-      <h2 style="display:flex;align-items:center;gap:8px;color:var(--text)">
-        <span style="display:inline-block">🌀</span>
-        Cloudflare 边缘隧道正在平滑接入
-      </h2>
+      <div class="tn-head-icon" style="color:var(--accent);background:var(--accent-soft);border-color:var(--accent-line)" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+      </div>
+      <div>
+        <h2 id="tnMigTitle">Cloudflare 边缘隧道正在平滑接入</h2>
+        <div class="tn-head-sub">保留当前会话引导迁移 · 自动探测边缘路由就绪状态</div>
+      </div>
     </div>
-    <div class="body" style="padding-top:16px;line-height:1.6">
-      <div style="background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:14px">
-        <div style="font-weight:600;font-size:13px;color:var(--accent);margin-bottom:4px">
-          🎉 隧道配置已应用成功，后端服务已切入本地反代保护！
+    <div class="body">
+      <div class="tn-mig-banner">
+        <div class="tn-mig-banner-ico" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="17" height="17"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
         </div>
-        <div style="font-size:12px;color:var(--dim)">
-          Cloudflare 全球 CDN 边缘节点正在建立路由分发与 TLS 握手，通常需要 10~30 秒。请妥善保存以下新访问信息：
+        <div>
+          <div class="tn-mig-banner-title">隧道配置已应用，后端已切入本地反代保护</div>
+          <div class="tn-mig-banner-desc">Cloudflare 边缘节点正在完成路由分发与 TLS 握手（通常需 10–30 秒），请保存下方新访问地址：</div>
         </div>
       </div>
 
       <!-- 新地址常驻卡片 -->
-      <div style="background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:14px">
-        <div style="font-size:12px;color:var(--dim);margin-bottom:6px">📌 新的 Web 管理面板访问地址：</div>
-        <div style="display:flex;align-items:center;gap:8px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px 12px;margin-bottom:8px">
-          <input id="tnMigrateUrlInput" type="text" readonly style="flex:1;background:transparent;border:none;color:var(--accent);font-weight:600;font-size:13px;outline:none;font-family:ui-monospace,monospace">
-          <button id="tnMigrateCopyBtn" class="primary" style="padding:4px 12px;font-size:12px">一键复制</button>
+      <div class="tn-mig-url-card">
+        <label for="tnMigrateUrlInput" style="font-size:12px;font-weight:600;color:var(--text);display:block">新的 Web 管理面板访问地址</label>
+        <div class="tn-mig-url-box">
+          <input id="tnMigrateUrlInput" type="text" readonly spellcheck="false">
+          <button type="button" id="tnMigrateCopyBtn" class="primary" style="padding:5px 11px;font-size:12px">
+            <svg viewBox="0 0 24 24" width="13" height="13"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            复制地址
+          </button>
         </div>
-        <div style="display:flex;gap:8px;align-items:center;justify-content:space-between">
-          <span style="font-size:11px;color:var(--dim)">访问口令保持不变，原直连公网已收敛安全保护</span>
-          <a id="tnMigrateNewTabLink" href="#" target="_blank" style="font-size:12px;color:var(--accent);text-decoration:underline">在新标签页打开 ↗</a>
+        <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap">
+          <span style="font-size:11px;color:var(--dim)">访问口令保持不变，原公网端口已收敛安全保护</span>
+          <a id="tnMigrateNewTabLink" href="#" target="_blank" rel="noopener noreferrer" style="font-size:12px;color:var(--accent);text-decoration:none;font-weight:600">在新标签页打开 ↗</a>
         </div>
       </div>
 
       <!-- 实时探测状态 -->
-      <div style="background:var(--input-bg);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:16px">
-        <div style="display:flex;align-items:center;gap:8px;font-size:12px">
-          <span id="tnMigrateDot" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--warn)"></span>
-          <span id="tnMigrateStatusText" style="color:var(--text);font-weight:500">正在等待 Cloudflare 边缘网络建立路由... (探测中 0/25)</span>
+      <div class="tn-mig-probe-card" role="status" aria-live="polite">
+        <div class="tn-mig-probe-row">
+          <span id="tnMigrateDot" class="tn-mig-dot pulsing" aria-hidden="true"></span>
+          <span id="tnMigrateStatusText" style="color:var(--text);font-weight:600">正在等待 Cloudflare 边缘网络建立路由... (探测中 0/25)</span>
         </div>
-        <div id="tnMigrateTip" style="font-size:11px;color:var(--dim);margin-top:6px">
-          提示：若遇 Cloudflare 503/521/522 报错无需慌张，这仅表示边缘节点尚在握手同步中，稍候刷新即可就绪。
+        <div class="tn-mig-progress" aria-hidden="true">
+          <div id="tnMigrateProgressBar" class="tn-mig-progress-bar"></div>
+        </div>
+        <div id="tnMigrateTip" style="font-size:11px;color:var(--dim);line-height:1.45">
+          若遇 Cloudflare 503/521/522 报错无需慌张，这仅表示边缘节点尚在握手同步中，稍候刷新即可就绪。
         </div>
       </div>
-
-      <!-- 操作区域 -->
-      <div style="display:flex;gap:10px;justify-content:flex-end">
-        <button id="tnMigrateStayBtn" style="font-size:12px">留在当前页</button>
-        <button id="tnMigrateGoBtn" class="primary" style="font-size:12px;padding:8px 18px;font-weight:600" disabled>等待边缘网络就绪…</button>
-      </div>
+    </div>
+    <div class="foot tn-foot" style="justify-content:flex-end">
+      <button type="button" id="tnMigrateStayBtn">留在当前页</button>
+      <button type="button" id="tnMigrateGoBtn" class="primary" disabled>等待边缘网络就绪…</button>
     </div>
   </div>
 </div>
@@ -1309,11 +1673,55 @@ async function copy(text, label){
   toast(ok ? (label || '已复制链接') : '复制失败，请手动选中', !ok);
 }
 
-function openModal(id){ $('#' + id).classList.add('open'); }
-function closeModal(id){ $('#' + id).classList.remove('open'); }
+let modalLastFocus = null;
+function openModal(id){
+  const m = $('#' + id);
+  if(!m) return;
+  if(!m.classList.contains('open')) modalLastFocus = document.activeElement;
+  m.classList.add('open');
+}
+function closeModal(id){
+  const m = $('#' + id);
+  if(!m) return;
+  m.classList.remove('open');
+  if(modalLastFocus && typeof modalLastFocus.focus === 'function' && !document.querySelector('.modal.open')){
+    try{ modalLastFocus.focus(); }catch(e){}
+    modalLastFocus = null;
+  }
+}
 document.addEventListener('click', e => {
   const c = e.target.closest('[data-close]');
   if(c) closeModal(c.dataset.close);
+});
+// 仅当指针按下与抬起均位于 .sheet 外部时触发 light-dismiss，避免拖拽选字误关闭
+let modalPressedOutside = null;
+document.addEventListener('pointerdown', e => {
+  const m = e.target.closest('.modal.open');
+  if(!m || m.dataset.static === 'true'){ modalPressedOutside = null; return; }
+  const sheet = m.querySelector('.sheet');
+  if(sheet){
+    const r = sheet.getBoundingClientRect();
+    const outside = e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+    modalPressedOutside = outside ? m : null;
+  }
+});
+document.addEventListener('pointerup', e => {
+  const m = modalPressedOutside;
+  modalPressedOutside = null;
+  if(!m || !m.classList.contains('open') || m.dataset.static === 'true') return;
+  const sheet = m.querySelector('.sheet');
+  if(sheet){
+    const r = sheet.getBoundingClientRect();
+    const outside = e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+    if(outside) closeModal(m.id);
+  }
+});
+document.addEventListener('keydown', e => {
+  if(e.key !== 'Escape') return;
+  const openModals = Array.from(document.querySelectorAll('.modal.open'));
+  if(!openModals.length) return;
+  const topModal = openModals[openModals.length - 1];
+  if(topModal.dataset.static !== 'true') closeModal(topModal.id);
 });
 
 let viewData = {nodes:[], exits:[], public_ip:''};
@@ -2479,80 +2887,341 @@ $('#setSSLEnabled').onchange = () => {
 
 let curTunnelData = null;
 
+function showTunnelView(view) {
+  $('#tnLoading').style.display = (view === 'loading') ? 'flex' : 'none';
+  $('#tnStatusCard').style.display = (view === 'status') ? 'block' : 'none';
+  $('#tnConfigCard').style.display = (view === 'config') ? 'block' : 'none';
+
+  $('#tnLoadingFoot').style.display = (view === 'loading') ? 'flex' : 'none';
+  $('#tnStatusFoot').style.display = (view === 'status') ? 'flex' : 'none';
+  $('#tnConfigFoot').style.display = (view === 'config') ? 'flex' : 'none';
+}
+
+function setTunnelActionMsg(msg, isErr) {
+  const box = $('#tnActionMsg');
+  if (!box) return;
+  if (!msg) {
+    box.className = 'tn-msg';
+    box.textContent = '';
+    return;
+  }
+  box.textContent = msg;
+  box.className = 'tn-msg ' + (isErr ? 'err' : 'ok');
+}
+
+function setTunnelConfigMode(mode) {
+  const isQuick = mode === 'quick';
+  $('#tnModeQuick').checked = isQuick;
+  $('#tnModeNamed').checked = !isQuick;
+  $('#tnNamedFieldsBox').style.display = isQuick ? 'none' : 'flex';
+  $('#tnQuickModeNote').style.display = isQuick ? 'block' : 'none';
+  setTunnelActionMsg('', false);
+}
+
+function setTunnelProtocol(proto) {
+  const p = (String(proto || '').toLowerCase() === 'http2') ? 'http2' : 'quic';
+  $('#tnInputProtocol').value = p;
+  $('#tnProtoHttp2').checked = (p === 'http2');
+  $('#tnProtoQuic').checked = (p === 'quic');
+}
+
+document.querySelectorAll('input[name="tnMode"]').forEach(r => {
+  r.addEventListener('change', () => setTunnelConfigMode(r.value));
+});
+document.querySelectorAll('input[name="tnProtocolRadio"]').forEach(r => {
+  r.addEventListener('change', () => setTunnelProtocol(r.value));
+});
+
+$('#tnToggleTokenBtn').onclick = () => {
+  const inp = $('#tnInputToken');
+  const show = inp.type === 'password';
+  inp.type = show ? 'text' : 'password';
+  $('#tnToggleTokenBtn').setAttribute('aria-pressed', show ? 'true' : 'false');
+  $('#tnEyeIconOpen').style.display = show ? 'none' : 'block';
+  $('#tnEyeIconClosed').style.display = show ? 'block' : 'none';
+};
+
+['#tnInputDomain', '#tnInputToken', '#tnInputPort'].forEach(sel => {
+  const el = $(sel);
+  if (el) el.addEventListener('input', () => setTunnelActionMsg('', false));
+});
+
+function setTunnelBadge(id, active, okText, badText) {
+  const el = $(id);
+  if (!el) return;
+  el.className = 'tn-pill ' + (active ? 'ok' : 'warn');
+  const txt = el.querySelector('.tn-pill-text');
+  if (txt) txt.textContent = active ? okText : badText;
+}
+
+let editingTunnelSlot = -1;
+let slotEditDraft = null;
+
+function renderTunnelSlots(t) {
+  const grid = $('#tnSlotsGrid');
+  if (!grid) return;
+  const slots = (t && Array.isArray(t.tunnel_slots) && t.tunnel_slots.length) ? t.tunnel_slots : [];
+  if (!slots.length) {
+    grid.innerHTML = '';
+    return;
+  }
+
+  let primaryNum = 1;
+  slots.forEach(s => { if (s.is_primary) primaryNum = (s.index || 0) + 1; });
+  const priEl = $('#tnPrimarySummary');
+  if (priEl) priEl.textContent = '主用: 隧道 #' + primaryNum;
+
+  grid.innerHTML = slots.map(s => {
+    const idx = Number(s.index || 0);
+    const num = idx + 1;
+    const isPri = !!s.is_primary;
+    const isUp = !!s.connected;
+    const proto = (s.protocol || t.protocol || 'quic').toLowerCase() === 'http2' ? 'http2' : 'quic';
+    const protoLabel = proto === 'http2' ? 'HTTP/2' : 'QUIC';
+    const cfgIP = Number(s.cfg_ip_version || 0);
+    const runIP = Number(s.ip_version || cfgIP || 0);
+    const ipLabel = runIP === 6 ? 'IPv6' : (runIP === 4 ? 'IPv4' : '双栈');
+    const ipCls = runIP === 6 ? 'ip6' : (runIP === 4 ? 'ip4' : '');
+
+    if (editingTunnelSlot === idx && slotEditDraft) {
+      const d = slotEditDraft;
+      return '<div class="tn-slot editing' + (isPri ? ' primary' : '') + '">'
+        + '<div class="tn-slot-editor">'
+        +   '<div class="tn-slot-top" style="margin-bottom:2px">'
+        +     '<span class="tn-slot-id">配置隧道 #' + num + '</span>'
+        +     '<button type="button" class="tn-slot-edit-btn" data-tn-slot-cancel="1" title="取消编辑" aria-label="取消编辑">'
+        +       '<svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>'
+        +     '</button>'
+        +   '</div>'
+        +   '<div class="tn-seg-row">'
+        +     '<div class="tn-seg" role="group" aria-label="协议">'
+        +       '<button type="button" class="' + (d.protocol === 'quic' ? 'active' : '') + '" data-tn-draft-proto="quic">QUIC</button>'
+        +       '<button type="button" class="' + (d.protocol === 'http2' ? 'active' : '') + '" data-tn-draft-proto="http2">HTTP/2</button>'
+        +     '</div>'
+        +     '<div class="tn-seg" role="group" aria-label="IP版本">'
+        +       '<button type="button" class="' + (d.ip_version === 4 ? 'active' : '') + '" data-tn-draft-ip="4">IPv4</button>'
+        +       '<button type="button" class="' + (d.ip_version === 6 ? 'active' : '') + '" data-tn-draft-ip="6">IPv6</button>'
+        +       '<button type="button" class="' + (d.ip_version === 0 ? 'active' : '') + '" data-tn-draft-ip="0">自动</button>'
+        +     '</div>'
+        +   '</div>'
+        +   '<div class="tn-slot-foot">'
+        +     '<button type="button" class="tn-pri-pick' + (d.set_primary ? ' active' : '') + '" data-tn-draft-pri="1">★ 设为主用</button>'
+        +     '<button type="button" class="primary tn-slot-save-btn" data-tn-slot-save="' + idx + '">保存</button>'
+        +   '</div>'
+        + '</div>'
+        + '</div>';
+    }
+
+    const addrText = s.edge_addr
+      ? esc(s.edge_addr)
+      : (isUp ? '边缘节点已连通' : ('待命 · ' + (cfgIP === 0 ? '双栈自动' : ipLabel)));
+    const rightMetric = s.streams > 0
+      ? (s.streams + ' 流')
+      : (isUp ? '在线' : (s.retries > 0 ? ('重试 ' + s.retries) : '就绪'));
+
+    return '<div class="tn-slot' + (isPri ? ' primary' : '') + '">'
+      + '<div class="tn-slot-top">'
+      +   '<span class="tn-slot-id">'
+      +     '<span class="tn-slot-dot' + (isUp ? ' up' : '') + '" aria-hidden="true"></span>'
+      +     '<span>隧道 #' + num + '</span>'
+      +     (isPri ? '<span class="tn-slot-pri-badge">★ 主用</span>' : '')
+      +   '</span>'
+      +   '<span class="tn-slot-tags">'
+      +     '<span class="tn-tag ' + proto + '">' + protoLabel + '</span>'
+      +     '<span class="tn-tag ' + ipCls + '">' + ipLabel + '</span>'
+      +     '<button type="button" class="tn-slot-edit-btn" data-tn-slot-edit="' + idx + '" title="修改隧道 #' + num + ' 配置" aria-label="修改隧道 #' + num + ' 配置">'
+      +       ICON.edit
+      +     '</button>'
+      +   '</span>'
+      + '</div>'
+      + '<div class="tn-slot-sub">'
+      +   '<span class="tn-slot-addr" title="' + addrText + '">' + addrText + '</span>'
+      +   '<span class="tn-slot-streams">' + rightMetric + '</span>'
+      + '</div>'
+      + '</div>';
+  }).join('');
+}
+
+function renderTunnelStatusView(t) {
+  curTunnelData = t;
+  if (!t || !t.enabled || !t.domain) {
+    showTunnelView('config');
+    $('#tnCancelConfigBtn').style.display = 'none';
+    setTunnelConfigMode('named');
+    $('#tnInputDomain').value = '';
+    $('#tnInputToken').value = '';
+    $('#tnInputPort').value = '8081';
+    setTunnelProtocol('quic');
+    setTunnelActionMsg('', false);
+    return;
+  }
+
+  showTunnelView('status');
+
+  const isRunning = !!t.cloudflared_running;
+  const isGateway = !!t.gateway_running;
+  setTunnelBadge('#tnStatusBadge', isRunning, '隧道运行中', '隧道未运行');
+  setTunnelBadge('#tnGatewayBadge', isGateway, '网关就绪', '网关待命');
+
+  const isQuick = (t.mode === 'quick_tunnel') || (t.domain && t.domain.indexOf('.trycloudflare.com') !== -1);
+  if (t.tunnel_engine === 'sing-box') {
+    $('#tnModeTitle').textContent = 'Cloudflare 隧道 (sing-box 原生)';
+    $('#tnModeSub').textContent = isQuick ? 'sing-box 内建临时边缘穿透通道' : 'sing-box 内建固定命名隧道通道';
+  } else {
+    $('#tnModeTitle').textContent = isQuick ? 'Cloudflare 免费临时隧道' : 'Cloudflare 命名固定隧道';
+    $('#tnModeSub').textContent = isQuick ? '自动签发 trycloudflare.com 临时域名' : '绑定自有域名与 Zero Trust Token';
+  }
+
+  const domain = t.domain || '';
+  const soutPath = (t.sout_path || '').replace(/^\/+|\/+$/g, '');
+  const subPath = (t.sub_path || '').replace(/^\/+|\/+$/g, '');
+  const wsPath = (t.ws_path || '').replace(/^\/+|\/+$/g, '');
+  const suiPath = (t.sui_path || '').replace(/^\/+|\/+$/g, '');
+
+  const tunnelPanelUrl = 'https://' + domain + (soutPath ? ('/' + soutPath + '/') : '/');
+  $('#tnDomainLink').href = tunnelPanelUrl;
+  $('#tnDomainLink').textContent = domain;
+
+  $('#tnBackPortHint').textContent = '回源 127.0.0.1:' + (t.tunnel_port || 8081);
+  $('#tnSoutPath').textContent = soutPath ? ('/' + soutPath + '/') : '/';
+  $('#tnSoutPort').textContent = '127.0.0.1:' + (t.sout_port || 43322);
+
+  $('#tnWsPath').textContent = '/' + (wsPath || 'wsargo*');
+  $('#tnNodePort').textContent = '127.0.0.1:' + (t.node_port || 26060);
+
+  $('#tnSubPath').textContent = '/' + (subPath || 'sub') + '*';
+
+  if (suiPath && t.sui_port > 0) {
+    $('#tnSuiRow').style.display = 'grid';
+    $('#tnSuiPath').textContent = '/' + suiPath + '/';
+    $('#tnSuiPort').textContent = '127.0.0.1:' + t.sui_port;
+  } else {
+    $('#tnSuiRow').style.display = 'none';
+  }
+
+  $('#tnTokenMasked').textContent = t.token_masked || (isQuick ? '免 Token (临时隧道)' : '已配置');
+  $('#tnTunnelPort').textContent = '127.0.0.1:' + (t.tunnel_port || 8081);
+  const protoStr = (t.protocol || 'quic').toUpperCase();
+  $('#tnProtocolBadge').textContent = protoStr === 'HTTP2' ? 'HTTP/2 (TCP)' : 'QUIC (UDP)';
+
+  renderTunnelSlots(t);
+}
+
 async function refreshTunnelView() {
-  $('#tnLoading').style.display = 'block';
-  $('#tnLoading').textContent = '正在获取隧道与分流配置...';
-  $('#tnStatusCard').style.display = 'none';
-  $('#tnConfigCard').style.display = 'none';
+  editingTunnelSlot = -1;
+  slotEditDraft = null;
+  showTunnelView('loading');
+  $('#tnLoading').innerHTML = '<span class="tn-spinner" aria-hidden="true"></span><span>正在获取隧道与分流网关状态...</span>';
 
   try {
     const t = await api('/api/tunnel');
-    curTunnelData = t;
-    $('#tnLoading').style.display = 'none';
-
-    if (!t.enabled || !t.domain) {
-      $('#tnStatusCard').style.display = 'none';
-      $('#tnConfigCard').style.display = 'block';
-      $('#tnCancelConfigBtn').style.display = 'none';
-      $('#tnInputDomain').value = '';
-      $('#tnInputToken').value = '';
-      $('#tnInputPort').value = '8081';
-      return;
-    }
-
-    $('#tnStatusCard').style.display = 'block';
-    $('#tnConfigCard').style.display = 'none';
-
-    const isRunning = !!t.cloudflared_running;
-    const isGateway = !!t.gateway_running;
-    $('#tnStatusBadge').textContent = isRunning ? '● 隧道运行中' : '○ 隧道未运行';
-    $('#tnStatusBadge').className = 'pool-tag ' + (isRunning ? 'residential' : 'datacenter');
-
-    $('#tnGatewayBadge').textContent = isGateway ? '● 网关就绪' : '○ 网关待命';
-    $('#tnGatewayBadge').className = 'pool-tag ' + (isGateway ? 'residential' : 'datacenter');
-
-    const isQuick = (t.mode === 'quick_tunnel') || (t.domain && t.domain.indexOf('.trycloudflare.com') !== -1);
-    if (t.tunnel_engine === 'sing-box') {
-      $('#tnModeTitle').textContent = 'Cloudflare 隧道 (sing-box 原生引擎)';
-    } else {
-      $('#tnModeTitle').textContent = isQuick ? 'Cloudflare 免费临时隧道' : 'Cloudflare 命名隧道';
-    }
-
-    const domain = t.domain || '';
-    const soutPath = (t.sout_path || '').replace(/^\/+|\/+$/g, '');
-    const subPath = (t.sub_path || '').replace(/^\/+|\/+$/g, '');
-    const wsPath = (t.ws_path || '').replace(/^\/+|\/+$/g, '');
-    const suiPath = (t.sui_path || '').replace(/^\/+|\/+$/g, '');
-
-    const tunnelPanelUrl = 'https://' + domain + '/' + soutPath + '/';
-    $('#tnDomainLink').href = tunnelPanelUrl;
-    $('#tnDomainLink').textContent = domain;
-
-    $('#tnBackPortHint').textContent = '回源 127.0.0.1:' + (t.tunnel_port || 8081);
-    $('#tnSoutPath').textContent = '/' + soutPath + '/';
-    $('#tnSoutPort').textContent = '127.0.0.1:' + (t.sout_port || 43322);
-
-    $('#tnWsPath').textContent = '/' + (wsPath || 'wsargo*');
-    $('#tnNodePort').textContent = '127.0.0.1:' + (t.node_port || 26060);
-
-    $('#tnSubPath').textContent = '/' + (subPath || 'sub*');
-
-    if (suiPath && t.sui_port > 0) {
-      $('#tnSuiRow').style.display = 'flex';
-      $('#tnSuiPath').textContent = '/' + suiPath + '/';
-      $('#tnSuiPort').textContent = '127.0.0.1:' + t.sui_port;
-    } else {
-      $('#tnSuiRow').style.display = 'none';
-    }
-
-    $('#tnTokenMasked').textContent = t.token_masked || (isQuick ? '免 Token (免费临时隧道)' : '已配置');
-    $('#tnTunnelPort').textContent = '127.0.0.1:' + (t.tunnel_port || 8081);
-    $('#tnProtocolBadge').textContent = (t.protocol ? t.protocol.toUpperCase() : 'QUIC');
+    renderTunnelStatusView(t);
   } catch(e) {
-    $('#tnLoading').style.display = 'block';
-    $('#tnLoading').textContent = '获取隧道配置失败: ' + e.message;
+    showTunnelView('loading');
+    $('#tnLoading').innerHTML = '<div style="color:var(--bad);font-weight:600">获取隧道配置失败</div><div style="color:var(--dim);font-size:12px">' + esc(e.message) + '</div>';
   }
 }
+
+$('#tnSlotsGrid').addEventListener('click', async e => {
+  const editBtn = e.target.closest('[data-tn-slot-edit]');
+  if (editBtn && curTunnelData && Array.isArray(curTunnelData.tunnel_slots)) {
+    const idx = Number(editBtn.dataset.tnSlotEdit);
+    const slot = curTunnelData.tunnel_slots.find(s => Number(s.index) === idx);
+    if (!slot) return;
+    editingTunnelSlot = idx;
+    const cfgProto = (slot.cfg_protocol || slot.protocol || curTunnelData.protocol || 'quic').toLowerCase() === 'http2' ? 'http2' : 'quic';
+    const cfgIP = Number(slot.cfg_ip_version !== undefined ? slot.cfg_ip_version : (slot.ip_version || 0));
+    slotEditDraft = {
+      protocol: cfgProto,
+      ip_version: (cfgIP === 4 || cfgIP === 6) ? cfgIP : 0,
+      set_primary: !!slot.is_primary
+    };
+    renderTunnelSlots(curTunnelData);
+    return;
+  }
+
+  if (e.target.closest('[data-tn-slot-cancel]')) {
+    editingTunnelSlot = -1;
+    slotEditDraft = null;
+    renderTunnelSlots(curTunnelData);
+    return;
+  }
+
+  const protoBtn = e.target.closest('[data-tn-draft-proto]');
+  if (protoBtn && slotEditDraft) {
+    slotEditDraft.protocol = protoBtn.dataset.tnDraftProto;
+    renderTunnelSlots(curTunnelData);
+    return;
+  }
+
+  const ipBtn = e.target.closest('[data-tn-draft-ip]');
+  if (ipBtn && slotEditDraft) {
+    slotEditDraft.ip_version = Number(ipBtn.dataset.tnDraftIp);
+    renderTunnelSlots(curTunnelData);
+    return;
+  }
+
+  const priBtn = e.target.closest('[data-tn-draft-pri]');
+  if (priBtn && slotEditDraft) {
+    slotEditDraft.set_primary = !slotEditDraft.set_primary;
+    renderTunnelSlots(curTunnelData);
+    return;
+  }
+
+  const saveBtn = e.target.closest('[data-tn-slot-save]');
+  if (saveBtn && slotEditDraft) {
+    const idx = Number(saveBtn.dataset.tnSlotSave);
+    saveBtn.disabled = true;
+    saveBtn.textContent = '保存中…';
+    try {
+      const res = await api('/api/tunnel', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          action: 'update_slot',
+          slot_index: idx,
+          protocol: slotEditDraft.protocol,
+          ip_version: slotEditDraft.ip_version,
+          set_primary: slotEditDraft.set_primary
+        })
+      });
+      editingTunnelSlot = -1;
+      slotEditDraft = null;
+      toast(res.message || ('已更新隧道 #' + (idx + 1) + ' 配置'));
+      if (res.status) {
+        renderTunnelStatusView(res.status);
+      } else {
+        await refreshTunnelView();
+      }
+    } catch(err) {
+      toast('保存隧道配置失败: ' + err.message, true);
+      saveBtn.disabled = false;
+      saveBtn.textContent = '保存';
+    }
+  }
+});
+
+$('#tnCopyDomainBtn').onclick = () => {
+  const url = $('#tnDomainLink').href;
+  if (url && url !== '#') copy(url, '已复制面板访问地址');
+};
+
+document.addEventListener('click', e => {
+  const pathBtn = e.target.closest('[data-tn-copy-path]');
+  if (!pathBtn || !curTunnelData || !curTunnelData.domain) return;
+  const kind = pathBtn.dataset.tnCopyPath;
+  const domain = curTunnelData.domain;
+  if (kind === 'sout') {
+    const p = (curTunnelData.sout_path || '').replace(/^\/+|\/+$/g, '');
+    copy('https://' + domain + (p ? '/' + p + '/' : '/'), '已复制管理面板 URL');
+  } else if (kind === 'sub') {
+    const p = (curTunnelData.sub_path || 'sub').replace(/^\/+|\/+$/g, '');
+    copy('https://' + domain + '/' + p, '已复制免密订阅入口 URL');
+  } else if (kind === 'sui') {
+    const p = (curTunnelData.sui_path || '').replace(/^\/+|\/+$/g, '');
+    if (p) copy('https://' + domain + '/' + p + '/', '已复制 s-ui 面板 URL');
+  }
+});
 
 $('#tunnelBtn').onclick = () => {
   openModal('tunnelModal');
@@ -2560,28 +3229,37 @@ $('#tunnelBtn').onclick = () => {
 };
 
 $('#tnSwitchToConfigBtn').onclick = () => {
-  $('#tnStatusCard').style.display = 'none';
-  $('#tnConfigCard').style.display = 'block';
-  $('#tnCancelConfigBtn').style.display = 'inline-block';
+  showTunnelView('config');
+  $('#tnCancelConfigBtn').style.display = 'inline-flex';
+  setTunnelActionMsg('', false);
   if (curTunnelData) {
     const isQuick = (curTunnelData.mode === 'quick_tunnel') || (curTunnelData.domain && curTunnelData.domain.indexOf('.trycloudflare.com') !== -1);
+    setTunnelConfigMode(isQuick ? 'quick' : 'named');
     $('#tnInputDomain').value = isQuick ? '' : (curTunnelData.domain || '');
     $('#tnInputToken').value = isQuick ? '' : (curTunnelData.token_masked || '');
     $('#tnInputPort').value = curTunnelData.tunnel_port || '8081';
-    $('#tnInputProtocol').value = curTunnelData.protocol || 'quic';
+    setTunnelProtocol(curTunnelData.protocol || 'quic');
+  } else {
+    setTunnelConfigMode('named');
+  }
+  const inp = $('#tnInputToken');
+  if (inp && inp.type !== 'password') {
+    inp.type = 'password';
+    $('#tnToggleTokenBtn').setAttribute('aria-pressed', 'false');
+    $('#tnEyeIconOpen').style.display = 'block';
+    $('#tnEyeIconClosed').style.display = 'none';
   }
 };
 
 $('#tnCancelConfigBtn').onclick = () => {
   if (curTunnelData && curTunnelData.enabled) {
-    $('#tnConfigCard').style.display = 'none';
-    $('#tnStatusCard').style.display = 'block';
+    showTunnelView('status');
   }
 };
 
 $('#tnRestartBtn').onclick = async () => {
   const btn = $('#tnRestartBtn');
-  const origText = btn.textContent;
+  const origHTML = btn.innerHTML;
   btn.disabled = true;
   btn.textContent = '正在重启…';
 
@@ -2597,7 +3275,7 @@ $('#tnRestartBtn').onclick = async () => {
     toast('重启隧道失败: ' + e.message, true);
   } finally {
     btn.disabled = false;
-    btn.textContent = origText;
+    btn.innerHTML = origHTML;
   }
 };
 
@@ -2607,7 +3285,7 @@ $('#tnDeleteBtn').onclick = async () => {
   }
 
   const btn = $('#tnDeleteBtn');
-  const origText = btn.textContent;
+  const origHTML = btn.innerHTML;
   btn.disabled = true;
   btn.textContent = '正在关闭…';
 
@@ -2625,29 +3303,45 @@ $('#tnDeleteBtn').onclick = async () => {
   } catch(e) {
     toast('关闭隧道失败: ' + e.message, true);
     btn.disabled = false;
-    btn.textContent = origText;
+    btn.innerHTML = origHTML;
   }
 };
 
-$('#tnSaveConfigBtn').onclick = async () => {
-  const domain = $('#tnInputDomain').value.trim();
-  const token = $('#tnInputToken').value.trim();
+$('#tnConfigForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const modeRadio = document.querySelector('input[name="tnMode"]:checked');
+  const isQuickMode = modeRadio && modeRadio.value === 'quick';
+
+  const domain = isQuickMode ? '' : $('#tnInputDomain').value.trim();
+  const token = isQuickMode ? '' : $('#tnInputToken').value.trim();
   const port = parseInt($('#tnInputPort').value.trim(), 10) || 8081;
   const protocol = $('#tnInputProtocol').value || 'quic';
 
-  const hasOldTunnel = curTunnelData && curTunnelData.enabled && curTunnelData.domain;
+  if (port < 1 || port > 65535) {
+    setTunnelActionMsg('本地回源端口必须在 1 到 65535 之间。', true);
+    $('#tnInputPort').focus();
+    return;
+  }
+
+  const hasOldNamed = curTunnelData && curTunnelData.enabled && curTunnelData.domain && curTunnelData.domain.indexOf('.trycloudflare.com') === -1;
   const isTokenUnchanged = !token || token.indexOf('...') !== -1 || token.indexOf('***') !== -1;
 
-  if (!hasOldTunnel && !domain && isTokenUnchanged) {
-    if (!confirm('检测到隧道域名与 Token 均为空。\n系统将与首次安装时一致，自动创建并启用 Cloudflare 免费临时隧道 (免域名 / 免 Token 快速打通)。\n\n确定继续应用吗？')) {
-      return;
-    }
+  if (!isQuickMode && !domain) {
+    setTunnelActionMsg('请填写隧道域名，或切换到「免费临时隧道」模式。', true);
+    $('#tnInputDomain').focus();
+    return;
+  }
+  if (!isQuickMode && !hasOldNamed && isTokenUnchanged) {
+    setTunnelActionMsg('命名固定隧道需要填写 Cloudflare Tunnel Token。', true);
+    $('#tnInputToken').focus();
+    return;
   }
 
   const btn = $('#tnSaveConfigBtn');
-  const origText = btn.textContent;
+  const origHTML = btn.innerHTML;
   btn.disabled = true;
-  btn.textContent = '正在应用隧道配置并启动服务 (约10-20秒)…';
+  btn.textContent = '正在应用配置并启动服务 (约10–20秒)…';
+  setTunnelActionMsg('', false);
 
   try {
     const res = await api('/api/tunnel', {
@@ -2662,17 +3356,18 @@ $('#tnSaveConfigBtn').onclick = async () => {
       })
     });
     btn.disabled = false;
-    btn.textContent = origText;
+    btn.innerHTML = origHTML;
     toast(res.message || '隧道配置成功，服务正在生效...');
     openTunnelMigrationView(res.status);
-  } catch(e) {
+  } catch(err) {
     btn.disabled = false;
-    btn.textContent = origText;
+    btn.innerHTML = origHTML;
     if (domain) {
       toast('后端服务已切换至本地反代，正在载入新面板...');
       openTunnelMigrationView({ domain: domain, sout_path: initialBasePath || '' });
     } else {
-      toast('配置隧道失败: ' + e.message, true);
+      setTunnelActionMsg('配置隧道失败: ' + err.message, true);
+      toast('配置隧道失败: ' + err.message, true);
     }
   }
 };
@@ -2702,29 +3397,24 @@ function openTunnelMigrationView(st) {
   $('#tnMigrateUrlInput').value = targetUrl;
   $('#tnMigrateNewTabLink').href = targetUrl;
 
-  $('#tnMigrateCopyBtn').onclick = () => {
-    navigator.clipboard.writeText(targetUrl).then(() => {
-      toast('新面板访问地址已成功复制到剪贴板！');
-    }).catch(() => {
-      $('#tnMigrateUrlInput').select();
-      document.execCommand('copy');
-      toast('新面板访问地址已复制！');
-    });
-  };
+  $('#tnMigrateCopyBtn').onclick = () => copy(targetUrl, '新面板访问地址已复制');
 
   $('#tnMigrateStayBtn').onclick = () => {
     if (migrationProbeTimer) clearInterval(migrationProbeTimer);
     closeModal('tnMigrationModal');
-    toast('已保留在当前页面。请务必保存新面板地址：' + targetUrl);
+    toast('已保留在当前页面，请保存新面板地址：' + targetUrl);
   };
 
   const dot = $('#tnMigrateDot');
   const statusTxt = $('#tnMigrateStatusText');
   const goBtn = $('#tnMigrateGoBtn');
+  const progBar = $('#tnMigrateProgressBar');
 
   dot.style.background = 'var(--warn)';
+  dot.classList.add('pulsing');
   statusTxt.textContent = '正在等待 Cloudflare 边缘网络建立路由... (探测中 0/25)';
   statusTxt.style.color = 'var(--text)';
+  if (progBar) progBar.style.width = '4%';
   goBtn.disabled = true;
   goBtn.textContent = '等待边缘网络就绪…';
 
@@ -2735,6 +3425,7 @@ function openTunnelMigrationView(st) {
   migrationProbeTimer = setInterval(async () => {
     count++;
     statusTxt.textContent = '正在探测 Cloudflare 边缘网络连通状态... (第 ' + count + '/' + maxTries + ' 次)';
+    if (progBar) progBar.style.width = Math.min(96, Math.round((count / maxTries) * 100)) + '%';
 
     try {
       await fetch(targetUrl, { mode: 'no-cors', cache: 'no-store' });
@@ -2742,7 +3433,9 @@ function openTunnelMigrationView(st) {
       migrationProbeTimer = null;
 
       dot.style.background = 'var(--ok)';
-      statusTxt.textContent = '● Cloudflare 边缘隧道已就绪！可以安全访问！';
+      dot.classList.remove('pulsing');
+      if (progBar) progBar.style.width = '100%';
+      statusTxt.textContent = 'Cloudflare 边缘隧道已就绪，可以安全访问！';
       statusTxt.style.color = 'var(--ok)';
 
       let cd = 3;
@@ -2768,7 +3461,8 @@ function openTunnelMigrationView(st) {
         clearInterval(migrationProbeTimer);
         migrationProbeTimer = null;
         dot.style.background = 'var(--warn)';
-        statusTxt.textContent = '○ 边缘网络可能仍处于握手分发中，请手动在新标签页打开';
+        dot.classList.remove('pulsing');
+        statusTxt.textContent = '边缘网络可能仍处于握手分发中，请手动在新标签页打开';
         goBtn.disabled = false;
         goBtn.textContent = '在新标签页手动尝试打开 ↗';
         goBtn.onclick = () => {
